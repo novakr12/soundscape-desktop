@@ -58,7 +58,7 @@ h1 {
 form {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   margin: 16px 0;
   text-align: left;
@@ -84,6 +84,7 @@ button:focus-visible {
 }
 
 button {
+  margin-top: 16px;
   padding: 10px 12px;
   border: 0;
   border-radius: 8px;
@@ -100,6 +101,6 @@ button:disabled {
 }
 
 .error {
-  margin: 0;
+  margin: 8px 0 0;
   color: var(--error);
 }

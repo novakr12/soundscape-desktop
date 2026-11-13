@@ -150,6 +150,13 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
             &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
+            &MenuItem::with_id(
+                app,
+                tray::CONNECT,
+                "Connect this app…",
+                !config.connected(),
+                None::<&str>,
+            )?,
             &MenuItem::with_id(app, "change-server", "Change server…", true, None::<&str>)?,
             &MenuItem::with_id(app, "sign-out", "Sign out", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
@@ -239,6 +246,18 @@ pub fn show(app: &AppHandle) {
     let _ = start(app);
 }
 
+pub fn connect_app(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    match state.server() {
+        Some(server) => {
+            let _ = open_main(app, server::connect_url(&server, &server::device_name()));
+        }
+        None => {
+            let _ = open_setup(app);
+        }
+    }
+}
+
 pub fn sign_out(app: &AppHandle) {
     let state = app.state::<AppState>();
     let previous = state.config();
@@ -279,6 +298,7 @@ fn handle_menu(app: &AppHandle, id: &str) {
             let _ = open_settings(app);
         }
         "sign-out" => sign_out(app),
+        tray::CONNECT => connect_app(app),
         "tray-open" => show(app),
         tray::SCROBBLING => {
             state.update(|config| config.scrobbling = !config.scrobbling);

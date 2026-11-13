@@ -1,0 +1,193 @@
+use crate::queue::Queue;
+use crate::scrobbler::{self, enabled};
+use crate::submit::Failure;
+use crate::{autostart, tray, AppState};
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct PlayerView {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub open: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SettingsView {
+    pub server: Option<String>,
+    pub user: Option<String>,
+    pub connected: bool,
+    pub signed_out: bool,
+    pub scrobbling: bool,
+    pub notifications: bool,
+    pub keep_running: bool,
+    pub autostart: bool,
+    pub flatpak: bool,
+    pub waiting: usize,
+    pub listening: Option<String>,
+    pub players: Vec<PlayerView>,
+}
+
+pub fn players(
+    open: &[scrobbler::PlayerChoice],
+    chosen: &std::collections::BTreeMap<String, bool>,
+) -> Vec<PlayerView> {
+    let mut list: Vec<PlayerView> = open
+        .iter()
+        .map(|player| PlayerView {
+            id: player.id.clone(),
+            name: player.name.clone(),
+            enabled: enabled(chosen, &player.id),
+            open: true,
+        })
+        .collect();
+    for id in chosen.keys() {
+        if !list.iter().any(|player| &player.id == id) {
+            list.push(PlayerView {
+                id: id.clone(),
+                name: id.clone(),
+                enabled: enabled(chosen, id),
+                open: false,
+            });
+        }
+    }
+    list.sort_by(|a, b| {
+        b.open
+            .cmp(&a.open)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    list
+}
+
+pub fn view(app: &AppHandle) -> SettingsView {
+    let state = app.state::<AppState>();
+    let config = state.config();
+    let status = state.status();
+    SettingsView {
+        server: config
+            .server
+            .clone()
+            .map(|server| server.trim_end_matches('/').to_string()),
+        user: config.user.clone(),
+        connected: config.connected(),
+        signed_out: state.signed_out(),
+        scrobbling: config.scrobbling,
+        notifications: config.notifications,
+        keep_running: config.keep_running,
+        autostart: config.autostart,
+        flatpak: autostart::in_flatpak(),
+        waiting: Queue::new(&state.dir).len(),
+        listening: status
+            .listening
+            .map(|(track, player)| format!("{} — {} ({player})", track.title, track.artist)),
+        players: players(&status.players, &config.players),
+    }
+}
+
+#[tauri::command]
+pub fn get_settings(app: AppHandle) -> SettingsView {
+    view(&app)
+}
+
+#[tauri::command]
+pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<SettingsView, String> {
+    let state = app.state::<AppState>();
+    match name.as_str() {
+        "scrobbling" => {
+            state.update(|config| config.scrobbling = value);
+        }
+        "notifications" => {
+            state.update(|config| config.notifications = value);
+        }
+        "keep_running" => {
+            state.update(|config| config.keep_running = value);
+        }
+        "autostart" => {
+            if !autostart::set(value).await? {
+                return Err(
+                    "Your desktop didn't allow Soundscape to start when you log in.".into(),
+                );
+            }
+            state.update(|config| config.autostart = value);
+        }
+        _ => return Err(format!("Unknown setting {name}")),
+    }
+    tray::refresh(&app);
+    Ok(view(&app))
+}
+
+#[tauri::command]
+pub fn set_player(app: AppHandle, id: String, value: bool) -> SettingsView {
+    app.state::<AppState>().update(|config| {
+        config.players.insert(id, value);
+    });
+    view(&app)
+}
+
+#[tauri::command]
+pub async fn send_now(app: AppHandle) -> Result<SettingsView, String> {
+    match scrobbler::send_waiting(&app).await {
+        Ok(_) => {
+            tray::refresh(&app);
+            Ok(view(&app))
+        }
+        Err(Failure::Offline) => {
+            Err("Couldn't reach the server. The plays are sent as soon as it's back.".into())
+        }
+        Err(Failure::SignedOut) => Err(
+            "The server doesn't accept this app's token any more. Sign out and connect again."
+                .into(),
+        ),
+        Err(Failure::Refused(_)) => Ok(view(&app)),
+    }
+}
+
+#[tauri::command]
+pub fn settings_action(app: AppHandle, action: String) {
+    match action.as_str() {
+        "change-server" => {
+            let _ = crate::open_setup(&app);
+        }
+        "sign-out" => crate::sign_out(&app),
+        "open" => crate::show(&app),
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scrobbler::PlayerChoice;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn lists_open_players_first_and_remembers_closed_ones() {
+        let open = vec![
+            PlayerChoice {
+                id: "spotify".into(),
+                name: "Spotify".into(),
+                enabled: true,
+            },
+            PlayerChoice {
+                id: "firefox".into(),
+                name: "Firefox".into(),
+                enabled: false,
+            },
+        ];
+        let mut chosen = BTreeMap::new();
+        chosen.insert("rhythmbox".to_string(), false);
+        chosen.insert("firefox".to_string(), true);
+        let list = players(&open, &chosen);
+        assert_eq!(
+            list.iter()
+                .map(|p| (p.name.as_str(), p.enabled, p.open))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Firefox", true, true),
+                ("Spotify", true, true),
+                ("rhythmbox", false, false)
+            ]
+        );
+    }
+}

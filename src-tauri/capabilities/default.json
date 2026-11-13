@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "setup",
-  "description": "The local setup window may ask the app to check and save a server address.",
-  "windows": ["setup"],
+  "identifier": "local-windows",
+  "description": "The app's own setup and settings windows may use its commands. Pages from your server may not.",
+  "windows": ["setup", "settings"],
   "permissions": ["core:default"]
 }

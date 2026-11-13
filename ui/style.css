@@ -104,3 +104,87 @@ button:disabled {
   margin: 8px 0 0;
   color: var(--error);
 }
+
+body.settings main {
+  align-items: stretch;
+  max-width: 520px;
+  padding: 24px;
+  text-align: left;
+}
+
+body.settings h1 {
+  margin: 0 0 8px;
+}
+
+section {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+section:last-of-type {
+  border-bottom: 0;
+}
+
+h2 {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+
+h3 {
+  margin: 16px 0 4px;
+  font-size: 0.95rem;
+}
+
+section p {
+  margin: 4px 0;
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.switch input {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.switch small {
+  margin-left: auto;
+}
+
+.players {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.buttons,
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.row {
+  justify-content: space-between;
+  margin-top: 0;
+}
+
+button.secondary {
+  margin-top: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--field);
+  color: var(--fg);
+  font-weight: 500;
+}

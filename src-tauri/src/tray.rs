@@ -120,6 +120,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
             &players,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "tray-open", "Open Soundscape", true, None::<&str>)?,
+            &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,
             &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
         ],
     )?;

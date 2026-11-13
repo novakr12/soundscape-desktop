@@ -27,6 +27,12 @@ pub struct Config {
     pub keep_running: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub told_about_background: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub notifications: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub autostart: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_notification: Option<i64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub players: BTreeMap<String, bool>,
 }
@@ -40,6 +46,9 @@ impl Default for Config {
             scrobbling: true,
             keep_running: true,
             told_about_background: false,
+            notifications: true,
+            autostart: false,
+            last_notification: None,
             players: BTreeMap::new(),
         }
     }
@@ -112,6 +121,7 @@ mod tests {
         .unwrap();
         let config = Config::load(&dir);
         assert!(config.scrobbling && config.keep_running && !config.told_about_background);
+        assert!(config.notifications && !config.autostart && config.last_notification.is_none());
         assert!(config.players.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }

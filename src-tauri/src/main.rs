@@ -1,9 +1,12 @@
+mod autostart;
 mod config;
 mod mpris;
+mod notify;
 mod queue;
 mod scrobble;
 mod scrobbler;
 mod server;
+mod settings;
 mod submit;
 mod tray;
 
@@ -20,6 +23,7 @@ use url::Url;
 
 pub const MAIN: &str = "main";
 const SETUP: &str = "setup";
+const SETTINGS: &str = "settings";
 
 pub struct AppState {
     dir: PathBuf,
@@ -97,6 +101,7 @@ async fn connect_server(app: AppHandle, address: String) -> Result<(), String> {
             config.server = Some(server.to_string());
             config.user = None;
             config.token = None;
+            config.last_notification = None;
         });
     }
     let start = if same {
@@ -111,7 +116,20 @@ async fn connect_server(app: AppHandle, address: String) -> Result<(), String> {
     Ok(())
 }
 
-fn open_setup(app: &AppHandle) -> tauri::Result<()> {
+pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(SETTINGS) {
+        window.show()?;
+        return window.set_focus();
+    }
+    WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings.html".into()))
+        .title("Soundscape settings")
+        .inner_size(520.0, 680.0)
+        .min_inner_size(380.0, 420.0)
+        .build()?;
+    Ok(())
+}
+
+pub fn open_setup(app: &AppHandle) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(SETUP) {
         window.show()?;
         return window.set_focus();
@@ -131,6 +149,7 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[
             &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
+            &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
             &MenuItem::with_id(app, "change-server", "Change server…", true, None::<&str>)?,
             &MenuItem::with_id(app, "sign-out", "Sign out", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
@@ -208,7 +227,7 @@ fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show(app: &AppHandle) {
+pub fn show(app: &AppHandle) {
     for label in [MAIN, SETUP] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.show();
@@ -220,12 +239,13 @@ fn show(app: &AppHandle) {
     let _ = start(app);
 }
 
-fn sign_out(app: &AppHandle) {
+pub fn sign_out(app: &AppHandle) {
     let state = app.state::<AppState>();
     let previous = state.config();
     state.update(|config| {
         config.token = None;
         config.user = None;
+        config.last_notification = None;
     });
     state.set_signed_out(false);
     let _ = open_setup(app);
@@ -254,6 +274,9 @@ fn handle_menu(app: &AppHandle, id: &str) {
         }
         "change-server" => {
             let _ = open_setup(app);
+        }
+        "settings" => {
+            let _ = open_settings(app);
         }
         "sign-out" => sign_out(app),
         "tray-open" => show(app),
@@ -315,7 +338,11 @@ fn start(app: &AppHandle) -> tauri::Result<()> {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|arg| arg == autostart::BACKGROUND_FLAG) {
+                show(app);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -330,13 +357,25 @@ fn main() {
             if let Err(error) = tray::create(app.handle(), &config) {
                 eprintln!("No tray icon: {error}");
             }
-            start(app.handle())?;
+            let background = std::env::args().any(|arg| arg == autostart::BACKGROUND_FLAG);
+            if !(background && config.connected()) {
+                start(app.handle())?;
+            }
             tauri::async_runtime::spawn(scrobbler::run(app.handle().clone()));
+            tauri::async_runtime::spawn(notify::run(app.handle().clone()));
             Ok(())
         })
         .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))
         .on_window_event(handle_window_event)
-        .invoke_handler(tauri::generate_handler![current_server, connect_server])
+        .invoke_handler(tauri::generate_handler![
+            current_server,
+            connect_server,
+            settings::get_settings,
+            settings::set_option,
+            settings::set_player,
+            settings::send_now,
+            settings::settings_action
+        ])
         .run(tauri::generate_context!())
         .expect("Soundscape couldn't start");
 }

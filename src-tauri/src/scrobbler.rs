@@ -3,6 +3,7 @@ use crate::queue::Queue;
 use crate::scrobble::{Engine, Event, Track};
 use crate::submit::{self, Failure, Listen, BATCH};
 use crate::AppState;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use url::Url;
@@ -52,6 +53,41 @@ pub fn listening(found: &[Player], allowed: impl Fn(&str) -> bool) -> Option<(Tr
                 .clone()
                 .map(|track| (track, player.name.clone()))
         })
+}
+
+static SENDING: AtomicBool = AtomicBool::new(false);
+
+pub async fn send_waiting(app: &AppHandle) -> Result<usize, Failure> {
+    let state = app.state::<AppState>();
+    let queue = Queue::new(&state.dir);
+    let config = state.config();
+    let (Some(server), Some(token)) = (
+        config.server.as_deref().and_then(|s| Url::parse(s).ok()),
+        config.token,
+    ) else {
+        return Ok(queue.len());
+    };
+    if SENDING.swap(true, Ordering::AcqRel) {
+        return Ok(queue.len());
+    }
+    let result = loop {
+        let batch = queue.first(BATCH);
+        if batch.is_empty() {
+            break Ok(0);
+        }
+        match submit::listens(&server, &token, &batch).await {
+            Ok(()) | Err(Failure::Refused(_)) => {
+                let _ = queue.drop_first(batch.len());
+            }
+            Err(Failure::SignedOut) => {
+                state.set_signed_out(true);
+                break Err(Failure::SignedOut);
+            }
+            Err(Failure::Offline) => break Err(Failure::Offline),
+        }
+    };
+    SENDING.store(false, Ordering::Release);
+    result
 }
 
 pub async fn run(app: AppHandle) {
@@ -128,27 +164,14 @@ pub async fn run(app: AppHandle) {
             }
         }
 
-        let mut signed_out = state.signed_out();
         let due = scrobbled || retry_after.is_none_or(|at| Instant::now() >= at);
-        if let (Some(server), Some(token), true) = (&server, &token, due && !signed_out) {
-            let batch = queue.first(BATCH);
-            if !batch.is_empty() {
-                match submit::listens(server, token, &batch).await {
-                    Ok(()) => {
-                        let _ = queue.drop_first(batch.len());
-                        retry_after = None;
-                    }
-                    Err(Failure::Offline) => retry_after = Some(Instant::now() + RETRY),
-                    Err(Failure::SignedOut) => {
-                        state.set_signed_out(true);
-                        signed_out = true;
-                    }
-                    Err(Failure::Refused(_)) => {
-                        let _ = queue.drop_first(batch.len());
-                    }
-                }
+        if due && !state.signed_out() && queue.len() > 0 {
+            match send_waiting(&app).await {
+                Err(Failure::Offline) => retry_after = Some(Instant::now() + RETRY),
+                _ => retry_after = None,
             }
         }
+        let signed_out = state.signed_out();
 
         let status = Status {
             scrobbling: config.scrobbling,

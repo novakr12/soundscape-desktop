@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Soundscape settings</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="settings.js" defer></script>
+  </head>
+  <body class="settings">
+    <main>
+      <h1>Settings</h1>
+
+      <section>
+        <h2>Account</h2>
+        <p id="account" class="muted">Loading…</p>
+        <p id="signed-out" class="error" hidden>
+          The server no longer accepts this app's token. Sign out and connect again.
+        </p>
+        <div class="buttons">
+          <button type="button" class="secondary" data-action="open">Open Soundscape</button>
+          <button type="button" class="secondary" data-action="change-server">Change server…</button>
+          <button type="button" class="secondary" data-action="sign-out">Sign out</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Scrobbling</h2>
+        <label class="switch">
+          <input type="checkbox" data-option="scrobbling" />
+          <span>Send what you play to Soundscape</span>
+        </label>
+        <p id="listening" class="muted"></p>
+        <h3>Players</h3>
+        <p class="muted small">Browsers start off, so videos don't end up in your history.</p>
+        <ul id="players" class="players"></ul>
+        <h3>Waiting to be sent</h3>
+        <div class="row">
+          <p id="waiting">No plays waiting.</p>
+          <button type="button" class="secondary" id="send-now" hidden>Send now</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Notifications</h2>
+        <label class="switch">
+          <input type="checkbox" data-option="notifications" />
+          <span>Show new followers, leaderboard passes and milestones</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Starting and closing</h2>
+        <label class="switch">
+          <input type="checkbox" data-option="autostart" />
+          <span>Start when you log in, without opening the window</span>
+        </label>
+        <label class="switch">
+          <input type="checkbox" data-option="keep_running" />
+          <span>Keep running when the window is closed</span>
+        </label>
+      </section>
+
+      <p id="message" class="error" role="alert" hidden></p>
+    </main>
+  </body>
+</html>

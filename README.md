@@ -1,8 +1,8 @@
 # Soundscape Desktop
 
-A Linux desktop app for [Soundscape](https://github.com/novakr12/soundscape), the self-hosted music tracker. It opens your own Soundscape server in its own window, connects to it with a token of its own, and sends what any music player on your computer plays.
+A Linux desktop app for [Soundscape](https://github.com/novakr12/soundscape), the self-hosted music tracker. It opens your own Soundscape server in its own window, connects to it with a token of its own, sends what any music player on your computer plays, and shows your Soundscape notifications on the desktop.
 
-Coming next: desktop notifications, settings and a Flatpak.
+Coming next: a Flatpak.
 
 ## What you need
 
@@ -43,6 +43,14 @@ The app picks up what Linux music players are playing through MPRIS, the standar
 - When the server can't be reached, plays wait in `waiting.jsonl` next to the settings and are sent with their original times once it's back.
 - Closing the window keeps the app running in the background, so it keeps scrobbling. Open it again from your apps, or quit from the menu or the tray. Turn this off with Soundscape → Keep running when closed.
 - The tray icon shows the song playing and how many plays are waiting. GNOME only shows tray icons with the AppIndicator extension (`sudo dnf install gnome-shell-extension-appindicator` on Fedora, then turn it on in Extensions); everything in the tray is also in the window's Soundscape menu.
+
+## Notifications and settings
+
+New followers, friends passing you on the weekly leaderboard and play milestones show up as desktop notifications. The app checks about once a minute. The first check after you connect only notes what's already there, so you don't get a burst of old ones.
+
+Settings (Ctrl+, or from the menu and the tray) has everything in one place: your account, scrobbling and players, plays waiting to be sent with a Send now button, notifications, starting when you log in, and keeping the app running when the window is closed.
+
+Starting when you log in opens no window; the app scrobbles in the background until you open it from your apps. Outside Flatpak this writes `~/.config/autostart/io.github.novakr12.SoundscapeDesktop.desktop`; inside Flatpak it asks your desktop for permission instead.
 
 ## Useful commands
 

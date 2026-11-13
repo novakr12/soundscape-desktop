@@ -144,6 +144,16 @@ pub async fn send_now(app: AppHandle) -> Result<SettingsView, String> {
 }
 
 #[tauri::command]
+pub fn test_notification(app: AppHandle) -> Result<(), String> {
+    crate::notify::show_notification(
+        &app,
+        "Soundscape",
+        "Notifications work. New followers and milestones show up like this.",
+    )
+    .map_err(|error| format!("Your desktop didn't show the notification: {error}"))
+}
+
+#[tauri::command]
 pub fn settings_action(app: AppHandle, action: String) {
     match action.as_str() {
         "change-server" => {

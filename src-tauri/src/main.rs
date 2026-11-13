@@ -17,7 +17,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
-use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
@@ -199,10 +198,12 @@ fn handle_navigation(app: &AppHandle, target: &Url) -> bool {
             let config = state.update(|config| {
                 config.token = Some(token);
                 config.user = Some(user);
+                config.last_notification = None;
             });
             state.set_signed_out(false);
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
+                notify::check(&app).await;
                 if let (Some(window), Some(home)) = (
                     app.get_webview_window(MAIN),
                     config.server.and_then(|s| Url::parse(&s).ok()),
@@ -331,12 +332,11 @@ fn handle_window_event(window: &Window, event: &WindowEvent) {
         let _ = window.hide();
         if !config.told_about_background {
             state.update(|config| config.told_about_background = true);
-            let _ = app
-                .notification()
-                .builder()
-                .title("Soundscape is still running")
-                .body("It keeps sending what you play. Open it again from your apps, or quit from the tray or the Soundscape menu.")
-                .show();
+            let _ = notify::show_notification(
+                app,
+                "Soundscape is still running",
+                "It keeps sending what you play. Open it again from your apps, or quit from the tray or the Soundscape menu.",
+            );
         }
     } else if window.label() == SETUP
         && app.get_webview_window(MAIN).is_none()
@@ -394,6 +394,7 @@ fn main() {
             settings::set_option,
             settings::set_player,
             settings::send_now,
+            settings::test_notification,
             settings::settings_action
         ])
         .run(tauri::generate_context!())

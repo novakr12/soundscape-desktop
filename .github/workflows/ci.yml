@@ -17,7 +17,7 @@ jobs:
       run:
         working-directory: src-tauri
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install system libraries
         working-directory: .
         run: |
@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y appstream desktop-file-utils
       - run: desktop-file-validate flatpak/io.github.novakr12.SoundscapeDesktop.desktop
       - run: appstreamcli validate --no-net --explain flatpak/io.github.novakr12.SoundscapeDesktop.metainfo.xml
@@ -63,7 +63,7 @@ jobs:
           df -h /
           rm -rf /unused/android/* /unused/dotnet/* /unused/toolcache/* /unused/boost/* /unused/ghcup/*
           df -h /
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: List the Rust crates for the offline build

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.novakr12.SoundscapeDesktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+
+  <name>Soundscape</name>
+  <summary>Scrobble to your own music tracker</summary>
+
+  <developer id="io.github.novakr12">
+    <name>novakr12</name>
+  </developer>
+
+  <description>
+    <p>
+      Soundscape Desktop is the Linux app for Soundscape, a music tracker you host yourself. It shows your
+      Soundscape server in its own window and sends what you play on your computer, in any music player, to your
+      listening history.
+    </p>
+    <ul>
+      <li>Picks up what Spotify, Strawberry, Rhythmbox, Elisa and other players are playing, with no plugins</li>
+      <li>Counts a play once you've heard half the song or four minutes, like ListenBrainz and Last.fm</li>
+      <li>Keeps plays while your server is offline and sends them with their original times later</li>
+      <li>Leaves browsers out unless you turn them on, so videos don't end up in your history</li>
+      <li>Shows new followers, friends passing you on the weekly leaderboard and play milestones as notifications</li>
+      <li>Can start when you log in and keep scrobbling in the background</li>
+    </ul>
+    <p>
+      You need your own Soundscape server. The app connects with its own token, which you can see and revoke on
+      the server.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.novakr12.SoundscapeDesktop.desktop</launchable>
+
+  <url type="homepage">https://github.com/novakr12/soundscape-desktop</url>
+  <url type="bugtracker">https://github.com/novakr12/soundscape-desktop/issues</url>
+  <url type="vcs-browser">https://github.com/novakr12/soundscape-desktop</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Your Soundscape server in its own window</caption>
+      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Listening stats</caption>
+      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/stats.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Scrobbling, players and notifications in one place</caption>
+      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/settings.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Connecting to your server</caption>
+      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/setup.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+
+  <keywords>
+    <keyword>scrobble</keyword>
+    <keyword>scrobbler</keyword>
+    <keyword>listenbrainz</keyword>
+    <keyword>music</keyword>
+    <keyword>history</keyword>
+  </keywords>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#b6f2cc</color>
+    <color type="primary" scheme_preference="dark">#0a3a20</color>
+  </branding>
+
+  <content_rating type="oars-1.1" />
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+    <internet>always</internet>
+  </requires>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <releases>
+    <release version="0.1.0" date="2026-11-13">
+      <description>
+        <p>First release: your Soundscape server in its own window, scrobbling from Linux music players with an offline queue, desktop notifications, a tray icon and starting at login.</p>
+      </description>
+    </release>
+  </releases>
+</component>

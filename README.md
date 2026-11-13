@@ -2,7 +2,7 @@
 
 A Linux desktop app for [Soundscape](https://github.com/novakr12/soundscape), the self-hosted music tracker. It opens your own Soundscape server in its own window, connects to it with a token of its own, sends what any music player on your computer plays, and shows your Soundscape notifications on the desktop.
 
-Coming next: a Flatpak.
+![Soundscape Desktop showing a Soundscape server](screenshots/home.png)
 
 ## What you need
 
@@ -51,6 +51,31 @@ New followers, friends passing you on the weekly leaderboard and play milestones
 Settings (Ctrl+, or from the menu and the tray) has everything in one place: your account, scrobbling and players, plays waiting to be sent with a Send now button, notifications, starting when you log in, and keeping the app running when the window is closed.
 
 Starting when you log in opens no window; the app scrobbles in the background until you open it from your apps. Outside Flatpak this writes `~/.config/autostart/io.github.novakr12.SoundscapeDesktop.desktop`; inside Flatpak it asks your desktop for permission instead.
+
+## Flatpak
+
+The `flatpak` folder holds everything to build the app as a Flatpak: the manifest, the desktop entry, the store listing, and `cargo-sources.py`, which lists every Rust crate so the build can run without network access. The tray library comes from Flathub's shared modules, a git submodule in `flatpak/shared-modules`.
+
+To build and install it yourself (install `flatpak-builder` first; on Fedora `sudo dnf install flatpak-builder`):
+
+```
+git submodule update --init
+python3 flatpak/cargo-sources.py
+flatpak-builder --user --install-deps-from=flathub --install --force-clean flatpak/build-dir flatpak/io.github.novakr12.SoundscapeDesktop.yml
+flatpak run io.github.novakr12.SoundscapeDesktop
+```
+
+CI builds the same Flatpak on every push and keeps it as `soundscape-desktop.flatpak` under the run's artifacts, which installs with `flatpak install --user soundscape-desktop.flatpak`.
+
+The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), and use the network. It can't see your files.
+
+## Publishing on Flathub
+
+1. Tag the release and push the tag: `git tag v0.1.0 && git push origin v0.1.0`. The version and date in the store listing's `<releases>` should match.
+2. Write the Flathub copy of the manifest, which builds from that tag instead of this folder: `python3 flatpak/flathub-manifest.py v0.1.0`. It lands in `flatpak/flathub/`.
+3. Fork [flathub/flathub](https://github.com/flathub/flathub) and clone the `new-pr` branch: `git clone --branch=new-pr https://github.com/<you>/flathub.git`.
+4. In the clone, make a branch, copy in the manifest from step 2 and `flatpak/cargo-sources.json`, and add the shared modules: `git submodule add https://github.com/flathub/shared-modules.git`.
+5. Commit, push and open a pull request against `new-pr` named "Add io.github.novakr12.SoundscapeDesktop". Flathub's bot builds it, and a reviewer may ask for changes.
 
 ## Useful commands
 

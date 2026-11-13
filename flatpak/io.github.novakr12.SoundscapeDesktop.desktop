@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Soundscape
+GenericName=Music Tracker
+Comment=Send what you play to your Soundscape server
+Exec=soundscape-desktop
+Icon=io.github.novakr12.SoundscapeDesktop
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=scrobble;scrobbler;listenbrainz;music;history;stats;
+StartupNotify=true
+SingleMainWindow=true
+StartupWMClass=soundscape-desktop

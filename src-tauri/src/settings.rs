@@ -150,6 +150,7 @@ pub fn settings_action(app: AppHandle, action: String) {
             let _ = crate::open_setup(&app);
         }
         "sign-out" => crate::sign_out(&app),
+        "connect" => crate::connect_app(&app),
         "open" => crate::show(&app),
         _ => {}
     }

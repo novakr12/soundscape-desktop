@@ -17,10 +17,11 @@ function render(settings) {
   account.textContent = settings.connected
     ? `Connected to ${settings.server} as ${settings.user}.`
     : settings.server
-      ? `Not connected. Open Soundscape to log in to ${settings.server}.`
+      ? `This app isn't connected to ${settings.server} yet, so it can't send what you play.`
       : "Not connected to a server.";
   document.getElementById("signed-out").hidden = !settings.signed_out;
   document.querySelector('[data-action="sign-out"]').disabled = !settings.connected;
+  document.querySelector('[data-action="connect"]').hidden = !settings.server || (settings.connected && !settings.signed_out);
 
   for (const input of document.querySelectorAll("[data-option]")) {
     input.checked = settings[input.dataset.option];

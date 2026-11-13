@@ -9,12 +9,14 @@ const LONGEST: usize = 60;
 pub struct Tray {
     listening: MenuItem<Wry>,
     status: MenuItem<Wry>,
+    connect: MenuItem<Wry>,
     scrobbling: CheckMenuItem<Wry>,
     players: Submenu<Wry>,
 }
 
 pub const PLAYERS_MENU: &str = "players-menu";
 pub const SCROBBLING: &str = "tray-scrobbling";
+pub const CONNECT: &str = "connect-app";
 
 fn short(text: &str) -> String {
     if text.chars().count() <= LONGEST {
@@ -109,12 +111,20 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
         config.scrobbling,
         None::<&str>,
     )?;
+    let connect = MenuItem::with_id(
+        app,
+        CONNECT,
+        "Connect this app…",
+        !config.connected(),
+        None::<&str>,
+    )?;
     let players = players_menu(app)?;
     let menu = Menu::with_items(
         app,
         &[
             &listening,
             &status,
+            &connect,
             &PredefinedMenuItem::separator(app)?,
             &scrobbling,
             &players,
@@ -138,6 +148,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     app.manage(Tray {
         listening,
         status,
+        connect,
         scrobbling,
         players,
     });
@@ -152,6 +163,9 @@ pub fn refresh(app: &AppHandle) {
         let _ = tray.listening.set_text(listening_text(&status));
         let _ = tray.status.set_text(status_text(&status, &config));
         let _ = tray.scrobbling.set_checked(config.scrobbling);
+        let _ = tray
+            .connect
+            .set_enabled(!config.connected() || status.signed_out);
         fill_players(app, &tray.players, &status.players);
     }
     if let Some(icon) = app.tray_by_id("soundscape") {
@@ -175,6 +189,12 @@ pub fn refresh(app: &AppHandle) {
             .and_then(|item| item.as_check_menuitem().cloned())
         {
             let _ = check.set_checked(config.scrobbling);
+        }
+        if let Some(connect) = submenu
+            .get(CONNECT)
+            .and_then(|item| item.as_menuitem().cloned())
+        {
+            let _ = connect.set_enabled(!config.connected() || status.signed_out);
         }
         if let Some(players) = submenu
             .get(PLAYERS_MENU)

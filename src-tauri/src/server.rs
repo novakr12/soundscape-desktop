@@ -96,21 +96,37 @@ pub enum Navigation {
     Block,
 }
 
+pub const CONNECTED_PATH: &str = "/desktop/connected";
+
+fn connected(pairs: url::form_urlencoded::Parse<'_>) -> Option<Navigation> {
+    let pairs: std::collections::HashMap<_, _> = pairs.into_owned().collect();
+    match (pairs.get("token"), pairs.get("user")) {
+        (Some(token), Some(user)) if !token.is_empty() && !user.is_empty() => {
+            Some(Navigation::Connected {
+                token: token.clone(),
+                user: user.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
 pub fn classify(server: Option<&Url>, target: &Url) -> Navigation {
     if target.scheme() == APP_SCHEME {
         if target.host_str() != Some("connected") {
             return Navigation::Block;
         }
-        let pairs: std::collections::HashMap<_, _> = target.query_pairs().into_owned().collect();
-        return match (pairs.get("token"), pairs.get("user")) {
-            (Some(token), Some(user)) if !token.is_empty() && !user.is_empty() => {
-                Navigation::Connected {
-                    token: token.clone(),
-                    user: user.clone(),
-                }
-            }
-            _ => Navigation::Block,
-        };
+        return connected(target.query_pairs()).unwrap_or(Navigation::Block);
+    }
+    if server.is_some_and(|server| server.origin() == target.origin())
+        && target.path() == CONNECTED_PATH
+    {
+        if let Some(found) = target
+            .fragment()
+            .and_then(|fragment| connected(url::form_urlencoded::parse(fragment.as_bytes())))
+        {
+            return found;
+        }
     }
     match target.scheme() {
         "tauri" | "about" | "data" | "blob" => Navigation::Allow,
@@ -219,6 +235,41 @@ mod tests {
         assert_eq!(
             classify(here, &url("soundscape-desktop://other?token=a&user=b")),
             Navigation::Block
+        );
+        assert_eq!(
+            classify(
+                here,
+                &url("https://music.example.com/desktop/connected#token=abc&user=listener")
+            ),
+            Navigation::Connected {
+                token: "abc".into(),
+                user: "listener".into()
+            }
+        );
+        assert_eq!(
+            classify(here, &url("https://music.example.com/desktop/connected")),
+            Navigation::Allow
+        );
+        assert_eq!(
+            classify(
+                here,
+                &url("https://music.example.com/desktop/connected#token=&user=x")
+            ),
+            Navigation::Allow
+        );
+        assert_eq!(
+            classify(
+                here,
+                &url("https://evil.example.org/desktop/connected#token=abc&user=listener")
+            ),
+            Navigation::External
+        );
+        assert_eq!(
+            classify(
+                None,
+                &url("https://music.example.com/desktop/connected#token=abc&user=x")
+            ),
+            Navigation::External
         );
     }
 

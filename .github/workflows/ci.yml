@@ -50,8 +50,19 @@ jobs:
     timeout-minutes: 60
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
-      options: --privileged
+      options: >-
+        --privileged
+        -v /usr/local/lib/android:/unused/android
+        -v /usr/share/dotnet:/unused/dotnet
+        -v /opt/hostedtoolcache:/unused/toolcache
+        -v /usr/local/share/boost:/unused/boost
+        -v /usr/local/.ghcup:/unused/ghcup
     steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          rm -rf /unused/android/* /unused/dotnet/* /unused/toolcache/* /unused/boost/* /unused/ghcup/*
+          df -h /
       - uses: actions/checkout@v5
         with:
           submodules: true

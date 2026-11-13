@@ -82,6 +82,18 @@ pub async fn fetch(server: &Url, token: &str, after: Option<i64>) -> Result<Vec<
     }
 }
 
+pub fn show_notification(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|error| {
+            eprintln!("Couldn't show the notification \"{title}\": {error}");
+            error.to_string()
+        })
+}
+
 pub async fn run(app: AppHandle) {
     tokio::time::sleep(FIRST).await;
     loop {
@@ -109,7 +121,7 @@ pub async fn check(app: &AppHandle) {
                 state.update(|config| config.last_notification = last);
             }
             for (title, body) in summary(&show) {
-                let _ = app.notification().builder().title(title).body(body).show();
+                let _ = show_notification(app, &title, &body);
             }
         }
         Err(Failure::SignedOut) => {

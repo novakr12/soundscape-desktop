@@ -92,6 +92,15 @@ for (const button of document.querySelectorAll("[data-action]")) {
 
 document.getElementById("send-now").addEventListener("click", () => act(() => invoke("send_now")));
 
+document.getElementById("test-notification").addEventListener("click", async () => {
+  message.hidden = true;
+  try {
+    await invoke("test_notification");
+  } catch (error) {
+    showError(error);
+  }
+});
+
 async function refresh() {
   if (busy || document.hidden) return;
   try {

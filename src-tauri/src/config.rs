@@ -1,10 +1,19 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+fn yes() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
@@ -12,6 +21,28 @@ pub struct Config {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub scrobbling: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub keep_running: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub told_about_background: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub players: BTreeMap<String, bool>,
+}
+
+impl Default for Config {
+    fn default() -> Config {
+        Config {
+            server: None,
+            user: None,
+            token: None,
+            scrobbling: true,
+            keep_running: true,
+            told_about_background: false,
+            players: BTreeMap::new(),
+        }
+    }
 }
 
 impl Config {
@@ -71,13 +102,31 @@ mod tests {
     }
 
     #[test]
+    fn older_files_keep_scrobbling_on() {
+        let dir = scratch("older");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            Config::file(&dir),
+            r#"{"server":"https://a.example","user":"u","token":"t"}"#,
+        )
+        .unwrap();
+        let config = Config::load(&dir);
+        assert!(config.scrobbling && config.keep_running && !config.told_about_background);
+        assert!(config.players.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn saves_privately_and_reads_back() {
         let dir = scratch("roundtrip");
-        let config = Config {
+        let mut config = Config {
             server: Some("https://music.example.com".into()),
             user: Some("listener".into()),
             token: Some("secret".into()),
+            ..Config::default()
         };
+        config.players.insert("firefox".into(), true);
+        config.scrobbling = false;
         config.save(&dir).unwrap();
         assert_eq!(Config::load(&dir), config);
         assert!(config.connected());

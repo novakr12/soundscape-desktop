@@ -33,3 +33,32 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: dbus-run-session -- cargo test --locked
       - run: cargo build --release --locked
+
+  metadata:
+    name: Desktop file and store listing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: sudo apt-get update && sudo apt-get install -y appstream desktop-file-utils
+      - run: desktop-file-validate flatpak/io.github.novakr12.SoundscapeDesktop.desktop
+      - run: appstreamcli validate --no-net --explain flatpak/io.github.novakr12.SoundscapeDesktop.metainfo.xml
+
+  flatpak:
+    name: Flatpak
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: List the Rust crates for the offline build
+        run: python3 flatpak/cargo-sources.py
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@933e9e8ca36e85046ebca8e211f0785c6becac40
+        with:
+          bundle: soundscape-desktop.flatpak
+          manifest-path: flatpak/io.github.novakr12.SoundscapeDesktop.yml
+          cache-key: flatpak-builder-${{ github.sha }}

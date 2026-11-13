@@ -131,6 +131,9 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
+    if let Ok(cache) = app.path().app_cache_dir() {
+        builder = builder.temp_dir_path(cache);
+    }
     builder.build(app)?;
     app.manage(Tray {
         listening,

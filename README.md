@@ -67,7 +67,7 @@ flatpak run io.github.novakr12.SoundscapeDesktop
 
 CI builds the same Flatpak on every push and keeps it as `soundscape-desktop.flatpak` under the run's artifacts, which installs with `flatpak install --user soundscape-desktop.flatpak`.
 
-The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), and use the network. It can't see your files.
+The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), play sound (for song previews) and use the network. It can't see your files.
 
 ## Publishing on Flathub
 

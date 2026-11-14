@@ -28,6 +28,7 @@ pub struct MiniView {
     pub position_ms: Option<u64>,
     pub length_ms: Option<u64>,
     pub can_skip: bool,
+    pub can_next: bool,
     pub can_love: bool,
     pub loved: bool,
 }
@@ -118,6 +119,8 @@ pub fn view(app: &AppHandle) -> MiniView {
             playing: preview.playing,
             position_ms: Some((preview.position * 1000.0) as u64),
             length_ms: preview.length.map(|length| (length * 1000.0) as u64),
+            can_skip: preview.has_previous,
+            can_next: preview.has_next,
             ..MiniView::default()
         };
     }
@@ -143,6 +146,7 @@ pub fn view(app: &AppHandle) -> MiniView {
         position_ms: source.position_ms,
         length_ms: source.track.length_ms,
         can_skip: true,
+        can_next: true,
         can_love: current && actions.can_love,
         loved: current && actions.loved,
     }
@@ -158,7 +162,7 @@ pub async fn mini_action(app: AppHandle, action: String) -> Result<MiniView, Str
     let state = app.state::<AppState>();
     let preview = preview_shown(&state).is_some();
     match (action.as_str(), preview) {
-        ("toggle", true) => crate::media::control(&app, "toggle"),
+        ("toggle" | "next" | "previous", true) => crate::media::control(&app, &action),
         ("love", false) => crate::love::toggle(app.clone()).await,
         ("toggle" | "next" | "previous", false) => {
             let method = match action.as_str() {

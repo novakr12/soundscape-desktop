@@ -26,6 +26,8 @@ const READ: &str = r#"(() => {
     playing: !audio.paused && !audio.ended,
     position: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
     length: Number.isFinite(audio.duration) ? audio.duration : null,
+    hasNext: Boolean(document.querySelector('[data-player="next"]:not([disabled])')),
+    hasPrevious: Boolean(document.querySelector('[data-player="previous"]')),
   });
 })()"#;
 
@@ -38,6 +40,10 @@ pub struct Preview {
     pub playing: bool,
     pub position: f64,
     pub length: Option<f64>,
+    #[serde(default, rename = "hasNext")]
+    pub has_next: bool,
+    #[serde(default, rename = "hasPrevious")]
+    pub has_previous: bool,
 }
 
 impl Preview {
@@ -108,6 +114,11 @@ pub fn script(action: &str, seconds: f64) -> Option<String> {
         "stop" => "a.pause(); a.currentTime = 0".to_string(),
         "seek" => format!("a.currentTime = Math.max(0, a.currentTime + {seconds})"),
         "position" => format!("a.currentTime = {}", seconds.max(0.0)),
+        "next" | "previous" => {
+            return Some(format!(
+                "document.querySelector('[data-player=\"{action}\"]:not([disabled])')?.click()"
+            ))
+        }
         _ => return None,
     };
     Some(format!(
@@ -193,8 +204,12 @@ impl Player {
     fn stop(&self) {
         self.run("stop", 0.0);
     }
-    fn next(&self) {}
-    fn previous(&self) {}
+    fn next(&self) {
+        self.run("next", 0.0);
+    }
+    fn previous(&self) {
+        self.run("previous", 0.0);
+    }
     fn seek(&self, offset: i64) {
         self.run("seek", offset as f64 / 1_000_000.0);
     }
@@ -241,11 +256,15 @@ impl Player {
     }
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
-        false
+        self.shared
+            .preview()
+            .is_some_and(|preview| preview.has_next)
     }
     #[zbus(property)]
     fn can_go_previous(&self) -> bool {
-        false
+        self.shared
+            .preview()
+            .is_some_and(|preview| preview.has_previous)
     }
     #[zbus(property)]
     fn can_play(&self) -> bool {
@@ -305,6 +324,12 @@ async fn announce(connection: &Connection, old: Option<&Preview>, new: Option<&P
         (None, None) => false,
         _ => true,
     };
+    if song_changed
+        || old.map(|p| (p.has_next, p.has_previous)) != new.map(|p| (p.has_next, p.has_previous))
+    {
+        let _ = player.can_go_next_changed(emitter).await;
+        let _ = player.can_go_previous_changed(emitter).await;
+    }
     if song_changed {
         let _ = player.metadata_changed(emitter).await;
         let _ = player.can_play_changed(emitter).await;
@@ -420,5 +445,9 @@ mod tests {
             .unwrap()
             .contains("a.currentTime = 0"));
         assert_eq!(script("rm -rf", 0.0), None);
+        assert_eq!(
+            script("next", 0.0).unwrap(),
+            "document.querySelector('[data-player=\"next\"]:not([disabled])')?.click()"
+        );
     }
 }

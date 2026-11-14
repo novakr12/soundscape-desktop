@@ -19,9 +19,8 @@ function render(view) {
   const toggle = document.getElementById("toggle");
   toggle.textContent = view.playing ? "⏸" : "▶";
   toggle.disabled = !playing;
-  for (const action of ["previous", "next"]) {
-    document.querySelector(`[data-action="${action}"]`).disabled = !view.can_skip;
-  }
+  document.querySelector('[data-action="previous"]').disabled = !view.can_skip;
+  document.querySelector('[data-action="next"]').disabled = !view.can_next;
   const love = document.getElementById("love");
   love.textContent = view.loved ? "♥" : "♡";
   love.disabled = !view.can_love;

@@ -23,6 +23,7 @@
       <li>Lets you love the song that's playing, or keep it out of your history, from the tray</li>
       <li>Remembers fixes for players that send wrong or messy song names</li>
       <li>Pauses scrobbling for an hour and turns it back on by itself</li>
+      <li>Tidies up the names of untagged music files, like "03 - Artist - Song.flac"</li>
       <li>Keeps plays while your server is offline and sends them with their original times later</li>
       <li>Leaves browsers out unless you turn them on, and then counts only songs, with titles like "(Official Video)" cleaned up</li>
       <li>Shows new followers, friends passing you on the weekly leaderboard and play milestones as notifications</li>

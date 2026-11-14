@@ -88,17 +88,26 @@ fn micros(value: &OwnedValue) -> Option<u64> {
         .map(|number| number as u64)
 }
 
+fn file_name(value: &OwnedValue) -> Option<String> {
+    let url = url::Url::parse(&text(value)?).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+    let path = url.to_file_path().ok()?;
+    Some(path.file_name()?.to_string_lossy().into_owned())
+}
+
 pub fn track_from(metadata: &HashMap<String, OwnedValue>) -> Option<Track> {
-    let title = metadata.get("xesam:title").and_then(text)?;
+    let title = metadata
+        .get("xesam:title")
+        .and_then(text)
+        .or_else(|| metadata.get("xesam:url").and_then(file_name))?;
     let mut artists = metadata.get("xesam:artist").map(texts).unwrap_or_default();
     if artists.is_empty() {
         artists = metadata
             .get("xesam:albumArtist")
             .map(texts)
             .unwrap_or_default();
-    }
-    if artists.is_empty() {
-        return None;
     }
     Some(Track {
         artist: artists.join(", "),
@@ -155,7 +164,7 @@ async fn read(connection: &Connection, name: &str, id: String) -> zbus::Result<P
                 if is_browser(&id) {
                     crate::tidy::from_browser(track)
                 } else {
-                    Some(track)
+                    crate::tidy::from_file(track)
                 }
             }),
             position_ms: position,
@@ -421,8 +430,26 @@ mod tests {
             "Single String Artist"
         );
 
+        let mut untagged = HashMap::new();
+        untagged.insert(
+            "xesam:url".to_string(),
+            owned(Value::from(
+                "file:///home/me/Music/03%20-%20Air%20-%20Talisman.flac",
+            )),
+        );
+        let track = track_from(&untagged).unwrap();
+        assert_eq!(
+            (track.artist.as_str(), track.title.as_str()),
+            ("", "03 - Air - Talisman.flac")
+        );
+        untagged.insert(
+            "xesam:url".to_string(),
+            owned(Value::from("https://radio.example/stream")),
+        );
+        assert_eq!(track_from(&untagged), None);
+
         metadata.remove("xesam:artist");
-        assert_eq!(track_from(&metadata), None);
+        assert_eq!(track_from(&metadata).unwrap().artist, "");
         metadata.insert(
             "xesam:albumArtist".to_string(),
             owned(Value::from(vec!["Various"])),

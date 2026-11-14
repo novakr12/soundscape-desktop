@@ -101,6 +101,91 @@ fn split(title: &str) -> Option<(String, String)> {
     })
 }
 
+const AUDIO_FILES: &[&str] = &[
+    "mp3", "flac", "ogg", "oga", "opus", "m4a", "aac", "wav", "wma", "ape", "wv", "aiff", "aif",
+    "mka", "mp4",
+];
+const UNKNOWN_ARTISTS: &[&str] = &[
+    "unknown artist",
+    "unknown",
+    "[unknown]",
+    "<unknown>",
+    "artist",
+];
+const UNKNOWN_ALBUMS: &[&str] = &["unknown album", "unknown", "[unknown]", "<unknown>"];
+
+fn without_extension(title: &str) -> Option<&str> {
+    let (stem, extension) = title.rsplit_once('.')?;
+    (!stem.trim().is_empty() && AUDIO_FILES.contains(&extension.to_lowercase().as_str()))
+        .then_some(stem)
+}
+
+fn without_number(title: &str, from_file: bool) -> &str {
+    let digits = title.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 || digits > 3 {
+        return title;
+    }
+    let mut rest = &title[digits..];
+    let mut disc = false;
+    if let Some(after) = rest.strip_prefix(['-', '.']) {
+        let disc_track = after.chars().take_while(char::is_ascii_digit).count();
+        if (1..=3).contains(&disc_track) && after[disc_track..].starts_with([' ', '-', '.', '_']) {
+            rest = &after[disc_track..];
+            disc = true;
+        }
+    }
+    let separator: String = rest
+        .chars()
+        .take_while(|c| matches!(c, ' ' | '-' | '.' | '_'))
+        .collect();
+    let punctuated = disc || separator.contains(['-', '.', '_']);
+    let spaced_file_number = from_file && digits >= 2 && !separator.is_empty();
+    let remaining = rest[separator.len()..].trim();
+    if remaining.is_empty() || !(punctuated || spaced_file_number) {
+        return title;
+    }
+    remaining
+}
+
+pub fn from_file(track: Track) -> Option<Track> {
+    let original = track.title.trim();
+    let (title, from_file) = match without_extension(original) {
+        Some(stem) => (stem.trim(), true),
+        None => (original, false),
+    };
+    let mut title = without_number(title, from_file).to_string();
+    if from_file && title.contains('_') && !title.contains(' ') {
+        title = title.replace('_', " ");
+    }
+    let mut artist = track.artist.trim().to_string();
+    let weak = artist.is_empty() || UNKNOWN_ARTISTS.contains(&artist.to_lowercase().as_str());
+    let various = artist.eq_ignore_ascii_case("various artists");
+    if weak || various {
+        match split(&title) {
+            Some((found, song)) => {
+                artist = found;
+                title = without_number(&song, from_file).to_string();
+            }
+            None if weak => return None,
+            None => {}
+        }
+    }
+    let album = track
+        .album
+        .clone()
+        .filter(|album| !UNKNOWN_ALBUMS.contains(&album.trim().to_lowercase().as_str()));
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    if artist.is_empty() || title.is_empty() {
+        return None;
+    }
+    Some(Track {
+        artist,
+        title,
+        album,
+        ..track
+    })
+}
+
 pub fn from_browser(track: Track) -> Option<Track> {
     if track
         .length_ms
@@ -224,5 +309,83 @@ mod tests {
             ..video("Radiohead", "Weird Fishes/Arpeggi")
         };
         assert_eq!(from_browser(music.clone()), Some(music));
+    }
+
+    fn file(artist: &str, title: &str) -> Option<(String, String)> {
+        from_file(Track {
+            artist: artist.into(),
+            title: title.into(),
+            album: None,
+            length_ms: Some(240_000),
+        })
+        .map(|track| (track.artist, track.title))
+    }
+
+    #[test]
+    fn leaves_tagged_songs_alone() {
+        assert_eq!(file("Prince", "1999"), song("Prince", "1999"));
+        assert_eq!(
+            file("Ariana Grande", "7 rings"),
+            song("Ariana Grande", "7 rings")
+        );
+        assert_eq!(file("Jay-Z", "99 Problems"), song("Jay-Z", "99 Problems"));
+        assert_eq!(
+            file("Air", "Talisman - Remastered"),
+            song("Air", "Talisman - Remastered")
+        );
+        assert_eq!(
+            file("Blink-182", "Adam's Song"),
+            song("Blink-182", "Adam's Song")
+        );
+    }
+
+    #[test]
+    fn cleans_up_file_names() {
+        assert_eq!(file("Air", "03 - Talisman.flac"), song("Air", "Talisman"));
+        assert_eq!(file("Air", "03. Talisman"), song("Air", "Talisman"));
+        assert_eq!(file("Air", "1-03 Talisman.mp3"), song("Air", "Talisman"));
+        assert_eq!(file("Air", "03 Talisman.mp3"), song("Air", "Talisman"));
+        assert_eq!(
+            file("Air", "Kelly_Watch_The_Stars.ogg"),
+            song("Air", "Kelly Watch The Stars")
+        );
+        assert_eq!(
+            file("Air", "La Femme d'Argent.m4a"),
+            song("Air", "La Femme d'Argent")
+        );
+    }
+
+    #[test]
+    fn finds_the_artist_in_the_title_when_the_tags_have_none() {
+        assert_eq!(
+            file("", "03 - Air - Talisman.flac"),
+            song("Air", "Talisman")
+        );
+        assert_eq!(
+            file("Unknown Artist", "Massive Attack - Teardrop"),
+            song("Massive Attack", "Teardrop")
+        );
+        assert_eq!(
+            file("Various Artists", "Bonobo - Kerala"),
+            song("Bonobo", "Kerala")
+        );
+        assert_eq!(
+            file("Various Artists", "Kerala"),
+            song("Various Artists", "Kerala")
+        );
+        assert_eq!(file("", "Track 01.mp3"), None);
+        assert_eq!(file("Unknown", "Intro"), None);
+    }
+
+    #[test]
+    fn drops_unknown_albums() {
+        let track = from_file(Track {
+            artist: "Air".into(),
+            title: "Talisman".into(),
+            album: Some("Unknown Album".into()),
+            length_ms: None,
+        })
+        .unwrap();
+        assert_eq!(track.album, None);
     }
 }

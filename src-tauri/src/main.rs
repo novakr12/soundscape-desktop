@@ -1,8 +1,10 @@
 mod autostart;
 mod config;
+mod friends;
 mod mpris;
 mod notify;
 mod queue;
+mod recap;
 mod scrobble;
 mod scrobbler;
 mod server;
@@ -29,6 +31,7 @@ pub struct AppState {
     config: Mutex<Config>,
     signed_out: AtomicBool,
     status: Mutex<scrobbler::Status>,
+    friends: Mutex<Vec<friends::Friend>>,
 }
 
 impl AppState {
@@ -61,6 +64,19 @@ impl AppState {
 
     pub fn status(&self) -> scrobbler::Status {
         self.status.lock().expect("status lock").clone()
+    }
+
+    pub fn friends(&self) -> Vec<friends::Friend> {
+        self.friends.lock().expect("friends lock").clone()
+    }
+
+    pub fn set_friends(&self, friends: Vec<friends::Friend>) -> bool {
+        let mut current = self.friends.lock().expect("friends lock");
+        if *current == friends {
+            return false;
+        }
+        *current = friends;
+        true
     }
 
     pub fn set_status(&self, status: scrobbler::Status) -> bool {
@@ -168,6 +184,7 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
                 None::<&str>,
             )?,
             &tray::players_menu(app)?,
+            &tray::friends_menu(app)?,
             &CheckMenuItem::with_id(
                 app,
                 "keep-running",
@@ -247,6 +264,21 @@ pub fn show(app: &AppHandle) {
     let _ = start(app);
 }
 
+fn open_friend(app: &AppHandle, user: &str) {
+    let state = app.state::<AppState>();
+    let Some(server) = state.server() else { return };
+    let Some(friend) = state
+        .friends()
+        .into_iter()
+        .find(|friend| friend.user == user)
+    else {
+        return;
+    };
+    if let Some(page) = friends::page(&server, &friend) {
+        let _ = open_main(app, page);
+    }
+}
+
 pub fn connect_app(app: &AppHandle) {
     let state = app.state::<AppState>();
     match state.server() {
@@ -310,6 +342,9 @@ fn handle_menu(app: &AppHandle, id: &str) {
         }
         "quit" => app.exit(0),
         other => {
+            if let Some(user) = other.strip_prefix("friend:") {
+                open_friend(app, user);
+            }
             if let Some(player) = other.strip_prefix("player:") {
                 state.update(|config| {
                     let now = scrobbler::enabled(&config.players, player);
@@ -373,6 +408,7 @@ fn main() {
                 dir,
                 signed_out: AtomicBool::new(false),
                 status: Mutex::new(scrobbler::Status::default()),
+                friends: Mutex::new(Vec::new()),
             });
             if let Err(error) = tray::create(app.handle(), &config) {
                 eprintln!("No tray icon: {error}");
@@ -383,6 +419,8 @@ fn main() {
             }
             tauri::async_runtime::spawn(scrobbler::run(app.handle().clone()));
             tauri::async_runtime::spawn(notify::run(app.handle().clone()));
+            tauri::async_runtime::spawn(friends::run(app.handle().clone()));
+            tauri::async_runtime::spawn(recap::run(app.handle().clone()));
             Ok(())
         })
         .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))

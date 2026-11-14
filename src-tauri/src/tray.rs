@@ -12,9 +12,11 @@ pub struct Tray {
     connect: MenuItem<Wry>,
     scrobbling: CheckMenuItem<Wry>,
     players: Submenu<Wry>,
+    friends: Submenu<Wry>,
 }
 
 pub const PLAYERS_MENU: &str = "players-menu";
+pub const FRIENDS_MENU: &str = "friends-menu";
 pub const SCROBBLING: &str = "tray-scrobbling";
 pub const CONNECT: &str = "connect-app";
 
@@ -51,6 +53,47 @@ pub fn status_text(status: &Status, config: &Config) -> String {
             0 => "All plays sent".into(),
             1 => "1 play waiting to be sent".into(),
             count => format!("{count} plays waiting to be sent"),
+        }
+    }
+}
+
+pub fn friends_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
+    let empty = MenuItem::with_id(
+        app,
+        "no-friends",
+        "Nobody you follow is playing",
+        false,
+        None::<&str>,
+    )?;
+    Submenu::with_id_and_items(app, FRIENDS_MENU, "Friends listening", true, &[&empty])
+}
+
+fn fill_friends(app: &AppHandle, menu: &Submenu<Wry>, friends: &[crate::friends::Friend]) {
+    if let Ok(items) = menu.items() {
+        for item in items {
+            let _ = menu.remove(&item);
+        }
+    }
+    if friends.is_empty() {
+        if let Ok(empty) = MenuItem::with_id(
+            app,
+            "no-friends",
+            "Nobody you follow is playing",
+            false,
+            None::<&str>,
+        ) {
+            let _ = menu.append(&empty);
+        }
+    }
+    for friend in friends {
+        if let Ok(item) = MenuItem::with_id(
+            app,
+            format!("friend:{}", friend.user),
+            short(&crate::friends::label(friend)),
+            true,
+            None::<&str>,
+        ) {
+            let _ = menu.append(&item);
         }
     }
 }
@@ -119,6 +162,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let players = players_menu(app)?;
+    let friends = friends_menu(app)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -128,6 +172,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &scrobbling,
             &players,
+            &friends,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "tray-open", "Open Soundscape", true, None::<&str>)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,
@@ -151,6 +196,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
         connect,
         scrobbling,
         players,
+        friends,
     });
     Ok(())
 }
@@ -159,6 +205,7 @@ pub fn refresh(app: &AppHandle) {
     let state = app.state::<crate::AppState>();
     let status = state.status();
     let config = state.config();
+    let friends = state.friends();
     if let Some(tray) = app.try_state::<Tray>() {
         let _ = tray.listening.set_text(listening_text(&status));
         let _ = tray.status.set_text(status_text(&status, &config));
@@ -167,6 +214,7 @@ pub fn refresh(app: &AppHandle) {
             .connect
             .set_enabled(!config.connected() || status.signed_out);
         fill_players(app, &tray.players, &status.players);
+        fill_friends(app, &tray.friends, &friends);
     }
     if let Some(icon) = app.tray_by_id("soundscape") {
         let tooltip = match &status.listening {
@@ -201,6 +249,12 @@ pub fn refresh(app: &AppHandle) {
             .and_then(|item| item.as_submenu().cloned())
         {
             fill_players(app, &players, &status.players);
+        }
+        if let Some(menu) = submenu
+            .get(FRIENDS_MENU)
+            .and_then(|item| item.as_submenu().cloned())
+        {
+            fill_friends(app, &menu, &friends);
         }
     }
 }

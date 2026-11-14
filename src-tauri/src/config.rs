@@ -33,6 +33,10 @@ pub struct Config {
     pub autostart: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_notification: Option<i64>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub weekly_recap: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_recap: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub players: BTreeMap<String, bool>,
 }
@@ -49,6 +53,8 @@ impl Default for Config {
             notifications: true,
             autostart: false,
             last_notification: None,
+            weekly_recap: true,
+            last_recap: None,
             players: BTreeMap::new(),
         }
     }

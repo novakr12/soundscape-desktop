@@ -21,7 +21,7 @@
       <li>Picks up what Spotify, Strawberry, Rhythmbox, Elisa and other players are playing, with no plugins</li>
       <li>Counts a play once you've heard half the song or four minutes, like ListenBrainz and Last.fm</li>
       <li>Keeps plays while your server is offline and sends them with their original times later</li>
-      <li>Leaves browsers out unless you turn them on, so videos don't end up in your history</li>
+      <li>Leaves browsers out unless you turn them on, and then counts only songs, with titles like "(Official Video)" cleaned up</li>
       <li>Shows new followers, friends passing you on the weekly leaderboard and play milestones as notifications</li>
       <li>Can start when you log in and keep scrobbling in the background</li>
     </ul>
@@ -87,7 +87,7 @@
   </supports>
 
   <releases>
-    <release version="0.1.0" date="2026-11-14">
+    <release version="0.1.0" date="2026-11-13">
       <description>
         <p>First release: your Soundscape server in its own window, scrobbling from Linux music players with an offline queue, desktop notifications, a tray icon and starting at login.</p>
       </description>

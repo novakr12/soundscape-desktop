@@ -53,6 +53,10 @@ pub fn on_by_default(id: &str) -> bool {
         .any(|browser| id == *browser || id.starts_with(&format!("{browser}.")))
 }
 
+pub fn is_browser(id: &str) -> bool {
+    !on_by_default(id) && id != "kdeconnect" && !id.starts_with("kdeconnect.")
+}
+
 fn text(value: &OwnedValue) -> Option<String> {
     String::try_from(value.clone())
         .ok()
@@ -147,7 +151,13 @@ async fn read(connection: &Connection, name: &str, id: String) -> zbus::Result<P
         snapshot: Snapshot {
             player: id.clone(),
             playing: status == "Playing",
-            track: track_from(&metadata),
+            track: track_from(&metadata).and_then(|track| {
+                if is_browser(&id) {
+                    crate::tidy::from_browser(track)
+                } else {
+                    Some(track)
+                }
+            }),
             position_ms: position,
         },
         id,
@@ -293,6 +303,9 @@ mod tests {
         assert!(!on_by_default("firefox"));
         assert!(!on_by_default("chromium"));
         assert!(!on_by_default("plasma-browser-integration"));
+        assert!(is_browser("firefox"));
+        assert!(!is_browser("kdeconnect"));
+        assert!(!is_browser("strawberry"));
     }
 
     #[test]

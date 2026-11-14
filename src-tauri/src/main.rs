@@ -10,6 +10,7 @@ mod scrobbler;
 mod server;
 mod settings;
 mod submit;
+mod tidy;
 mod tray;
 
 use config::Config;

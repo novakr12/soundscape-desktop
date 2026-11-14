@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  notes:
+    name: Check the version and write the notes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 flatpak/release-notes.py "$GITHUB_REF_NAME" > release-notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  flatpak:
+    name: Flatpak
+    needs: notes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: >-
+        --privileged
+        -v /usr/local/lib/android:/unused/android
+        -v /usr/share/dotnet:/unused/dotnet
+        -v /opt/hostedtoolcache:/unused/toolcache
+        -v /usr/local/share/boost:/unused/boost
+        -v /usr/local/.ghcup:/unused/ghcup
+    steps:
+      - name: Free disk space
+        run: rm -rf /unused/android/* /unused/dotnet/* /unused/toolcache/* /unused/boost/* /unused/ghcup/*
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - name: List the Rust crates for the offline build
+        run: python3 flatpak/cargo-sources.py
+      - uses: flathub-infra/flatpak-github-actions/flatpak-builder@933e9e8ca36e85046ebca8e211f0785c6becac40
+        with:
+          bundle: soundscape-desktop.flatpak
+          manifest-path: flatpak/io.github.novakr12.SoundscapeDesktop.yml
+          cache-key: flatpak-builder-release-${{ github.sha }}
+          upload-artifact: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-bundle
+          path: soundscape-desktop.flatpak
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [notes, flatpak]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+          merge-multiple: true
+      - name: Name the bundle and add checksums
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir release
+          mv downloads/soundscape-desktop.flatpak "release/soundscape-desktop-${version}-x86_64.flatpak"
+          (cd release && sha256sum -- *.flatpak > SHA256SUMS)
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Soundscape Desktop ${GITHUB_REF_NAME#v}" \
+            --notes-file downloads/release-notes.md

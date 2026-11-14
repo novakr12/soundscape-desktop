@@ -88,7 +88,29 @@ flatpak run io.github.novakr12.SoundscapeDesktop
 
 CI builds the same Flatpak on every push and keeps it as `soundscape-desktop.flatpak` under the run's artifacts, which installs with `flatpak install --user soundscape-desktop.flatpak`.
 
-The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), play sound (for song previews) and use the network. It can't see your files.
+The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), show its own media player for media keys (`org.mpris.MediaPlayer2.SoundscapeDesktop`), play sound (for song previews) and use the network. It can't see your files.
+
+## Releases
+
+Each release on GitHub has a ready-made Flatpak bundle. Download `soundscape-desktop-<version>-x86_64.flatpak` and install it with:
+
+```
+flatpak install --user soundscape-desktop-<version>-x86_64.flatpak
+```
+
+Flatpak fetches the GNOME runtime from Flathub if you don't have it yet. `SHA256SUMS` next to it lets you check the download with `sha256sum -c SHA256SUMS`.
+
+To make a release:
+
+1. Set the new version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, run `cargo update -p soundscape-desktop` in `src-tauri`, and add a `<release>` with notes at the top of the metainfo's `<releases>`.
+2. Commit and push, then tag the commit and push the tag:
+
+   ```
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+The release workflow checks that the tag, `Cargo.toml` and the metainfo agree, builds the Flatpak, and publishes the release with the notes from the metainfo.
 
 ## Useful commands
 

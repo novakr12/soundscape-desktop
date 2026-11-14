@@ -90,6 +90,19 @@
   </supports>
 
   <releases>
+    <release version="0.2.0" date="2026-11-14">
+      <description>
+        <p>Friends, a weekly recap, desktop search and media keys.</p>
+        <ul>
+          <li>Friends listening, in the menu and the tray, shows who you follow is playing right now</li>
+          <li>A notification sums up your week every Monday; turn it off in Settings</li>
+          <li>Browsers only count songs, and titles like "(Official Video)" are cleaned up</li>
+          <li>Media keys and your desktop's media controls play, pause and seek songs in the window</li>
+          <li>GNOME search and KRunner find artists and songs from your history</li>
+          <li>Plays from the app itself are never scrobbled</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-13">
       <description>
         <p>First release: your Soundscape server in its own window, scrobbling from Linux music players with an offline queue, desktop notifications, a tray icon and starting at login.</p>

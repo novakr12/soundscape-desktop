@@ -24,7 +24,7 @@ const BROWSERS: &[&str] = &[
     "plasma-browser-integration",
     "kdeconnect",
 ];
-const IGNORED: &[&str] = &["playerctld"];
+const IGNORED: &[&str] = &["playerctld", "soundscapedesktop"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Player {
@@ -306,6 +306,7 @@ mod tests {
         assert!(is_browser("firefox"));
         assert!(!is_browser("kdeconnect"));
         assert!(!is_browser("strawberry"));
+        assert_eq!(player_id(crate::media::BUS_NAME), None);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 mod autostart;
 mod config;
 mod friends;
+mod media;
 mod mpris;
 mod notify;
 mod queue;
@@ -422,6 +423,7 @@ fn main() {
             tauri::async_runtime::spawn(notify::run(app.handle().clone()));
             tauri::async_runtime::spawn(friends::run(app.handle().clone()));
             tauri::async_runtime::spawn(recap::run(app.handle().clone()));
+            tauri::async_runtime::spawn(media::run(app.handle().clone()));
             Ok(())
         })
         .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))

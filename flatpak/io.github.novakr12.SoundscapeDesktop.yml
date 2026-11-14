@@ -13,6 +13,7 @@ finish-args:
   - --device=dri
   - --socket=pulseaudio
   - --talk-name=org.mpris.MediaPlayer2.*
+  - --own-name=org.mpris.MediaPlayer2.SoundscapeDesktop
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=org.freedesktop.Notifications
 

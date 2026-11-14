@@ -3554,6 +3554,7 @@ name = "soundscape-desktop"
 version = "0.1.0"
 dependencies = [
  "gethostname",
+ "javascriptcore-rs",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -3564,6 +3565,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "url",
+ "webkit2gtk",
  "zbus 5.19.0",
 ]
 

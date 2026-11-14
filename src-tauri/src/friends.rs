@@ -14,6 +14,8 @@ pub struct Friend {
     pub title: String,
     pub artist: String,
     pub url: String,
+    #[serde(default, rename = "trackId")]
+    pub track_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +30,17 @@ pub fn label(friend: &Friend) -> String {
 pub fn page(server: &Url, friend: &Friend) -> Option<Url> {
     let target = server.join(&friend.url).ok()?;
     (target.origin() == server.origin()).then_some(target)
+}
+
+pub fn song(server: &Url, friend: &Friend) -> Option<Url> {
+    let mut target = server.join("/").ok()?;
+    target
+        .path_segments_mut()
+        .ok()?
+        .clear()
+        .extend(["track", friend.track_id.as_deref()?]);
+    target.set_query(Some("play=1"));
+    Some(target)
 }
 
 pub async fn fetch(server: &Url, token: &str) -> Result<Vec<Friend>, Failure> {
@@ -87,6 +100,7 @@ mod tests {
             title: "Teardrop".into(),
             artist: "Massive Attack".into(),
             url: url.into(),
+            track_id: Some("massive-attack-teardrop".into()),
         }
     }
 
@@ -110,5 +124,27 @@ mod tests {
             None
         );
         assert_eq!(page(&server, &friend("//evil.example.org/x")), None);
+    }
+
+    #[test]
+    fn plays_the_song_on_your_own_server() {
+        let server = Url::parse("https://music.example.com/").unwrap();
+        assert_eq!(
+            song(&server, &friend("/u/anna")).unwrap().as_str(),
+            "https://music.example.com/track/massive-attack-teardrop?play=1"
+        );
+        let odd = Friend {
+            track_id: Some("../admin?x=1#y".into()),
+            ..friend("/u/anna")
+        };
+        assert_eq!(
+            song(&server, &odd).unwrap().as_str(),
+            "https://music.example.com/track/..%2Fadmin%3Fx=1%23y?play=1"
+        );
+        let old_server = Friend {
+            track_id: None,
+            ..friend("/u/anna")
+        };
+        assert_eq!(song(&server, &old_server), None);
     }
 }

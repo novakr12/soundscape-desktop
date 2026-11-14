@@ -341,7 +341,7 @@ pub fn show(app: &AppHandle) {
     let _ = start(app);
 }
 
-fn open_friend(app: &AppHandle, user: &str) {
+fn open_friend(app: &AppHandle, user: &str, play: bool) {
     let state = app.state::<AppState>();
     let Some(server) = state.server() else { return };
     let Some(friend) = state
@@ -351,8 +351,13 @@ fn open_friend(app: &AppHandle, user: &str) {
     else {
         return;
     };
-    if let Some(page) = friends::page(&server, &friend) {
-        let _ = open_main(app, page);
+    let target = if play {
+        friends::song(&server, &friend)
+    } else {
+        friends::page(&server, &friend)
+    };
+    if let Some(target) = target {
+        let _ = open_main(app, target);
     }
 }
 
@@ -447,7 +452,10 @@ fn handle_menu(app: &AppHandle, id: &str) {
         "quit" => app.exit(0),
         other => {
             if let Some(user) = other.strip_prefix("friend:") {
-                open_friend(app, user);
+                open_friend(app, user, false);
+            }
+            if let Some(user) = other.strip_prefix("friend-play:") {
+                open_friend(app, user, true);
             }
             if let Some(player) = other.strip_prefix("player:") {
                 state.update(|config| {

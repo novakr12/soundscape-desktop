@@ -57,7 +57,7 @@ The tray shows a line like "Today: 42 plays · 2 h 51 min · 🔥 121-day streak
 
 On Monday or Tuesday a notification sums up last week: plays, listening time, your most played artist and your place among friends. It comes once per week; turn it off in Settings.
 
-Soundscape → Friends listening, also in the tray, shows who you follow is playing right now. Click a friend to open their profile.
+Soundscape → Friends listening, also in the tray, shows who you follow is playing right now. Each friend has **▶ Play this song**, which opens the song in the window and plays it (the whole song if your Navidrome has it, otherwise the preview), and **Open profile**.
 
 Your artists and songs show up when you search from GNOME's Activities overview or KDE's KRunner, with their play counts. Pick one to open it in the app, or in GNOME click the app icon to open the full search. This works while the app is running, which it usually is in the background. In GNOME you can turn it off under Settings → Search.
 

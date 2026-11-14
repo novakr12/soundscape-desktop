@@ -171,14 +171,29 @@ fn fill_friends(app: &AppHandle, menu: &Submenu<Wry>, friends: &[crate::friends:
         }
     }
     for friend in friends {
-        if let Ok(item) = MenuItem::with_id(
+        let play = MenuItem::with_id(
+            app,
+            format!("friend-play:{}", friend.user),
+            "▶ Play this song",
+            friend.track_id.is_some(),
+            None::<&str>,
+        );
+        let profile = MenuItem::with_id(
             app,
             format!("friend:{}", friend.user),
-            short(&crate::friends::label(friend)),
+            format!("Open {}'s profile", friend.user),
             true,
             None::<&str>,
-        ) {
-            let _ = menu.append(&item);
+        );
+        if let (Ok(play), Ok(profile)) = (play, profile) {
+            if let Ok(item) = Submenu::with_items(
+                app,
+                short(&crate::friends::label(friend)),
+                true,
+                &[&play, &profile],
+            ) {
+                let _ = menu.append(&item);
+            }
         }
     }
 }

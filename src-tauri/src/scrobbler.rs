@@ -195,6 +195,11 @@ pub async fn run(app: AppHandle) {
         if due && !state.signed_out() && queue.len() > 0 {
             match send_waiting(&app).await {
                 Err(Failure::Offline) => retry_after = Some(Instant::now() + RETRY),
+                Ok(sent) if sent > 0 => {
+                    retry_after = None;
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move { crate::today::check(&app).await });
+                }
                 _ => retry_after = None,
             }
         }

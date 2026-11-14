@@ -8,6 +8,7 @@ const LONGEST: usize = 60;
 
 pub struct Tray {
     listening: MenuItem<Wry>,
+    today: MenuItem<Wry>,
     status: MenuItem<Wry>,
     connect: MenuItem<Wry>,
     scrobbling: CheckMenuItem<Wry>,
@@ -102,6 +103,17 @@ pub fn pause_text(status: &Status) -> String {
     match status.paused_minutes {
         Some(minutes) => format!("Resume scrobbling ({})", minutes_left(minutes)),
         None => PAUSE_TEXT.into(),
+    }
+}
+
+pub fn tooltip(status: &Status, today: Option<&str>) -> String {
+    let song = match &status.listening {
+        Some((track, player)) => short(&format!("{} — {} ({player})", track.title, track.artist)),
+        None => "Soundscape".into(),
+    };
+    match today {
+        Some(today) => format!("{song}\n{today}"),
+        None => song,
     }
 }
 
@@ -236,6 +248,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     )?;
     let players = players_menu(app)?;
     let friends = friends_menu(app)?;
+    let today = MenuItem::with_id(app, "tray-today", "", false, None::<&str>)?;
     let love = CheckMenuItem::with_id(app, LOVE, LOVE_TEXT, false, false, None::<&str>)?;
     let skip = MenuItem::with_id(app, SKIP, SKIP_TEXT, false, None::<&str>)?;
     let fix = MenuItem::with_id(app, FIX, FIX_TEXT, true, None::<&str>)?;
@@ -244,6 +257,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
         app,
         &[
             &listening,
+            &today,
             &love,
             &skip,
             &fix,
@@ -273,6 +287,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     builder.build(app)?;
     app.manage(Tray {
         listening,
+        today,
         status,
         connect,
         scrobbling,
@@ -290,8 +305,10 @@ pub fn refresh(app: &AppHandle) {
     let status = state.status();
     let config = state.config();
     let friends = state.friends();
+    let today_line = state.today().map(|today| crate::today::text(&today));
     if let Some(tray) = app.try_state::<Tray>() {
         let _ = tray.listening.set_text(listening_text(&status));
+        let _ = tray.today.set_text(today_line.clone().unwrap_or_default());
         let _ = tray.status.set_text(status_text(&status, &config));
         let _ = tray.scrobbling.set_checked(config.scrobbling);
         let _ = tray
@@ -306,11 +323,7 @@ pub fn refresh(app: &AppHandle) {
             .set_enabled(config.scrobbling && config.connected());
     }
     if let Some(icon) = app.tray_by_id("soundscape") {
-        let tooltip = match &status.listening {
-            Some((track, player)) => format!("{} — {} ({player})", track.title, track.artist),
-            None => "Soundscape".into(),
-        };
-        let _ = icon.set_tooltip(Some(short(&tooltip)));
+        let _ = icon.set_tooltip(Some(tooltip(&status, today_line.as_deref())));
     }
     let Some(window) = app.get_webview_window(crate::MAIN) else {
         return;

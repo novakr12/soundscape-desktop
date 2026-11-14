@@ -15,6 +15,7 @@ mod server;
 mod settings;
 mod submit;
 mod tidy;
+mod today;
 mod tray;
 
 use config::Config;
@@ -40,6 +41,7 @@ pub struct AppState {
     loved: Mutex<Option<(scrobble::Track, bool)>>,
     skip_request: Mutex<Option<scrobble::Track>>,
     skipped: Mutex<Option<scrobble::Track>>,
+    today: Mutex<Option<today::Today>>,
 }
 
 impl AppState {
@@ -116,6 +118,19 @@ impl AppState {
             .expect("skip lock")
             .as_ref()
             .is_some_and(|skipped| skipped.same_song(track))
+    }
+
+    pub fn today(&self) -> Option<today::Today> {
+        *self.today.lock().expect("today lock")
+    }
+
+    pub fn set_today(&self, today: Option<today::Today>) -> bool {
+        let mut current = self.today.lock().expect("today lock");
+        if *current == today {
+            return false;
+        }
+        *current = today;
+        true
     }
 
     pub fn set_status(&self, status: scrobbler::Status) -> bool {
@@ -501,6 +516,7 @@ fn main() {
                 loved: Mutex::new(None),
                 skip_request: Mutex::new(None),
                 skipped: Mutex::new(None),
+                today: Mutex::new(None),
             });
             if let Err(error) = tray::create(app.handle(), &config) {
                 eprintln!("No tray icon: {error}");
@@ -513,6 +529,7 @@ fn main() {
             tauri::async_runtime::spawn(notify::run(app.handle().clone()));
             tauri::async_runtime::spawn(friends::run(app.handle().clone()));
             tauri::async_runtime::spawn(love::run(app.handle().clone()));
+            tauri::async_runtime::spawn(today::run(app.handle().clone()));
             tauri::async_runtime::spawn(recap::run(app.handle().clone()));
             tauri::async_runtime::spawn(media::run(app.handle().clone()));
             tauri::async_runtime::spawn(search::run(app.handle().clone()));

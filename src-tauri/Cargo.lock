@@ -3551,7 +3551,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-desktop"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gethostname",
  "javascriptcore-rs",

@@ -15,6 +15,7 @@ pub struct Tray {
     friends: Submenu<Wry>,
     love: CheckMenuItem<Wry>,
     skip: MenuItem<Wry>,
+    pause: MenuItem<Wry>,
 }
 
 pub const PLAYERS_MENU: &str = "players-menu";
@@ -23,6 +24,8 @@ pub const LOVE: &str = "love";
 pub const SKIP: &str = "skip-scrobble";
 pub const LOVE_TEXT: &str = "♥ Love this song";
 pub const SKIP_TEXT: &str = "Don't scrobble this one";
+pub const PAUSE: &str = "pause-hour";
+pub const PAUSE_TEXT: &str = "Pause scrobbling for an hour";
 pub const FIX: &str = "fix-title";
 pub const FIX_TEXT: &str = "Fix this title…";
 
@@ -87,6 +90,21 @@ fn short(text: &str) -> String {
     }
 }
 
+pub fn minutes_left(minutes: u64) -> String {
+    if minutes == 1 {
+        "1 min left".into()
+    } else {
+        format!("{minutes} min left")
+    }
+}
+
+pub fn pause_text(status: &Status) -> String {
+    match status.paused_minutes {
+        Some(minutes) => format!("Resume scrobbling ({})", minutes_left(minutes)),
+        None => PAUSE_TEXT.into(),
+    }
+}
+
 pub fn listening_text(status: &Status) -> String {
     match &status.listening {
         Some((track, _)) => short(&format!("♫ {} — {}", track.title, track.artist)),
@@ -101,6 +119,8 @@ pub fn status_text(status: &Status, config: &Config) -> String {
         "Signed out. Connect again from the window".into()
     } else if !config.scrobbling {
         "Scrobbling is paused".into()
+    } else if let Some(minutes) = status.paused_minutes {
+        format!("Scrobbling paused · {}", minutes_left(minutes))
     } else {
         match status.waiting {
             0 => "All plays sent".into(),
@@ -219,6 +239,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     let love = CheckMenuItem::with_id(app, LOVE, LOVE_TEXT, false, false, None::<&str>)?;
     let skip = MenuItem::with_id(app, SKIP, SKIP_TEXT, false, None::<&str>)?;
     let fix = MenuItem::with_id(app, FIX, FIX_TEXT, true, None::<&str>)?;
+    let pause = MenuItem::with_id(app, PAUSE, PAUSE_TEXT, config.scrobbling, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -230,6 +251,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
             &connect,
             &PredefinedMenuItem::separator(app)?,
             &scrobbling,
+            &pause,
             &players,
             &friends,
             &PredefinedMenuItem::separator(app)?,
@@ -258,6 +280,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
         friends,
         love,
         skip,
+        pause,
     });
     Ok(())
 }
@@ -277,6 +300,10 @@ pub fn refresh(app: &AppHandle) {
         fill_players(app, &tray.players, &status.players);
         fill_friends(app, &tray.friends, &friends);
         show_actions(&tray.love, &tray.skip, &current_actions(app, &status));
+        let _ = tray.pause.set_text(pause_text(&status));
+        let _ = tray
+            .pause
+            .set_enabled(config.scrobbling && config.connected());
     }
     if let Some(icon) = app.tray_by_id("soundscape") {
         let tooltip = match &status.listening {
@@ -311,6 +338,13 @@ pub fn refresh(app: &AppHandle) {
             .and_then(|item| item.as_submenu().cloned())
         {
             fill_players(app, &players, &status.players);
+        }
+        if let Some(pause) = submenu
+            .get(PAUSE)
+            .and_then(|item| item.as_menuitem().cloned())
+        {
+            let _ = pause.set_text(pause_text(&status));
+            let _ = pause.set_enabled(config.scrobbling && config.connected());
         }
         if let (Some(love), Some(skip)) = (
             submenu

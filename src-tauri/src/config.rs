@@ -41,6 +41,30 @@ pub struct Config {
     pub players: BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fixes: Vec<crate::fixes::Fix>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_until: Option<i64>,
+}
+
+pub const PAUSE_SECONDS: i64 = 60 * 60;
+
+pub fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+impl Config {
+    pub fn paused_minutes(&self, now: i64) -> Option<u64> {
+        self.paused_until
+            .map(|until| until - now)
+            .filter(|left| *left > 0)
+            .map(|left| (left as u64).div_ceil(60))
+    }
+
+    pub fn sending(&self, now: i64) -> bool {
+        self.scrobbling && self.connected() && self.paused_minutes(now).is_none()
+    }
 }
 
 impl Default for Config {
@@ -59,6 +83,7 @@ impl Default for Config {
             last_recap: None,
             players: BTreeMap::new(),
             fixes: Vec::new(),
+            paused_until: None,
         }
     }
 }
@@ -107,6 +132,27 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn a_pause_ends_by_itself() {
+        let config = Config {
+            server: Some("https://a.example/".into()),
+            token: Some("t".into()),
+            paused_until: Some(10_000),
+            ..Config::default()
+        };
+        assert_eq!(config.paused_minutes(10_000 - 3600), Some(60));
+        assert_eq!(config.paused_minutes(10_000 - 61), Some(2));
+        assert_eq!(config.paused_minutes(10_000 - 1), Some(1));
+        assert!(!config.sending(10_000 - 1));
+        assert_eq!(config.paused_minutes(10_000), None);
+        assert!(config.sending(10_000));
+        assert!(!Config {
+            scrobbling: false,
+            ..config
+        }
+        .sending(20_000));
     }
 
     #[test]

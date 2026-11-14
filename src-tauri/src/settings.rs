@@ -42,6 +42,7 @@ pub struct SettingsView {
     pub players: Vec<PlayerView>,
     pub playing: Option<SongView>,
     pub sent_as: Option<SongView>,
+    pub paused_minutes: Option<u64>,
     pub fixes: Vec<FixView>,
 }
 
@@ -104,6 +105,7 @@ pub fn view(app: &AppHandle) -> SettingsView {
             artist: track.artist.clone(),
             title: track.title.clone(),
         }),
+        paused_minutes: config.paused_minutes(crate::config::now_seconds()),
         sent_as: match (&status.original, &status.listening) {
             (Some(original), Some((sent, _)))
                 if original.artist != sent.artist || original.title != sent.title =>
@@ -231,6 +233,7 @@ pub fn settings_action(app: AppHandle, action: String) {
         "sign-out" => crate::sign_out(&app),
         "connect" => crate::connect_app(&app),
         "open" => crate::show(&app),
+        "pause" => crate::toggle_pause(&app),
         _ => {}
     }
 }

@@ -27,11 +27,17 @@ function render(settings) {
     input.checked = settings[input.dataset.option];
   }
 
-  document.getElementById("listening").textContent = settings.listening
-    ? `Listening now: ${settings.listening}`
-    : settings.scrobbling
-      ? "Nothing playing right now."
-      : "Scrobbling is paused.";
+  const paused = settings.paused_minutes;
+  document.getElementById("listening").textContent = !settings.scrobbling
+    ? "Scrobbling is paused."
+    : paused
+      ? `Paused for ${paused === 1 ? "1 more minute" : `${paused} more minutes`}. It turns back on by itself.`
+      : settings.listening
+        ? `Listening now: ${settings.listening}`
+        : "Nothing playing right now.";
+  const pause = document.getElementById("pause");
+  pause.textContent = paused ? "Resume now" : "Pause for an hour";
+  pause.hidden = !settings.scrobbling || !settings.connected;
 
   const list = document.getElementById("players");
   list.replaceChildren(
@@ -170,6 +176,11 @@ for (const button of document.querySelectorAll("[data-action]")) {
     await invoke("settings_action", { action });
   });
 }
+
+document.getElementById("pause").addEventListener("click", async () => {
+  await invoke("settings_action", { action: "pause" });
+  refresh();
+});
 
 document.getElementById("send-now").addEventListener("click", () => act(() => invoke("send_now")));
 

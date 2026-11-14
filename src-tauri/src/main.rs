@@ -235,6 +235,13 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
                 config.scrobbling,
                 None::<&str>,
             )?,
+            &MenuItem::with_id(
+                app,
+                tray::PAUSE,
+                tray::PAUSE_TEXT,
+                config.scrobbling && config.connected(),
+                None::<&str>,
+            )?,
             &CheckMenuItem::with_id(app, tray::LOVE, tray::LOVE_TEXT, false, false, None::<&str>)?,
             &MenuItem::with_id(app, tray::SKIP, tray::SKIP_TEXT, false, None::<&str>)?,
             &MenuItem::with_id(app, tray::FIX, tray::FIX_TEXT, true, None::<&str>)?,
@@ -334,6 +341,18 @@ fn open_friend(app: &AppHandle, user: &str) {
     }
 }
 
+pub fn toggle_pause(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let now = config::now_seconds();
+    state.update(|config| {
+        config.paused_until = match config.paused_minutes(now) {
+            Some(_) => None,
+            None => Some(now + config::PAUSE_SECONDS),
+        };
+    });
+    tray::refresh(app);
+}
+
 pub fn connect_app(app: &AppHandle) {
     let state = app.state::<AppState>();
     match state.server() {
@@ -397,6 +416,9 @@ fn handle_menu(app: &AppHandle, id: &str) {
         }
         tray::LOVE => {
             tauri::async_runtime::spawn(love::toggle(app.clone()));
+        }
+        tray::PAUSE => {
+            toggle_pause(app);
         }
         tray::FIX => {
             let _ = open_settings_at(app, Some("fixes"));

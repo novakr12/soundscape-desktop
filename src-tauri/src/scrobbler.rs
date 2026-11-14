@@ -25,6 +25,7 @@ pub struct Status {
     pub listening: Option<(Track, String)>,
     pub original: Option<Track>,
     pub counted: bool,
+    pub paused_minutes: Option<u64>,
     pub players: Vec<PlayerChoice>,
     pub waiting: usize,
     pub signed_out: bool,
@@ -116,7 +117,11 @@ pub async fn run(app: AppHandle) {
             None => Vec::new(),
         };
         let allowed = |id: &str| enabled(&config.players, id);
-        let original = if config.scrobbling && config.connected() {
+        let now = crate::config::now_seconds();
+        if config.paused_until.is_some() && config.paused_minutes(now).is_none() {
+            state.update(|config| config.paused_until = None);
+        }
+        let original = if config.sending(now) {
             listening(&found, allowed).map(|(track, _)| track)
         } else {
             None
@@ -136,7 +141,7 @@ pub async fn run(app: AppHandle) {
             .filter(|player| allowed(&player.id))
             .map(|player| player.snapshot.clone())
             .collect();
-        let running = config.scrobbling && config.connected();
+        let running = config.sending(now);
         if let Some(track) = state.take_skip_request() {
             if engine.skip(&track) {
                 state.set_skipped(Some(track));
@@ -207,6 +212,7 @@ pub async fn run(app: AppHandle) {
                 .as_ref()
                 .is_some_and(|(track, _)| engine.counted(track)),
             listening: now_listening,
+            paused_minutes: config.paused_minutes(now),
             original,
             players: found
                 .iter()

@@ -39,6 +39,8 @@ pub struct Config {
     pub last_recap: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub players: BTreeMap<String, bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<crate::fixes::Fix>,
 }
 
 impl Default for Config {
@@ -56,6 +58,7 @@ impl Default for Config {
             weekly_recap: true,
             last_recap: None,
             players: BTreeMap::new(),
+            fixes: Vec::new(),
         }
     }
 }

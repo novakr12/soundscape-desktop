@@ -42,6 +42,34 @@
         </div>
       </section>
 
+      <section id="fixes">
+        <h2>Title fixes</h2>
+        <p class="muted small">
+          When a player sends a wrong or messy name, fix it once and the app sends the right one from now on. Plays
+          already sent keep their old name.
+        </p>
+        <form id="fix-form" hidden>
+          <p id="fix-source" class="small"></p>
+          <label class="field">
+            <span>Artist</span>
+            <input type="text" id="fix-artist" maxlength="300" required />
+          </label>
+          <label class="field" id="fix-title-field">
+            <span>Title</span>
+            <input type="text" id="fix-title" maxlength="300" />
+          </label>
+          <label class="switch">
+            <input type="checkbox" id="fix-every" />
+            <span id="fix-every-label">Fix the artist on every song</span>
+          </label>
+          <div class="buttons">
+            <button type="submit">Save fix</button>
+          </div>
+        </form>
+        <p id="fix-idle" class="muted">Play the song you want to fix and it shows up here.</p>
+        <ul id="fix-list" class="fix-list"></ul>
+      </section>
+
       <section>
         <h2>Notifications</h2>
         <label class="switch">

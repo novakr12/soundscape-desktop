@@ -59,11 +59,92 @@ function render(settings) {
         })),
   );
 
+  renderFixes(settings);
+
   document.getElementById("waiting").textContent = settings.waiting
     ? `${plural(settings.waiting, "play")} waiting to be sent.`
     : "No plays waiting.";
   document.getElementById("send-now").hidden = settings.waiting === 0;
 }
+
+const fixForm = document.getElementById("fix-form");
+const fixArtist = document.getElementById("fix-artist");
+const fixTitle = document.getElementById("fix-title");
+const fixEvery = document.getElementById("fix-every");
+let fixSong = null;
+let fixShown = null;
+let fixEdited = false;
+
+function sameSong(a, b) {
+  return a && b && a.artist === b.artist && a.title === b.title;
+}
+
+function showEvery() {
+  document.getElementById("fix-title-field").hidden = fixEvery.checked;
+}
+
+function renderFixes(settings) {
+  const playing = settings.playing;
+  const sent = settings.sent_as;
+  const shown = `${playing?.artist}\n${playing?.title}\n${sent?.artist}\n${sent?.title}`;
+  if (shown !== fixShown && !(fixEdited && sameSong(playing, fixSong))) {
+    fixShown = shown;
+    fixSong = playing;
+    fixEdited = false;
+    if (playing) {
+      document.getElementById("fix-source").textContent = sent
+        ? `The player sends ${playing.title} · ${playing.artist}, fixed to ${sent.title} · ${sent.artist}.`
+        : `The player sends: ${playing.title} · ${playing.artist}`;
+      document.getElementById("fix-every-label").textContent = `Fix every song by ${playing.artist}, not just this one`;
+      fixArtist.value = (sent ?? playing).artist;
+      fixTitle.value = (sent ?? playing).title;
+      fixEvery.checked = false;
+      showEvery();
+    }
+  }
+  fixForm.hidden = !fixSong;
+  document.getElementById("fix-idle").hidden = Boolean(fixSong);
+
+  document.getElementById("fix-list").replaceChildren(
+    ...settings.fixes.map((fix, index) => {
+      const item = document.createElement("li");
+      const text = document.createElement("span");
+      text.textContent = `${fix.from} → ${fix.to}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => act(() => invoke("remove_fix", { index })));
+      item.append(text, remove);
+      return item;
+    }),
+  );
+}
+
+for (const input of [fixArtist, fixTitle, fixEvery]) {
+  input.addEventListener("input", () => {
+    fixEdited = true;
+  });
+}
+fixEvery.addEventListener("change", showEvery);
+
+fixForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!fixSong) return;
+  const song = fixSong;
+  act(async () => {
+    const settings = await invoke("add_fix", {
+      artist: song.artist,
+      title: song.title,
+      newArtist: fixArtist.value,
+      newTitle: fixTitle.value,
+      everySong: fixEvery.checked,
+    });
+    fixEdited = false;
+    fixShown = null;
+    return settings;
+  });
+});
 
 async function act(call) {
   busy = true;
@@ -110,5 +191,10 @@ async function refresh() {
   }
 }
 
-refresh();
+async function start() {
+  await refresh();
+  if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+}
+
+start();
 setInterval(refresh, 3000);

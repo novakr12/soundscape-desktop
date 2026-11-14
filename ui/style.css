@@ -166,6 +166,31 @@ section p {
   list-style: none;
 }
 
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field[hidden] {
+  display: none;
+}
+
+.fix-list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fix-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+
 .buttons,
 .row {
   display: flex;

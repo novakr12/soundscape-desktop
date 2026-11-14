@@ -23,6 +23,8 @@ pub const LOVE: &str = "love";
 pub const SKIP: &str = "skip-scrobble";
 pub const LOVE_TEXT: &str = "♥ Love this song";
 pub const SKIP_TEXT: &str = "Don't scrobble this one";
+pub const FIX: &str = "fix-title";
+pub const FIX_TEXT: &str = "Fix this title…";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SongActions {
@@ -216,12 +218,14 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     let friends = friends_menu(app)?;
     let love = CheckMenuItem::with_id(app, LOVE, LOVE_TEXT, false, false, None::<&str>)?;
     let skip = MenuItem::with_id(app, SKIP, SKIP_TEXT, false, None::<&str>)?;
+    let fix = MenuItem::with_id(app, FIX, FIX_TEXT, true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
             &listening,
             &love,
             &skip,
+            &fix,
             &status,
             &connect,
             &PredefinedMenuItem::separator(app)?,

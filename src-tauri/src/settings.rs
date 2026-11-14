@@ -13,6 +13,18 @@ pub struct PlayerView {
     pub open: bool,
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct SongView {
+    pub artist: String,
+    pub title: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct FixView {
+    pub from: String,
+    pub to: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SettingsView {
     pub server: Option<String>,
@@ -28,6 +40,9 @@ pub struct SettingsView {
     pub waiting: usize,
     pub listening: Option<String>,
     pub players: Vec<PlayerView>,
+    pub playing: Option<SongView>,
+    pub sent_as: Option<SongView>,
+    pub fixes: Vec<FixView>,
 }
 
 pub fn players(
@@ -82,8 +97,32 @@ pub fn view(app: &AppHandle) -> SettingsView {
         waiting: Queue::new(&state.dir).len(),
         listening: status
             .listening
+            .as_ref()
             .map(|(track, player)| format!("{} — {} ({player})", track.title, track.artist)),
         players: players(&status.players, &config.players),
+        playing: status.original.as_ref().map(|track| SongView {
+            artist: track.artist.clone(),
+            title: track.title.clone(),
+        }),
+        sent_as: match (&status.original, &status.listening) {
+            (Some(original), Some((sent, _)))
+                if original.artist != sent.artist || original.title != sent.title =>
+            {
+                Some(SongView {
+                    artist: sent.artist.clone(),
+                    title: sent.title.clone(),
+                })
+            }
+            _ => None,
+        },
+        fixes: config
+            .fixes
+            .iter()
+            .map(|fix| {
+                let (from, to) = crate::fixes::describe(fix);
+                FixView { from, to }
+            })
+            .collect(),
     }
 }
 
@@ -120,6 +159,31 @@ pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<Set
     }
     tray::refresh(&app);
     Ok(view(&app))
+}
+
+#[tauri::command]
+pub fn add_fix(
+    app: AppHandle,
+    artist: String,
+    title: String,
+    new_artist: String,
+    new_title: String,
+    every_song: bool,
+) -> Result<SettingsView, String> {
+    let fix = crate::fixes::make(&artist, &title, &new_artist, &new_title, every_song)?;
+    app.state::<AppState>()
+        .update(|config| crate::fixes::add(&mut config.fixes, fix));
+    Ok(view(&app))
+}
+
+#[tauri::command]
+pub fn remove_fix(app: AppHandle, index: usize) -> SettingsView {
+    app.state::<AppState>().update(|config| {
+        if index < config.fixes.len() {
+            config.fixes.remove(index);
+        }
+    });
+    view(&app)
 }
 
 #[tauri::command]

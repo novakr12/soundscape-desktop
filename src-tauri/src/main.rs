@@ -1,5 +1,6 @@
 mod autostart;
 mod config;
+mod fixes;
 mod friends;
 mod love;
 mod media;
@@ -170,11 +171,24 @@ async fn connect_server(app: AppHandle, address: String) -> Result<(), String> {
 }
 
 pub fn open_settings(app: &AppHandle) -> tauri::Result<()> {
+    open_settings_at(app, None)
+}
+
+pub fn open_settings_at(app: &AppHandle, part: Option<&str>) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(SETTINGS) {
         window.show()?;
+        if let Some(part) = part {
+            let _ = window.eval(format!(
+                "document.getElementById({part:?})?.scrollIntoView()"
+            ));
+        }
         return window.set_focus();
     }
-    WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings.html".into()))
+    let page = match part {
+        Some(part) => format!("settings.html#{part}"),
+        None => "settings.html".into(),
+    };
+    WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(page.into()))
         .title("Soundscape settings")
         .inner_size(520.0, 680.0)
         .min_inner_size(380.0, 420.0)
@@ -223,6 +237,7 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
             )?,
             &CheckMenuItem::with_id(app, tray::LOVE, tray::LOVE_TEXT, false, false, None::<&str>)?,
             &MenuItem::with_id(app, tray::SKIP, tray::SKIP_TEXT, false, None::<&str>)?,
+            &MenuItem::with_id(app, tray::FIX, tray::FIX_TEXT, true, None::<&str>)?,
             &tray::players_menu(app)?,
             &tray::friends_menu(app)?,
             &CheckMenuItem::with_id(
@@ -383,6 +398,9 @@ fn handle_menu(app: &AppHandle, id: &str) {
         tray::LOVE => {
             tauri::async_runtime::spawn(love::toggle(app.clone()));
         }
+        tray::FIX => {
+            let _ = open_settings_at(app, Some("fixes"));
+        }
         tray::SKIP => {
             if let Some((track, _)) = state.status().listening {
                 state.request_skip(track);
@@ -486,6 +504,8 @@ fn main() {
             settings::get_settings,
             settings::set_option,
             settings::set_player,
+            settings::add_fix,
+            settings::remove_fix,
             settings::send_now,
             settings::test_notification,
             settings::settings_action

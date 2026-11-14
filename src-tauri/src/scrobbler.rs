@@ -23,6 +23,7 @@ pub struct Status {
     pub scrobbling: bool,
     pub connected: bool,
     pub listening: Option<(Track, String)>,
+    pub original: Option<Track>,
     pub counted: bool,
     pub players: Vec<PlayerChoice>,
     pub waiting: usize,
@@ -115,6 +116,21 @@ pub async fn run(app: AppHandle) {
             None => Vec::new(),
         };
         let allowed = |id: &str| enabled(&config.players, id);
+        let original = if config.scrobbling && config.connected() {
+            listening(&found, allowed).map(|(track, _)| track)
+        } else {
+            None
+        };
+        let found: Vec<Player> = found
+            .into_iter()
+            .map(|mut player| {
+                player.snapshot.track = player
+                    .snapshot
+                    .track
+                    .map(|track| crate::fixes::apply(&config.fixes, track));
+                player
+            })
+            .collect();
         let active: Vec<_> = found
             .iter()
             .filter(|player| allowed(&player.id))
@@ -191,6 +207,7 @@ pub async fn run(app: AppHandle) {
                 .as_ref()
                 .is_some_and(|(track, _)| engine.counted(track)),
             listening: now_listening,
+            original,
             players: found
                 .iter()
                 .map(|p| PlayerChoice {

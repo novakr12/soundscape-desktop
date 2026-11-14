@@ -55,7 +55,7 @@ Soundscape → Friends listening, also in the tray, shows who you follow is play
 
 Your artists and songs show up when you search from GNOME's Activities overview or KDE's KRunner, with their play counts. Pick one to open it in the app, or in GNOME click the app icon to open the full search. This works while the app is running, which it usually is in the background. In GNOME you can turn it off under Settings → Search.
 
-Song previews in the window work with your keyboard's media keys and your desktop's media controls (play, pause and seeking), and show up there with their cover. This needs a server new enough to describe its previews to the system.
+Previews and full songs you play in the window work with your keyboard's media keys and your desktop's media controls (play, pause and seeking), and show up there with their cover. This needs a server new enough to describe its previews to the system.
 
 Settings (Ctrl+, or from the menu and the tray) has everything in one place: your account, scrobbling and players, plays waiting to be sent with a Send now button, notifications, starting when you log in, and keeping the app running when the window is closed.
 

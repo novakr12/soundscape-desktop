@@ -164,17 +164,66 @@ async fn read(connection: &Connection, name: &str, id: String) -> zbus::Result<P
     })
 }
 
+pub fn parent_pid(stat: &str) -> Option<u32> {
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
+fn is_this_app(pid: u32) -> bool {
+    let me = std::process::id();
+    if pid == me {
+        return true;
+    }
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| parent_pid(&stat))
+        == Some(me)
+}
+
+async fn from_this_app(bus: &zbus::fdo::DBusProxy<'_>, name: &str) -> bool {
+    let Ok(name) = zbus::names::BusName::try_from(name) else {
+        return false;
+    };
+    bus.get_connection_unix_process_id(name)
+        .await
+        .is_ok_and(is_this_app)
+}
+
+pub async fn webkit_shows_this_app(connection: &Connection, own: &str) -> bool {
+    let Ok(bus) = zbus::fdo::DBusProxy::new(connection).await else {
+        return false;
+    };
+    let Ok(names) = bus.list_names().await else {
+        return false;
+    };
+    for name in names {
+        let name = name.as_str();
+        if name.starts_with(PREFIX) && name != own && from_this_app(&bus, name).await {
+            return true;
+        }
+    }
+    false
+}
+
 pub async fn players(connection: &Connection) -> zbus::Result<Vec<Player>> {
-    let names = zbus::fdo::DBusProxy::new(connection)
-        .await?
-        .list_names()
-        .await?;
+    list(connection, true).await
+}
+
+async fn list(connection: &Connection, skip_this_app: bool) -> zbus::Result<Vec<Player>> {
+    let bus = zbus::fdo::DBusProxy::new(connection).await?;
+    let names = bus.list_names().await?;
     let mut found: Vec<Player> = Vec::new();
     for name in names {
         let Some(id) = player_id(name.as_str()) else {
             continue;
         };
-        if found.iter().any(|player| player.id == id) {
+        if found.iter().any(|player| player.id == id)
+            || (skip_this_app && from_this_app(&bus, name.as_str()).await)
+        {
             continue;
         }
         if let Ok(player) = read(connection, name.as_str(), id).await {
@@ -254,7 +303,12 @@ mod tests {
                 .await
                 .unwrap();
             let reader = Connection::session().await.unwrap();
-            let found = players(&reader).await.unwrap();
+            assert!(players(&reader)
+                .await
+                .unwrap()
+                .iter()
+                .all(|p| p.id != "soundscapetest"));
+            let found = list(&reader, false).await.unwrap();
             let player = found
                 .iter()
                 .find(|player| player.id == "soundscapetest")
@@ -276,6 +330,17 @@ mod tests {
 
     fn owned(value: Value<'_>) -> OwnedValue {
         value.try_to_owned().unwrap()
+    }
+
+    #[test]
+    fn finds_the_parent_process() {
+        assert_eq!(
+            parent_pid("7278 (WebKitWebProces) S 7211 7210 7210 0 -1"),
+            Some(7211)
+        );
+        assert_eq!(parent_pid("12 (odd ) name) R 34 12 12"), Some(34));
+        assert_eq!(parent_pid("garbage"), None);
+        assert!(is_this_app(std::process::id()));
     }
 
     #[test]

@@ -340,7 +340,12 @@ pub async fn run(app: AppHandle) {
     loop {
         let _ = tokio::time::timeout(EVERY, shared.wake.notified()).await;
         tokio::time::sleep(Duration::from_millis(150)).await;
-        let preview = read(&app).await;
+        let mut preview = read(&app).await;
+        if let (Some(_), Some(bus)) = (&preview, &connection) {
+            if crate::mpris::webkit_shows_this_app(bus, BUS_NAME).await {
+                preview = None;
+            }
+        }
         let old = {
             let mut current = shared.preview.lock().expect("preview lock");
             std::mem::replace(&mut *current, preview.clone())

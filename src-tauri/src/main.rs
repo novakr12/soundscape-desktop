@@ -8,6 +8,7 @@ mod queue;
 mod recap;
 mod scrobble;
 mod scrobbler;
+mod search;
 mod server;
 mod settings;
 mod submit;
@@ -235,7 +236,7 @@ fn handle_navigation(app: &AppHandle, target: &Url) -> bool {
     }
 }
 
-fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
+pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN) {
         window.navigate(start)?;
         window.show()?;
@@ -424,6 +425,7 @@ fn main() {
             tauri::async_runtime::spawn(friends::run(app.handle().clone()));
             tauri::async_runtime::spawn(recap::run(app.handle().clone()));
             tauri::async_runtime::spawn(media::run(app.handle().clone()));
+            tauri::async_runtime::spawn(search::run(app.handle().clone()));
             Ok(())
         })
         .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))

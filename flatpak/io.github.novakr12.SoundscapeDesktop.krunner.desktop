@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Soundscape
+Comment=Find artists and songs from your Soundscape history
+Icon=io.github.novakr12.SoundscapeDesktop
+Type=Service
+X-KDE-ServiceTypes=Plasma/Runner
+X-KDE-PluginInfo-Name=io.github.novakr12.SoundscapeDesktop
+X-KDE-PluginInfo-EnabledByDefault=true
+X-Plasma-API=DBus
+X-Plasma-API-Minimum-Version=2
+X-Plasma-DBusRunner-Service=io.github.novakr12.SoundscapeDesktop.SearchProvider
+X-Plasma-DBusRunner-Path=/io/github/novakr12/SoundscapeDesktop/SearchProvider

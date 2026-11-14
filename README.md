@@ -53,11 +53,25 @@ On Monday or Tuesday a notification sums up last week: plays, listening time, yo
 
 Soundscape → Friends listening, also in the tray, shows who you follow is playing right now. Click a friend to open their profile.
 
+Your artists and songs show up when you search from GNOME's Activities overview or KDE's KRunner, with their play counts. Pick one to open it in the app, or in GNOME click the app icon to open the full search. This works while the app is running, which it usually is in the background. In GNOME you can turn it off under Settings → Search.
+
 Song previews in the window work with your keyboard's media keys and your desktop's media controls (play, pause and seeking), and show up there with their cover. This needs a server new enough to describe its previews to the system.
 
 Settings (Ctrl+, or from the menu and the tray) has everything in one place: your account, scrobbling and players, plays waiting to be sent with a Send now button, notifications, starting when you log in, and keeping the app running when the window is closed.
 
 Starting when you log in opens no window; the app scrobbles in the background until you open it from your apps. Outside Flatpak this writes `~/.config/autostart/io.github.novakr12.SoundscapeDesktop.desktop`; inside Flatpak it asks your desktop for permission instead.
+
+## Search from your desktop without Flatpak
+
+The Flatpak sets search up for you. When you run the app from source, copy the two files yourself. GNOME only reads search providers from system folders and needs the app's `.desktop` file installed:
+
+```
+sudo install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.search-provider.ini /usr/local/share/gnome-shell/search-providers/io.github.novakr12.SoundscapeDesktop.search-provider.ini
+sudo install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.desktop /usr/local/share/applications/io.github.novakr12.SoundscapeDesktop.desktop
+install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.krunner.desktop ~/.local/share/krunner/dbusplugins/io.github.novakr12.SoundscapeDesktop.desktop
+```
+
+Log out and back in for GNOME to pick it up.
 
 ## Flatpak
 

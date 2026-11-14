@@ -26,7 +26,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
+use tauri::{
+    AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
+};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
@@ -492,15 +494,13 @@ fn handle_menu(app: &AppHandle, id: &str) {
 }
 
 fn handle_window_event(window: &Window, event: &WindowEvent) {
-    let WindowEvent::CloseRequested { api, .. } = event else {
+    let WindowEvent::CloseRequested { .. } = event else {
         return;
     };
     let app = window.app_handle();
     let state = app.state::<AppState>();
     let config = state.config();
-    if window.label() == MAIN && config.connected() && config.keep_running {
-        api.prevent_close();
-        let _ = window.hide();
+    if window.label() == MAIN && stays_running(&config) {
         if !config.told_about_background {
             state.update(|config| config.told_about_background = true);
             let _ = notify::show_notification(
@@ -514,6 +514,21 @@ fn handle_window_event(window: &Window, event: &WindowEvent) {
         && !config.connected()
     {
         app.exit(0);
+    }
+}
+
+pub fn stays_running(config: &config::Config) -> bool {
+    config.connected() && config.keep_running
+}
+
+fn handle_run_event(app: &AppHandle, event: RunEvent) {
+    if let RunEvent::ExitRequested {
+        code: None, api, ..
+    } = event
+    {
+        if stays_running(&app.state::<AppState>().config()) {
+            api.prevent_exit();
+        }
     }
 }
 
@@ -586,6 +601,27 @@ fn main() {
             settings::test_notification,
             settings::settings_action
         ])
-        .run(tauri::generate_context!())
-        .expect("Soundscape couldn't start");
+        .build(tauri::generate_context!())
+        .expect("Soundscape couldn't start")
+        .run(handle_run_event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_running_after_the_window_closes_only_when_connected_and_asked_to() {
+        let connected = config::Config {
+            server: Some("https://music.example.com/".into()),
+            token: Some("t".into()),
+            ..config::Config::default()
+        };
+        assert!(stays_running(&connected));
+        assert!(!stays_running(&config::Config {
+            keep_running: false,
+            ..connected.clone()
+        }));
+        assert!(!stays_running(&config::Config::default()));
+    }
 }

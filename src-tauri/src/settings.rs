@@ -35,6 +35,7 @@ pub struct SettingsView {
     pub notifications: bool,
     pub weekly_recap: bool,
     pub streak_reminder: bool,
+    pub yearscape_notification: bool,
     pub keep_running: bool,
     pub autostart: bool,
     pub flatpak: bool,
@@ -94,6 +95,7 @@ pub fn view(app: &AppHandle) -> SettingsView {
         notifications: config.notifications,
         weekly_recap: config.weekly_recap,
         streak_reminder: config.streak_reminder,
+        yearscape_notification: config.yearscape_notification,
         keep_running: config.keep_running,
         autostart: config.autostart,
         flatpak: autostart::in_flatpak(),
@@ -144,6 +146,9 @@ pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<Set
         }
         "notifications" => {
             state.update(|config| config.notifications = value);
+        }
+        "yearscape_notification" => {
+            state.update(|config| config.yearscape_notification = value);
         }
         "streak_reminder" => {
             state.update(|config| config.streak_reminder = value);

@@ -17,6 +17,7 @@ mod submit;
 mod tidy;
 mod today;
 mod tray;
+mod yearscape;
 
 use config::Config;
 use server::Navigation;
@@ -538,6 +539,7 @@ fn main() {
             tauri::async_runtime::spawn(friends::run(app.handle().clone()));
             tauri::async_runtime::spawn(love::run(app.handle().clone()));
             tauri::async_runtime::spawn(today::run(app.handle().clone()));
+            tauri::async_runtime::spawn(yearscape::run(app.handle().clone()));
             tauri::async_runtime::spawn(recap::run(app.handle().clone()));
             tauri::async_runtime::spawn(media::run(app.handle().clone()));
             tauri::async_runtime::spawn(search::run(app.handle().clone()));

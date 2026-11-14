@@ -55,6 +55,8 @@ New followers, friends passing you on the weekly leaderboard and play milestones
 
 The tray shows a line like "Today: 42 plays · 2 h 51 min · 🔥 121-day streak", updated every minute and right after a play is sent. If you haven't played anything yet today, it reminds you that the streak is waiting. Turn on "Remind me at 21:00 if my streak is about to end" in Settings for a notification in the evening, once a day; it's off by default.
 
+In December (or in January, if the app wasn't running in December) a notification tells you your Yearscape for the year is ready, with your plays, hours, most played artist and new artists. It comes once a year; turn it off in Settings.
+
 On Monday or Tuesday a notification sums up last week: plays, listening time, your most played artist and your place among friends. It comes once per week; turn it off in Settings.
 
 Soundscape → Friends listening, also in the tray, shows who you follow is playing right now. Each friend has **▶ Play this song**, which opens the song in the window and plays it (the whole song if your Navidrome has it, otherwise the preview), and **Open profile**.

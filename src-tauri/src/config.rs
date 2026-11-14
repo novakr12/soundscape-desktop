@@ -47,6 +47,10 @@ pub struct Config {
     pub streak_reminder: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_streak_reminder: Option<String>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub yearscape_notification: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_yearscape: Option<i32>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -94,6 +98,8 @@ impl Default for Config {
             paused_until: None,
             streak_reminder: false,
             last_streak_reminder: None,
+            yearscape_notification: true,
+            last_yearscape: None,
         }
     }
 }

@@ -93,8 +93,27 @@ pub async fn send_waiting(app: &AppHandle) -> Result<usize, Failure> {
     result
 }
 
+pub fn focus(
+    found: &[Player],
+    allowed: impl Fn(&str) -> bool,
+    last: Option<&str>,
+) -> Option<Player> {
+    found
+        .iter()
+        .find(|player| {
+            allowed(&player.id) && player.snapshot.playing && player.snapshot.track.is_some()
+        })
+        .or_else(|| {
+            found
+                .iter()
+                .find(|player| Some(player.id.as_str()) == last && player.snapshot.track.is_some())
+        })
+        .cloned()
+}
+
 pub async fn run(app: AppHandle) {
     let mut engine = Engine::default();
+    let mut last_focus: Option<String> = None;
     let mut connection: Option<zbus::Connection> = None;
     let mut retry_after: Option<Instant> = None;
     loop {
@@ -142,6 +161,18 @@ pub async fn run(app: AppHandle) {
             .map(|player| player.snapshot.clone())
             .collect();
         let running = config.sending(now);
+        let focused = focus(&found, allowed, last_focus.as_deref());
+        last_focus = focused.as_ref().map(|player| player.id.clone());
+        state.set_mini(focused.and_then(|player| {
+            Some(crate::mini::Source {
+                track: player.snapshot.track?,
+                bus: player.bus,
+                name: player.name,
+                art: player.art,
+                playing: player.snapshot.playing,
+                position_ms: player.snapshot.position_ms,
+            })
+        }));
         if let Some(track) = state.take_skip_request() {
             if engine.skip(&track) {
                 state.set_skipped(Some(track));
@@ -246,6 +277,8 @@ mod tests {
         Player {
             id: id.into(),
             name: id.to_uppercase(),
+            bus: format!("org.mpris.MediaPlayer2.{id}"),
+            art: None,
             snapshot: Snapshot {
                 player: id.into(),
                 playing,
@@ -258,6 +291,22 @@ mod tests {
                 position_ms: None,
             },
         }
+    }
+
+    #[test]
+    fn the_mini_player_follows_the_playing_player_and_stays_on_a_paused_one() {
+        let everyone = |_: &str| true;
+        let both = vec![player("spotify", false), player("strawberry", true)];
+        assert_eq!(focus(&both, everyone, None).unwrap().id, "strawberry");
+        let paused = vec![player("spotify", false), player("strawberry", false)];
+        assert_eq!(
+            focus(&paused, everyone, Some("strawberry")).unwrap().id,
+            "strawberry"
+        );
+        assert_eq!(focus(&paused, everyone, None), None);
+        assert_eq!(focus(&paused, everyone, Some("gone")), None);
+        let only_browsers = |id: &str| id != "firefox";
+        assert_eq!(focus(&[player("firefox", true)], only_browsers, None), None);
     }
 
     #[test]

@@ -25,6 +25,7 @@ pub const LOVE: &str = "love";
 pub const SKIP: &str = "skip-scrobble";
 pub const LOVE_TEXT: &str = "♥ Love this song";
 pub const SKIP_TEXT: &str = "Don't scrobble this one";
+pub const MINI: &str = "mini-player";
 pub const PAUSE: &str = "pause-hour";
 pub const PAUSE_TEXT: &str = "Pause scrobbling for an hour";
 pub const FIX: &str = "fix-title";
@@ -285,6 +286,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
             &friends,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "tray-open", "Open Soundscape", true, None::<&str>)?,
+            &MenuItem::with_id(app, MINI, "Mini player", true, None::<&str>)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,
             &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
         ],

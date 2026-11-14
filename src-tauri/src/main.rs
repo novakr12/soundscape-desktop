@@ -4,6 +4,7 @@ mod fixes;
 mod friends;
 mod love;
 mod media;
+mod mini;
 mod mpris;
 mod notify;
 mod queue;
@@ -43,6 +44,8 @@ pub struct AppState {
     skip_request: Mutex<Option<scrobble::Track>>,
     skipped: Mutex<Option<scrobble::Track>>,
     today: Mutex<Option<today::Today>>,
+    mini: Mutex<Option<mini::Source>>,
+    preview: Mutex<Option<media::Preview>>,
 }
 
 impl AppState {
@@ -119,6 +122,22 @@ impl AppState {
             .expect("skip lock")
             .as_ref()
             .is_some_and(|skipped| skipped.same_song(track))
+    }
+
+    pub fn mini(&self) -> Option<mini::Source> {
+        self.mini.lock().expect("mini lock").clone()
+    }
+
+    pub fn set_mini(&self, source: Option<mini::Source>) {
+        *self.mini.lock().expect("mini lock") = source;
+    }
+
+    pub fn preview(&self) -> Option<media::Preview> {
+        self.preview.lock().expect("preview lock").clone()
+    }
+
+    pub fn set_preview(&self, preview: Option<media::Preview>) {
+        *self.preview.lock().expect("preview lock") = preview;
     }
 
     pub fn today(&self) -> Option<today::Today> {
@@ -233,6 +252,7 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
             &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
+            &MenuItem::with_id(app, tray::MINI, "Mini player", true, Some("CmdOrCtrl+M"))?,
             &MenuItem::with_id(
                 app,
                 tray::CONNECT,
@@ -438,6 +458,9 @@ fn handle_menu(app: &AppHandle, id: &str) {
         tray::LOVE => {
             tauri::async_runtime::spawn(love::toggle(app.clone()));
         }
+        tray::MINI => {
+            let _ = mini::open(app);
+        }
         tray::PAUSE => {
             toggle_pause(app);
         }
@@ -526,6 +549,8 @@ fn main() {
                 skip_request: Mutex::new(None),
                 skipped: Mutex::new(None),
                 today: Mutex::new(None),
+                mini: Mutex::new(None),
+                preview: Mutex::new(None),
             });
             if let Err(error) = tray::create(app.handle(), &config) {
                 eprintln!("No tray icon: {error}");
@@ -555,6 +580,8 @@ fn main() {
             settings::set_player,
             settings::add_fix,
             settings::remove_fix,
+            mini::get_mini,
+            mini::mini_action,
             settings::send_now,
             settings::test_notification,
             settings::settings_action

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Soundscape mini player</title>
+    <link rel="stylesheet" href="style.css" />
+    <script src="mini.js" defer></script>
+  </head>
+  <body class="mini">
+    <main>
+      <div class="mini-cover" id="cover"><img id="art" alt="" hidden /></div>
+      <div class="mini-info">
+        <strong id="title">Nothing playing</strong>
+        <span id="artist" class="muted"></span>
+        <div class="mini-progress" aria-hidden="true"><div id="progress"></div></div>
+        <div class="mini-controls">
+          <button type="button" class="secondary" data-action="previous" aria-label="Previous">⏮</button>
+          <button type="button" class="secondary" data-action="toggle" id="toggle" aria-label="Play or pause">⏯</button>
+          <button type="button" class="secondary" data-action="next" aria-label="Next">⏭</button>
+          <button type="button" class="secondary" data-action="love" id="love" aria-label="Love this song">♡</button>
+        </div>
+        <small id="message" class="error" hidden></small>
+      </div>
+    </main>
+  </body>
+</html>

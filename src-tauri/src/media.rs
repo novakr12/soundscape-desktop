@@ -333,6 +333,12 @@ async fn connect(app: &AppHandle, shared: &Arc<Shared>) -> Option<Connection> {
     Some(connection)
 }
 
+pub fn control(app: &AppHandle, action: &str) {
+    if let (Some(window), Some(js)) = (app.get_webview_window(MAIN), script(action, 0.0)) {
+        let _ = window.eval(js);
+    }
+}
+
 pub async fn run(app: AppHandle) {
     let shared = Arc::new(Shared::default());
     let mut connection: Option<Connection> = None;
@@ -341,6 +347,7 @@ pub async fn run(app: AppHandle) {
         let _ = tokio::time::timeout(EVERY, shared.wake.notified()).await;
         tokio::time::sleep(Duration::from_millis(150)).await;
         let mut preview = read(&app).await;
+        app.state::<crate::AppState>().set_preview(preview.clone());
         if let (Some(_), Some(bus)) = (&preview, &connection) {
             if crate::mpris::webkit_shows_this_app(bus, BUS_NAME).await {
                 preview = None;

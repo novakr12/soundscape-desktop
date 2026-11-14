@@ -30,7 +30,16 @@ const IGNORED: &[&str] = &["playerctld", "soundscapedesktop"];
 pub struct Player {
     pub id: String,
     pub name: String,
+    pub bus: String,
+    pub art: Option<String>,
     pub snapshot: Snapshot,
+}
+
+pub async fn control(bus: &str, method: &str) -> zbus::Result<()> {
+    let connection = Connection::session().await?;
+    let player = proxy(&connection, bus, PLAYER).await?;
+    player.call_method(method, &()).await?;
+    Ok(())
 }
 
 pub fn player_id(bus_name: &str) -> Option<String> {
@@ -152,6 +161,8 @@ async fn read(connection: &Connection, name: &str, id: String) -> zbus::Result<P
         .await
         .unwrap_or_else(|_| id.clone());
     Ok(Player {
+        bus: name.to_string(),
+        art: metadata.get("mpris:artUrl").and_then(text),
         name: if identity.trim().is_empty() {
             id.clone()
         } else {

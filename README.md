@@ -63,6 +63,8 @@ Soundscape → Friends listening, also in the tray, shows who you follow is play
 
 Your artists and songs show up when you search from GNOME's Activities overview or KDE's KRunner, with their play counts. Pick one to open it in the app, or in GNOME click the app icon to open the full search. This works while the app is running, which it usually is in the background. In GNOME you can turn it off under Settings → Search.
 
+**Mini player** (Ctrl+M, or from the tray) opens a small window that stays on top of other windows: the cover, the song, a progress bar and ⏮ ⏯ ⏭ ♥. It follows whichever music player is playing (and stays on it while it's paused), and controls it the same way your media keys would. While a song plays in the Soundscape window, it shows and controls that instead. Covers that players keep as local files are read by the app, since the window can't open them itself. On GNOME with Wayland, "stay on top" depends on the desktop and may not work.
+
 Previews and full songs you play in the window work with your keyboard's media keys and your desktop's media controls (play, pause and seeking), and show up there with their cover. This needs a server new enough to describe its previews to the system.
 
 Settings (Ctrl+, or from the menu and the tray) has everything in one place: your account, scrobbling and players, plays waiting to be sent with a Send now button, notifications, starting when you log in, and keeping the app running when the window is closed.

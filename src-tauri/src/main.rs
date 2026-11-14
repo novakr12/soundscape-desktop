@@ -1,6 +1,7 @@
 mod autostart;
 mod config;
 mod friends;
+mod love;
 mod media;
 mod mpris;
 mod notify;
@@ -35,6 +36,9 @@ pub struct AppState {
     signed_out: AtomicBool,
     status: Mutex<scrobbler::Status>,
     friends: Mutex<Vec<friends::Friend>>,
+    loved: Mutex<Option<(scrobble::Track, bool)>>,
+    skip_request: Mutex<Option<scrobble::Track>>,
+    skipped: Mutex<Option<scrobble::Track>>,
 }
 
 impl AppState {
@@ -80,6 +84,37 @@ impl AppState {
         }
         *current = friends;
         true
+    }
+
+    pub fn loved_for(&self, track: &scrobble::Track) -> Option<bool> {
+        match &*self.loved.lock().expect("loved lock") {
+            Some((known, loved)) if known.same_song(track) => Some(*loved),
+            _ => None,
+        }
+    }
+
+    pub fn set_loved(&self, track: &scrobble::Track, loved: bool) {
+        *self.loved.lock().expect("loved lock") = Some((track.clone(), loved));
+    }
+
+    pub fn request_skip(&self, track: scrobble::Track) {
+        *self.skip_request.lock().expect("skip lock") = Some(track);
+    }
+
+    pub fn take_skip_request(&self) -> Option<scrobble::Track> {
+        self.skip_request.lock().expect("skip lock").take()
+    }
+
+    pub fn set_skipped(&self, track: Option<scrobble::Track>) {
+        *self.skipped.lock().expect("skip lock") = track;
+    }
+
+    pub fn was_skipped(&self, track: &scrobble::Track) -> bool {
+        self.skipped
+            .lock()
+            .expect("skip lock")
+            .as_ref()
+            .is_some_and(|skipped| skipped.same_song(track))
     }
 
     pub fn set_status(&self, status: scrobbler::Status) -> bool {
@@ -186,6 +221,8 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
                 config.scrobbling,
                 None::<&str>,
             )?,
+            &CheckMenuItem::with_id(app, tray::LOVE, tray::LOVE_TEXT, false, false, None::<&str>)?,
+            &MenuItem::with_id(app, tray::SKIP, tray::SKIP_TEXT, false, None::<&str>)?,
             &tray::players_menu(app)?,
             &tray::friends_menu(app)?,
             &CheckMenuItem::with_id(
@@ -343,6 +380,15 @@ fn handle_menu(app: &AppHandle, id: &str) {
         "keep-running" => {
             state.update(|config| config.keep_running = !config.keep_running);
         }
+        tray::LOVE => {
+            tauri::async_runtime::spawn(love::toggle(app.clone()));
+        }
+        tray::SKIP => {
+            if let Some((track, _)) = state.status().listening {
+                state.request_skip(track);
+            }
+            tray::refresh(app);
+        }
         "quit" => app.exit(0),
         other => {
             if let Some(user) = other.strip_prefix("friend:") {
@@ -412,6 +458,9 @@ fn main() {
                 signed_out: AtomicBool::new(false),
                 status: Mutex::new(scrobbler::Status::default()),
                 friends: Mutex::new(Vec::new()),
+                loved: Mutex::new(None),
+                skip_request: Mutex::new(None),
+                skipped: Mutex::new(None),
             });
             if let Err(error) = tray::create(app.handle(), &config) {
                 eprintln!("No tray icon: {error}");
@@ -423,6 +472,7 @@ fn main() {
             tauri::async_runtime::spawn(scrobbler::run(app.handle().clone()));
             tauri::async_runtime::spawn(notify::run(app.handle().clone()));
             tauri::async_runtime::spawn(friends::run(app.handle().clone()));
+            tauri::async_runtime::spawn(love::run(app.handle().clone()));
             tauri::async_runtime::spawn(recap::run(app.handle().clone()));
             tauri::async_runtime::spawn(media::run(app.handle().clone()));
             tauri::async_runtime::spawn(search::run(app.handle().clone()));

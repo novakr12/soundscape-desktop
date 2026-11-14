@@ -17,7 +17,7 @@ pub struct Track {
 }
 
 impl Track {
-    fn same_song(&self, other: &Track) -> bool {
+    pub fn same_song(&self, other: &Track) -> bool {
         self.artist == other.artist && self.title == other.title && self.album == other.album
     }
 
@@ -79,6 +79,23 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub fn skip(&mut self, track: &Track) -> bool {
+        let mut skipped = false;
+        for state in self.players.values_mut() {
+            if !state.scrobbled && state.track.as_ref().is_some_and(|t| t.same_song(track)) {
+                state.scrobbled = true;
+                skipped = true;
+            }
+        }
+        skipped
+    }
+
+    pub fn counted(&self, track: &Track) -> bool {
+        self.players.values().any(|state| {
+            state.scrobbled && state.track.as_ref().is_some_and(|t| t.same_song(track))
+        })
+    }
+
     pub fn update(&mut self, now_ms: i64, snapshots: &[Snapshot]) -> Vec<Event> {
         self.players
             .retain(|player, _| snapshots.iter().any(|snapshot| &snapshot.player == player));
@@ -187,6 +204,28 @@ mod tests {
             t += step_s;
         }
         events
+    }
+
+    #[test]
+    fn a_skipped_song_is_never_scrobbled_but_counts_again_when_replayed() {
+        let mut engine = Engine::default();
+        let track = song("Skip me", Some(200));
+        engine.update(0, &snap(Some(track.clone()), true, Some(0)));
+        assert!(!engine.counted(&track));
+        assert!(engine.skip(&track));
+        assert!(engine.counted(&track));
+        assert!(!engine.skip(&track));
+        let mut events = Vec::new();
+        for second in 1..=150 {
+            events.extend(engine.update(
+                second * 1000,
+                &snap(Some(track.clone()), true, Some(second as u64)),
+            ));
+        }
+        assert!(scrobbles(&events).is_empty());
+        engine.update(151_000, &snap(Some(track.clone()), true, Some(1)));
+        assert!(!engine.counted(&track));
+        assert!(!engine.skip(&song("Something else", Some(200))));
     }
 
     #[test]

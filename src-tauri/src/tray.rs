@@ -13,10 +13,61 @@ pub struct Tray {
     scrobbling: CheckMenuItem<Wry>,
     players: Submenu<Wry>,
     friends: Submenu<Wry>,
+    love: CheckMenuItem<Wry>,
+    skip: MenuItem<Wry>,
 }
 
 pub const PLAYERS_MENU: &str = "players-menu";
 pub const FRIENDS_MENU: &str = "friends-menu";
+pub const LOVE: &str = "love";
+pub const SKIP: &str = "skip-scrobble";
+pub const LOVE_TEXT: &str = "♥ Love this song";
+pub const SKIP_TEXT: &str = "Don't scrobble this one";
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct SongActions {
+    pub love_text: &'static str,
+    pub loved: bool,
+    pub can_love: bool,
+    pub skip_text: &'static str,
+    pub can_skip: bool,
+}
+
+pub fn song_actions(status: &Status, loved: Option<bool>, skipped: bool) -> SongActions {
+    let playing = status.listening.is_some() && status.connected && !status.signed_out;
+    let loved = playing && loved == Some(true);
+    let (skip_text, can_skip) = match (playing, status.counted, skipped) {
+        (false, _, _) => (SKIP_TEXT, false),
+        (true, true, true) => ("Won't be scrobbled", false),
+        (true, true, false) => ("Already scrobbled", false),
+        (true, false, _) => (SKIP_TEXT, true),
+    };
+    SongActions {
+        love_text: if loved { "♥ Loved" } else { LOVE_TEXT },
+        loved,
+        can_love: playing,
+        skip_text,
+        can_skip,
+    }
+}
+
+fn current_actions(app: &AppHandle, status: &Status) -> SongActions {
+    let state = app.state::<crate::AppState>();
+    let track = status.listening.as_ref().map(|(track, _)| track);
+    song_actions(
+        status,
+        track.and_then(|track| state.loved_for(track)),
+        track.is_some_and(|track| state.was_skipped(track)),
+    )
+}
+
+fn show_actions(love: &CheckMenuItem<Wry>, skip: &MenuItem<Wry>, actions: &SongActions) {
+    let _ = love.set_text(actions.love_text);
+    let _ = love.set_checked(actions.loved);
+    let _ = love.set_enabled(actions.can_love);
+    let _ = skip.set_text(actions.skip_text);
+    let _ = skip.set_enabled(actions.can_skip);
+}
 pub const SCROBBLING: &str = "tray-scrobbling";
 pub const CONNECT: &str = "connect-app";
 
@@ -163,10 +214,14 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     )?;
     let players = players_menu(app)?;
     let friends = friends_menu(app)?;
+    let love = CheckMenuItem::with_id(app, LOVE, LOVE_TEXT, false, false, None::<&str>)?;
+    let skip = MenuItem::with_id(app, SKIP, SKIP_TEXT, false, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
             &listening,
+            &love,
+            &skip,
             &status,
             &connect,
             &PredefinedMenuItem::separator(app)?,
@@ -197,6 +252,8 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
         scrobbling,
         players,
         friends,
+        love,
+        skip,
     });
     Ok(())
 }
@@ -215,6 +272,7 @@ pub fn refresh(app: &AppHandle) {
             .set_enabled(!config.connected() || status.signed_out);
         fill_players(app, &tray.players, &status.players);
         fill_friends(app, &tray.friends, &friends);
+        show_actions(&tray.love, &tray.skip, &current_actions(app, &status));
     }
     if let Some(icon) = app.tray_by_id("soundscape") {
         let tooltip = match &status.listening {
@@ -250,6 +308,16 @@ pub fn refresh(app: &AppHandle) {
         {
             fill_players(app, &players, &status.players);
         }
+        if let (Some(love), Some(skip)) = (
+            submenu
+                .get(LOVE)
+                .and_then(|item| item.as_check_menuitem().cloned()),
+            submenu
+                .get(SKIP)
+                .and_then(|item| item.as_menuitem().cloned()),
+        ) {
+            show_actions(&love, &skip, &current_actions(app, &status));
+        }
         if let Some(menu) = submenu
             .get(FRIENDS_MENU)
             .and_then(|item| item.as_submenu().cloned())
@@ -271,6 +339,47 @@ mod tests {
             token: Some("t".into()),
             ..Config::default()
         }
+    }
+
+    #[test]
+    fn offers_love_and_skip_only_while_a_song_plays() {
+        let mut status = Status {
+            connected: true,
+            ..Status::default()
+        };
+        let idle = song_actions(&status, None, false);
+        assert!(!idle.can_love && !idle.can_skip);
+        status.listening = Some((
+            Track {
+                artist: "Air".into(),
+                title: "Alone in Kyoto".into(),
+                album: None,
+                length_ms: None,
+            },
+            "Strawberry".into(),
+        ));
+        let fresh = song_actions(&status, None, false);
+        assert_eq!(
+            (fresh.love_text, fresh.loved, fresh.can_love),
+            (LOVE_TEXT, false, true)
+        );
+        assert_eq!((fresh.skip_text, fresh.can_skip), (SKIP_TEXT, true));
+        assert_eq!(
+            song_actions(&status, Some(true), false).love_text,
+            "♥ Loved"
+        );
+        status.counted = true;
+        assert_eq!(
+            song_actions(&status, None, true).skip_text,
+            "Won't be scrobbled"
+        );
+        assert_eq!(
+            song_actions(&status, None, false).skip_text,
+            "Already scrobbled"
+        );
+        assert!(!song_actions(&status, None, false).can_skip);
+        status.signed_out = true;
+        assert!(!song_actions(&status, Some(true), false).can_love);
     }
 
     #[test]

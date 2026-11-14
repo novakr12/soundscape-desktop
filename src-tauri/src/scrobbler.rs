@@ -23,6 +23,7 @@ pub struct Status {
     pub scrobbling: bool,
     pub connected: bool,
     pub listening: Option<(Track, String)>,
+    pub counted: bool,
     pub players: Vec<PlayerChoice>,
     pub waiting: usize,
     pub signed_out: bool,
@@ -120,6 +121,11 @@ pub async fn run(app: AppHandle) {
             .map(|player| player.snapshot.clone())
             .collect();
         let running = config.scrobbling && config.connected();
+        if let Some(track) = state.take_skip_request() {
+            if engine.skip(&track) {
+                state.set_skipped(Some(track));
+            }
+        }
         let events = engine.update(now_ms(), if running { &active } else { &[] });
         let server = config
             .server
@@ -172,15 +178,19 @@ pub async fn run(app: AppHandle) {
             }
         }
         let signed_out = state.signed_out();
+        let now_listening = if running {
+            listening(&found, allowed)
+        } else {
+            None
+        };
 
         let status = Status {
             scrobbling: config.scrobbling,
             connected: config.connected(),
-            listening: if running {
-                listening(&found, allowed)
-            } else {
-                None
-            },
+            counted: now_listening
+                .as_ref()
+                .is_some_and(|(track, _)| engine.counted(track)),
+            listening: now_listening,
             players: found
                 .iter()
                 .map(|p| PlayerChoice {

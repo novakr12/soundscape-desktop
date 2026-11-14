@@ -17,6 +17,29 @@ pub struct Today {
     pub played_today: bool,
 }
 
+pub const REMINDER_HOUR: i32 = 21;
+
+pub fn remind(today: &Today, hour: i32, date: &str, enabled: bool, last: Option<&str>) -> bool {
+    enabled
+        && today.streak > 0
+        && !today.played_today
+        && hour >= REMINDER_HOUR
+        && last != Some(date)
+}
+
+pub fn reminder(today: &Today) -> (String, String) {
+    (
+        format!("Your {}-day streak ends at midnight", today.streak),
+        "Play something today to keep it going.".into(),
+    )
+}
+
+fn local_now() -> Option<(i32, String)> {
+    let now = webkit2gtk::glib::DateTime::now_local().ok()?;
+    let (year, month, day) = now.ymd();
+    Some((now.hour(), format!("{year:04}-{month:02}-{day:02}")))
+}
+
 fn listening_time(ms: u64) -> String {
     let minutes = (ms + 30_000) / 60_000;
     match (minutes / 60, minutes % 60) {
@@ -83,6 +106,21 @@ pub async fn check(app: &AppHandle) {
         },
         _ => None,
     };
+    if let (Some(today), Some((hour, date))) = (today, local_now()) {
+        let config = state.config();
+        if remind(
+            &today,
+            hour,
+            &date,
+            config.streak_reminder,
+            config.last_streak_reminder.as_deref(),
+        ) {
+            let (title, body) = reminder(&today);
+            if crate::notify::show_notification(app, &title, &body).is_ok() {
+                state.update(|config| config.last_streak_reminder = Some(date));
+            }
+        }
+    }
     if state.set_today(today) {
         crate::tray::refresh(app);
     }
@@ -139,6 +177,35 @@ mod tests {
             played_today: false,
         };
         assert_eq!(text(&fresh), "Today: no plays yet");
+    }
+
+    #[test]
+    fn reminds_once_an_evening_when_the_streak_is_about_to_end() {
+        let quiet = Today {
+            plays: 0,
+            listening_ms: 0,
+            streak: 121,
+            played_today: false,
+        };
+        let date = "2026-11-14";
+        assert!(remind(&quiet, 21, date, true, None));
+        assert!(remind(&quiet, 23, date, true, Some("2026-11-13")));
+        assert!(!remind(&quiet, 20, date, true, None));
+        assert!(!remind(&quiet, 22, date, true, Some(date)));
+        assert!(!remind(&quiet, 22, date, false, None));
+        assert!(!remind(
+            &Today {
+                played_today: true,
+                plays: 3,
+                ..quiet
+            },
+            22,
+            date,
+            true,
+            None
+        ));
+        assert!(!remind(&Today { streak: 0, ..quiet }, 22, date, true, None));
+        assert_eq!(reminder(&quiet).0, "Your 121-day streak ends at midnight");
     }
 
     #[test]

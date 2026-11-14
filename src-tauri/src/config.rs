@@ -43,6 +43,14 @@ pub struct Config {
     pub fixes: Vec<crate::fixes::Fix>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_until: Option<i64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub streak_reminder: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_streak_reminder: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 pub const PAUSE_SECONDS: i64 = 60 * 60;
@@ -84,6 +92,8 @@ impl Default for Config {
             players: BTreeMap::new(),
             fixes: Vec::new(),
             paused_until: None,
+            streak_reminder: false,
+            last_streak_reminder: None,
         }
     }
 }

@@ -53,7 +53,7 @@ The app picks up what Linux music players are playing through MPRIS, the standar
 
 New followers, friends passing you on the weekly leaderboard and play milestones show up as desktop notifications. The app checks about once a minute. The first check after you connect only notes what's already there, so you don't get a burst of old ones.
 
-The tray shows a line like "Today: 42 plays · 2 h 51 min · 🔥 121-day streak", updated every minute and right after a play is sent. If you haven't played anything yet today, it reminds you that the streak is waiting.
+The tray shows a line like "Today: 42 plays · 2 h 51 min · 🔥 121-day streak", updated every minute and right after a play is sent. If you haven't played anything yet today, it reminds you that the streak is waiting. Turn on "Remind me at 21:00 if my streak is about to end" in Settings for a notification in the evening, once a day; it's off by default.
 
 On Monday or Tuesday a notification sums up last week: plays, listening time, your most played artist and your place among friends. It comes once per week; turn it off in Settings.
 

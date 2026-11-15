@@ -52,23 +52,10 @@ pub fn listens_body(listens: &[Listen]) -> Value {
 }
 
 async fn post(server: &Url, token: &str, body: &Value) -> Result<(), Failure> {
-    let address = server
-        .join("/1/submit-listens")
-        .map_err(|_| Failure::Refused(0))?;
-    let response = crate::server::client()
-        .post(address)
-        .header("authorization", format!("Token {token}"))
-        .json(body)
-        .send()
-        .await
-        .map_err(|_| Failure::Offline)?;
-    let status = response.status().as_u16();
-    match status {
-        200..=299 => Ok(()),
-        401 | 403 => Err(Failure::SignedOut),
-        408 | 429 | 500..=599 => Err(Failure::Offline),
-        _ => Err(Failure::Refused(status)),
-    }
+    let request = crate::server::client()
+        .post(crate::server::address(server, "/1/submit-listens")?)
+        .json(body);
+    crate::server::answer(request, token).await.map(|_| ())
 }
 
 pub async fn now_playing(

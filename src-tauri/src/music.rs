@@ -44,44 +44,20 @@ pub fn playlist_page(server: &Url, id: &str) -> Option<Url> {
 }
 
 pub async fn fetch(server: &Url, token: &str) -> Result<Vec<Playlist>, Failure> {
-    let address = server
-        .join("/api/music/playlists")
-        .map_err(|_| Failure::Refused(0))?;
-    let response = crate::server::client()
-        .get(address)
-        .header("authorization", format!("Token {token}"))
-        .send()
+    crate::server::get_json::<Answer>(server, token, "/api/music/playlists", &[])
         .await
-        .map_err(|_| Failure::Offline)?;
-    match response.status().as_u16() {
-        200..=299 => response
-            .json::<Answer>()
-            .await
-            .map(|answer| answer.playlists.into_iter().take(MOST).collect())
-            .map_err(|_| Failure::Refused(200)),
-        401 | 403 => Err(Failure::SignedOut),
-        404 => Err(Failure::Refused(404)),
-        _ => Err(Failure::Offline),
-    }
+        .map(|answer| answer.playlists.into_iter().take(MOST).collect())
 }
 
 pub async fn run(app: AppHandle) {
-    tokio::time::sleep(FIRST).await;
-    loop {
-        check(&app).await;
-        tokio::time::sleep(EVERY).await;
-    }
+    crate::server::poll(app, FIRST, EVERY, |app| async move { check(&app).await }).await;
 }
 
 pub async fn check(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let config = state.config();
-    let found = match (
-        config.server.as_deref().and_then(|s| Url::parse(s).ok()),
-        config.token.clone(),
-    ) {
-        (Some(server), Some(token)) if !state.signed_out() => fetch(&server, &token).await,
-        _ => Ok(Vec::new()),
+    let found = match crate::server::credentials(app) {
+        Some((server, token)) => fetch(&server, &token).await,
+        None => Ok(Vec::new()),
     };
     let playlists = match found {
         Ok(playlists) => playlists,

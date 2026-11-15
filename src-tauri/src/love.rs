@@ -13,52 +13,21 @@ struct Answer {
     loved: bool,
 }
 
-fn credentials(app: &AppHandle) -> Option<(Url, String)> {
-    let state = app.state::<AppState>();
-    if state.signed_out() {
-        return None;
-    }
-    let config = state.config();
-    Some((Url::parse(config.server.as_deref()?).ok()?, config.token?))
-}
-
 async fn fetch(server: &Url, token: &str, track: &Track) -> Result<bool, Failure> {
-    let mut address = server.join("/api/love").map_err(|_| Failure::Refused(0))?;
-    address
-        .query_pairs_mut()
-        .append_pair("artist", &track.artist)
-        .append_pair("title", &track.title);
-    let response = crate::server::client()
-        .get(address)
-        .header("authorization", format!("Token {token}"))
-        .send()
+    let query = [
+        ("artist", track.artist.as_str()),
+        ("title", track.title.as_str()),
+    ];
+    crate::server::get_json::<Answer>(server, token, "/api/love", &query)
         .await
-        .map_err(|_| Failure::Offline)?;
-    match response.status().as_u16() {
-        200..=299 => response
-            .json::<Answer>()
-            .await
-            .map(|answer| answer.loved)
-            .map_err(|_| Failure::Refused(200)),
-        401 | 403 => Err(Failure::SignedOut),
-        status => Err(Failure::Refused(status)),
-    }
+        .map(|answer| answer.loved)
 }
 
 async fn send(server: &Url, token: &str, track: &Track, loved: bool) -> Result<(), Failure> {
-    let address = server.join("/api/love").map_err(|_| Failure::Refused(0))?;
-    let response = crate::server::client()
-        .post(address)
-        .header("authorization", format!("Token {token}"))
-        .json(&serde_json::json!({ "artist": track.artist, "title": track.title, "loved": loved }))
-        .send()
-        .await
-        .map_err(|_| Failure::Offline)?;
-    match response.status().as_u16() {
-        200..=299 => Ok(()),
-        401 | 403 => Err(Failure::SignedOut),
-        status => Err(Failure::Refused(status)),
-    }
+    let request = crate::server::client()
+        .post(crate::server::address(server, "/api/love")?)
+        .json(&serde_json::json!({ "artist": track.artist, "title": track.title, "loved": loved }));
+    crate::server::answer(request, token).await.map(|_| ())
 }
 
 pub async fn run(app: AppHandle) {
@@ -71,7 +40,7 @@ pub async fn run(app: AppHandle) {
         if state.loved_for(&track).is_some() {
             continue;
         }
-        let Some((server, token)) = credentials(&app) else {
+        let Some((server, token)) = crate::server::credentials(&app) else {
             continue;
         };
         let loved = match fetch(&server, &token, &track).await {
@@ -89,7 +58,7 @@ pub async fn toggle(app: AppHandle) {
     let Some((track, _)) = state.status().listening else {
         return;
     };
-    let Some((server, token)) = credentials(&app) else {
+    let Some((server, token)) = crate::server::credentials(&app) else {
         return;
     };
     let before = state.loved_for(&track).unwrap_or(false);

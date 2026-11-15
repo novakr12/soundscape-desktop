@@ -67,44 +67,22 @@ pub fn due(show: bool, recap: Option<&Recap>, last: Option<&str>) -> bool {
 }
 
 async fn fetch(server: &Url, token: &str) -> Result<(bool, Option<Recap>), Failure> {
-    let address = server
-        .join("/api/recap/week")
-        .map_err(|_| Failure::Refused(0))?;
-    let response = crate::server::client()
-        .get(address)
-        .header("authorization", format!("Token {token}"))
-        .send()
+    crate::server::get_json::<Answer>(server, token, "/api/recap/week", &[])
         .await
-        .map_err(|_| Failure::Offline)?;
-    match response.status().as_u16() {
-        200..=299 => response
-            .json::<Answer>()
-            .await
-            .map(|answer| (answer.show, answer.recap))
-            .map_err(|_| Failure::Refused(200)),
-        401 | 403 => Err(Failure::SignedOut),
-        status => Err(Failure::Refused(status)),
-    }
+        .map(|answer| (answer.show, answer.recap))
 }
 
 pub async fn run(app: AppHandle) {
-    tokio::time::sleep(FIRST).await;
-    loop {
-        check(&app).await;
-        tokio::time::sleep(EVERY).await;
-    }
+    crate::server::poll(app, FIRST, EVERY, |app| async move { check(&app).await }).await;
 }
 
 pub async fn check(app: &AppHandle) {
     let state = app.state::<AppState>();
     let config = state.config();
-    let (Some(server), Some(token)) = (
-        config.server.as_deref().and_then(|s| Url::parse(s).ok()),
-        config.token.clone(),
-    ) else {
+    let Some((server, token)) = crate::server::credentials(app) else {
         return;
     };
-    if !config.weekly_recap || state.signed_out() {
+    if !config.weekly_recap {
         return;
     }
     let Ok((show, recap)) = fetch(&server, &token).await else {

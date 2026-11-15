@@ -66,31 +66,11 @@ pub fn notification(answer: &Ready) -> (String, String) {
 }
 
 async fn fetch(server: &Url, token: &str) -> Result<Ready, Failure> {
-    let address = server
-        .join("/api/yearscape")
-        .map_err(|_| Failure::Refused(0))?;
-    let response = crate::server::client()
-        .get(address)
-        .header("authorization", format!("Token {token}"))
-        .send()
-        .await
-        .map_err(|_| Failure::Offline)?;
-    match response.status().as_u16() {
-        200..=299 => response
-            .json::<Ready>()
-            .await
-            .map_err(|_| Failure::Refused(200)),
-        401 | 403 => Err(Failure::SignedOut),
-        status => Err(Failure::Refused(status)),
-    }
+    crate::server::get_json(server, token, "/api/yearscape", &[]).await
 }
 
 pub async fn run(app: AppHandle) {
-    tokio::time::sleep(FIRST).await;
-    loop {
-        check(&app).await;
-        tokio::time::sleep(EVERY).await;
-    }
+    crate::server::poll(app, FIRST, EVERY, |app| async move { check(&app).await }).await;
 }
 
 pub async fn check(app: &AppHandle) {

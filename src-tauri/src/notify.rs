@@ -56,30 +56,14 @@ pub fn summary(items: &[Item]) -> Vec<(String, String)> {
 }
 
 pub async fn fetch(server: &Url, token: &str, after: Option<i64>) -> Result<Vec<Item>, Failure> {
-    let mut address = server
-        .join("/api/notifications")
-        .map_err(|_| Failure::Refused(0))?;
-    if let Some(after) = after {
-        address
-            .query_pairs_mut()
-            .append_pair("after", &after.to_string());
-    }
-    let response = crate::server::client()
-        .get(address)
-        .header("authorization", format!("Token {token}"))
-        .send()
+    let after = after.map(|after| after.to_string());
+    let query: Vec<(&str, &str)> = after
+        .iter()
+        .map(|after| ("after", after.as_str()))
+        .collect();
+    crate::server::get_json::<Answer>(server, token, "/api/notifications", &query)
         .await
-        .map_err(|_| Failure::Offline)?;
-    match response.status().as_u16() {
-        200..=299 => response
-            .json::<Answer>()
-            .await
-            .map(|answer| answer.notifications)
-            .map_err(|_| Failure::Refused(200)),
-        401 | 403 => Err(Failure::SignedOut),
-        404 => Err(Failure::Refused(404)),
-        _ => Err(Failure::Offline),
-    }
+        .map(|answer| answer.notifications)
 }
 
 pub fn show_notification(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
@@ -95,23 +79,16 @@ pub fn show_notification(app: &AppHandle, title: &str, body: &str) -> Result<(),
 }
 
 pub async fn run(app: AppHandle) {
-    tokio::time::sleep(FIRST).await;
-    loop {
-        check(&app).await;
-        tokio::time::sleep(EVERY).await;
-    }
+    crate::server::poll(app, FIRST, EVERY, |app| async move { check(&app).await }).await;
 }
 
 pub async fn check(app: &AppHandle) {
     let state = app.state::<AppState>();
     let config = state.config();
-    let (Some(server), Some(token)) = (
-        config.server.as_deref().and_then(|s| Url::parse(s).ok()),
-        config.token.clone(),
-    ) else {
+    let Some((server, token)) = crate::server::credentials(app) else {
         return;
     };
-    if !config.notifications || state.signed_out() {
+    if !config.notifications {
         return;
     }
     match fetch(&server, &token, config.last_notification).await {

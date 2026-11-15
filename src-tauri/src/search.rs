@@ -89,25 +89,9 @@ pub fn page(server: &Url, path: &str) -> Option<Url> {
 }
 
 async fn fetch(server: &Url, token: &str, text: &str) -> Result<Vec<Hit>, Failure> {
-    let mut address = server
-        .join("/api/search")
-        .map_err(|_| Failure::Refused(0))?;
-    address.query_pairs_mut().append_pair("q", text);
-    let response = crate::server::client()
-        .get(address)
-        .header("authorization", format!("Token {token}"))
-        .send()
+    crate::server::get_json::<Answer>(server, token, "/api/search", &[("q", text)])
         .await
-        .map_err(|_| Failure::Offline)?;
-    match response.status().as_u16() {
-        200..=299 => response
-            .json::<Answer>()
-            .await
-            .map(hits)
-            .map_err(|_| Failure::Refused(200)),
-        401 | 403 => Err(Failure::SignedOut),
-        status => Err(Failure::Refused(status)),
-    }
+        .map(hits)
 }
 
 #[derive(Clone)]
@@ -121,17 +105,9 @@ impl Search {
         let Some(text) = query(terms) else {
             return Vec::new();
         };
-        let state = self.app.state::<AppState>();
-        let config = state.config();
-        let (Some(server), Some(token)) = (
-            config.server.as_deref().and_then(|s| Url::parse(s).ok()),
-            config.token.clone(),
-        ) else {
+        let Some((server, token)) = crate::server::credentials(&self.app) else {
             return Vec::new();
         };
-        if state.signed_out() {
-            return Vec::new();
-        }
         let found = tauri::async_runtime::spawn(async move { fetch(&server, &token, &text).await })
             .await
             .ok()

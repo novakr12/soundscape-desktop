@@ -1,5 +1,11 @@
+use crate::submit::Failure;
+use crate::AppState;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use std::future::Future;
+use std::sync::OnceLock;
 use std::time::Duration;
+use tauri::{AppHandle, Manager};
 use url::Url;
 
 pub const APP_SCHEME: &str = "soundscape-desktop";
@@ -34,11 +40,83 @@ pub fn normalize_address(input: &str) -> Result<Url, String> {
 }
 
 pub fn client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(TIMEOUT)
-        .user_agent(concat!("SoundscapeDesktop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .expect("HTTP client")
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(TIMEOUT)
+                .user_agent(concat!("SoundscapeDesktop/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("HTTP client")
+        })
+        .clone()
+}
+
+pub fn failure_for(status: u16) -> Failure {
+    match status {
+        401 | 403 => Failure::SignedOut,
+        408 | 429 | 500..=599 => Failure::Offline,
+        _ => Failure::Refused(status),
+    }
+}
+
+pub fn credentials(app: &AppHandle) -> Option<(Url, String)> {
+    let state = app.state::<AppState>();
+    if state.signed_out() {
+        return None;
+    }
+    let config = state.config();
+    Some((Url::parse(config.server.as_deref()?).ok()?, config.token?))
+}
+
+pub fn address(server: &Url, path: &str) -> Result<Url, Failure> {
+    server.join(path).map_err(|_| Failure::Refused(0))
+}
+
+pub async fn answer(
+    request: reqwest::RequestBuilder,
+    token: &str,
+) -> Result<reqwest::Response, Failure> {
+    let response = request
+        .header("authorization", format!("Token {token}"))
+        .send()
+        .await
+        .map_err(|_| Failure::Offline)?;
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        Ok(response)
+    } else {
+        Err(failure_for(status))
+    }
+}
+
+pub async fn get_json<T: DeserializeOwned>(
+    server: &Url,
+    token: &str,
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<T, Failure> {
+    let mut target = address(server, path)?;
+    if !query.is_empty() {
+        target.query_pairs_mut().extend_pairs(query);
+    }
+    answer(client().get(target), token)
+        .await?
+        .json::<T>()
+        .await
+        .map_err(|_| Failure::Refused(200))
+}
+
+pub async fn poll<F, Fut>(app: AppHandle, first: Duration, every: Duration, check: F)
+where
+    F: Fn(AppHandle) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    tokio::time::sleep(first).await;
+    loop {
+        check(app.clone()).await;
+        tokio::time::sleep(every).await;
+    }
 }
 
 pub async fn check_server(server: &Url) -> Result<(), String> {
@@ -288,6 +366,44 @@ mod tests {
             }
         });
         url(&format!("http://127.0.0.1:{port}/"))
+    }
+
+    #[test]
+    fn sorts_answers_into_signed_out_try_later_and_refused() {
+        assert!(matches!(failure_for(401), Failure::SignedOut));
+        assert!(matches!(failure_for(403), Failure::SignedOut));
+        assert!(matches!(failure_for(429), Failure::Offline));
+        assert!(matches!(failure_for(503), Failure::Offline));
+        assert!(matches!(failure_for(404), Failure::Refused(404)));
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct Echo {
+        ok: bool,
+    }
+
+    #[test]
+    fn reads_json_from_the_server_with_the_token() {
+        let good = serve_once(r#"{"ok":true}"#, "200 OK");
+        let answer: Echo =
+            tauri::async_runtime::block_on(get_json(&good, "t", "/api/x", &[("q", "a b")]))
+                .unwrap();
+        assert!(answer.ok);
+        let gone = serve_once("{}", "401 Unauthorized");
+        assert!(matches!(
+            tauri::async_runtime::block_on(get_json::<Echo>(&gone, "t", "/api/x", &[])),
+            Err(Failure::SignedOut)
+        ));
+        let busy = serve_once("{}", "503 Service Unavailable");
+        assert!(matches!(
+            tauri::async_runtime::block_on(get_json::<Echo>(&busy, "t", "/api/x", &[])),
+            Err(Failure::Offline)
+        ));
+        let odd = serve_once("not json", "200 OK");
+        assert!(matches!(
+            tauri::async_runtime::block_on(get_json::<Echo>(&odd, "t", "/api/x", &[])),
+            Err(Failure::Refused(200))
+        ));
     }
 
     #[test]

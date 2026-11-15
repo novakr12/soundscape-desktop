@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.6.3" date="2026-11-15">
+      <description>
+        <p>Music that keeps playing.</p>
+        <ul>
+          <li>Closing the window while a song plays no longer stops it: the window hides, the music keeps going, and the mini player, media keys and tray still control it</li>
+          <li>Once nothing has played for 5 minutes, the hidden page is closed to free memory, as before</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.2" date="2026-11-15">
       <description>
         <p>Buttons to find your way.</p>

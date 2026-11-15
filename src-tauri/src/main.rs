@@ -392,13 +392,17 @@ pub fn sign_out(app: &AppHandle) {
 }
 
 fn handle_window_event(window: &Window, event: &WindowEvent) {
-    let WindowEvent::CloseRequested { .. } = event else {
+    let WindowEvent::CloseRequested { api, .. } = event else {
         return;
     };
     let app = window.app_handle();
     let state = app.state::<AppState>();
     let config = state.config();
     if window.label() == MAIN && stays_running(&config) {
+        if state.preview().is_some() {
+            api.prevent_close();
+            let _ = window.hide();
+        }
         if !config.told_about_background {
             state.update(|config| config.told_about_background = true);
             let _ = notify::show_notification(

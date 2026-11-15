@@ -13,6 +13,33 @@ pub const BUS_NAME: &str = "org.mpris.MediaPlayer2.SoundscapeDesktop";
 const PATH: &str = "/org/mpris/MediaPlayer2";
 const TRACK: &str = "/io/github/novakr12/SoundscapeDesktop/Preview";
 const EVERY: Duration = Duration::from_millis(1000);
+const UNLOAD_HIDDEN_AFTER: Duration = Duration::from_secs(5 * 60);
+
+pub fn should_unload(hidden: bool, playing: bool, quiet_for: Duration) -> bool {
+    hidden && !playing && quiet_for >= UNLOAD_HIDDEN_AFTER
+}
+
+fn unload_when_quiet(
+    app: &AppHandle,
+    preview: Option<&Preview>,
+    quiet_since: &mut Option<std::time::Instant>,
+) {
+    let Some(window) = app.get_webview_window(MAIN) else {
+        *quiet_since = None;
+        return;
+    };
+    let hidden = !window.is_visible().unwrap_or(true);
+    let playing = preview.is_some_and(|preview| preview.playing);
+    if !hidden || playing {
+        *quiet_since = None;
+        return;
+    }
+    let since = *quiet_since.get_or_insert_with(std::time::Instant::now);
+    if should_unload(hidden, playing, since.elapsed()) {
+        *quiet_since = None;
+        let _ = window.destroy();
+    }
+}
 
 const READ: &str = r#"(() => {
   const audio = document.querySelector(".player audio") ?? document.querySelector("audio");
@@ -404,11 +431,13 @@ pub async fn run(app: AppHandle) {
     let shared = Arc::new(Shared::default());
     let mut connection: Option<Connection> = None;
     let mut named = false;
+    let mut quiet_since = None;
     loop {
         let _ = tokio::time::timeout(EVERY, shared.wake.notified()).await;
         tokio::time::sleep(Duration::from_millis(150)).await;
         let mut preview = read(&app).await;
         app.state::<crate::AppState>().set_preview(preview.clone());
+        unload_when_quiet(&app, preview.as_ref(), &mut quiet_since);
         if let (Some(_), Some(bus)) = (&preview, &connection) {
             if crate::mpris::webkit_shows_this_app(bus, BUS_NAME).await {
                 preview = None;
@@ -439,6 +468,15 @@ pub async fn run(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unloads_a_hidden_window_only_after_five_quiet_minutes() {
+        let five = Duration::from_secs(300);
+        assert!(should_unload(true, false, five));
+        assert!(!should_unload(true, false, five - Duration::from_secs(1)));
+        assert!(!should_unload(true, true, five * 2));
+        assert!(!should_unload(false, false, five * 2));
+    }
 
     #[test]
     fn reads_what_the_page_reports() {

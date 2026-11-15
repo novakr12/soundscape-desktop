@@ -7,6 +7,7 @@ use tauri::{AppHandle, Manager, Wry};
 const LONGEST: usize = 60;
 
 pub struct Tray {
+    menu: Menu<Wry>,
     listening: MenuItem<Wry>,
     today: MenuItem<Wry>,
     status: MenuItem<Wry>,
@@ -33,6 +34,7 @@ pub const PAUSE: &str = "pause-hour";
 pub const PAUSE_TEXT: &str = "Pause scrobbling for an hour";
 pub const FIX: &str = "fix-title";
 pub const FIX_TEXT: &str = "Fix this title…";
+pub const UPDATE: &str = "update-available";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SongActions {
@@ -277,6 +279,32 @@ fn fill_players(app: &AppHandle, menu: &Submenu<Wry>, players: &[PlayerChoice]) 
     }
 }
 
+fn show_update(app: &AppHandle, menu: &Menu<Wry>, version: Option<&str>) {
+    let shown = menu
+        .get(UPDATE)
+        .and_then(|item| item.as_menuitem().cloned());
+    match (shown, version) {
+        (Some(item), Some(version)) => {
+            let _ = item.set_text(crate::updates::menu_text(version));
+        }
+        (Some(item), None) => {
+            let _ = menu.remove(&item);
+        }
+        (None, Some(version)) => {
+            if let Ok(item) = MenuItem::with_id(
+                app,
+                UPDATE,
+                crate::updates::menu_text(version),
+                true,
+                None::<&str>,
+            ) {
+                let _ = menu.insert(&item, 0);
+            }
+        }
+        (None, None) => {}
+    }
+}
+
 pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     let listening = MenuItem::with_id(
         app,
@@ -350,6 +378,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     }
     builder.build(app)?;
     app.manage(Tray {
+        menu,
         listening,
         today,
         status,
@@ -388,6 +417,7 @@ pub fn refresh(app: &AppHandle) {
         let _ = tray
             .pause
             .set_enabled(config.scrobbling && config.connected());
+        show_update(app, &tray.menu, state.update_available().as_deref());
     }
     if let Some(icon) = app.tray_by_id("soundscape") {
         let _ = icon.set_tooltip(Some(tooltip(&status, today_line.as_deref())));

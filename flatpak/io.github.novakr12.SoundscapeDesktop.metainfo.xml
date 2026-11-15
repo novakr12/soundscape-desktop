@@ -98,6 +98,25 @@
   </supports>
 
   <releases>
+    <release version="0.8.0" date="2026-11-15">
+      <description>
+        <p>Your music in your Discord status.</p>
+        <ul>
+          <li>Turn on "Show what I'm playing in my Discord status" in Settings to show the song, artist and album as "Listening to" on Discord</li>
+          <li>It follows the player you're listening to, and songs played in the Soundscape window</li>
+          <li>Discord needs an application of your own for this; Settings explains how to make one in a minute</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.7.0" date="2026-11-15">
+      <description>
+        <p>Hear about new versions.</p>
+        <ul>
+          <li>Once a day the app checks the releases on GitHub; when a newer version is out, a notification says so once and the tray gets a "Download Soundscape Desktop …" item that opens the download page</li>
+          <li>Turn it off in Settings with "Tell me when a new version of this app is out"</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.3" date="2026-11-15">
       <description>
         <p>Music that keeps playing.</p>

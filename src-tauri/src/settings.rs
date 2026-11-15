@@ -36,6 +36,9 @@ pub struct SettingsView {
     pub weekly_recap: bool,
     pub streak_reminder: bool,
     pub yearscape_notification: bool,
+    pub update_notice: bool,
+    pub discord: bool,
+    pub discord_app_id: Option<String>,
     pub keep_running: bool,
     pub autostart: bool,
     pub flatpak: bool,
@@ -96,6 +99,9 @@ pub fn view(app: &AppHandle) -> SettingsView {
         weekly_recap: config.weekly_recap,
         streak_reminder: config.streak_reminder,
         yearscape_notification: config.yearscape_notification,
+        update_notice: config.update_notice,
+        discord: config.discord,
+        discord_app_id: config.discord_app_id.clone(),
         keep_running: config.keep_running,
         autostart: config.autostart,
         flatpak: autostart::in_flatpak(),
@@ -150,6 +156,15 @@ pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<Set
         "yearscape_notification" => {
             state.update(|config| config.yearscape_notification = value);
         }
+        "update_notice" => {
+            state.update(|config| config.update_notice = value);
+            if !value && state.set_update(None) {
+                crate::tray::refresh(&app);
+            }
+        }
+        "discord" => {
+            state.update(|config| config.discord = value);
+        }
         "streak_reminder" => {
             state.update(|config| config.streak_reminder = value);
         }
@@ -185,6 +200,17 @@ pub fn add_fix(
     let fix = crate::fixes::make(&artist, &title, &new_artist, &new_title, every_song)?;
     app.state::<AppState>()
         .update(|config| crate::fixes::add(&mut config.fixes, fix));
+    Ok(view(&app))
+}
+
+#[tauri::command]
+pub fn set_discord_app(app: AppHandle, app_id: String) -> Result<SettingsView, String> {
+    let app_id = app_id.trim().to_string();
+    if !app_id.is_empty() && !crate::discord::valid_app_id(&app_id) {
+        return Err("That doesn't look like a Discord application ID. It's a long number.".into());
+    }
+    app.state::<AppState>()
+        .update(|config| config.discord_app_id = (!app_id.is_empty()).then_some(app_id));
     Ok(view(&app))
 }
 

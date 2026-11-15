@@ -170,6 +170,7 @@ pub fn handle(app: &AppHandle, id: &str) {
         tray::PAUSE => {
             toggle_pause(app);
         }
+        tray::UPDATE => crate::updates::open_downloads(app),
         tray::FIX => {
             let _ = open_settings_at(app, Some("fixes"));
         }

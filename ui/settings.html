@@ -91,9 +91,30 @@
           <input type="checkbox" data-option="yearscape_notification" />
           <span>Tell me in December when my Yearscape is ready</span>
         </label>
+        <label class="switch">
+          <input type="checkbox" data-option="update_notice" />
+          <span>Tell me when a new version of this app is out</span>
+        </label>
         <div class="buttons">
           <button type="button" class="secondary" id="test-notification">Send a test notification</button>
         </div>
+      </section>
+
+      <section>
+        <h2>Discord</h2>
+        <label class="switch">
+          <input type="checkbox" data-option="discord" />
+          <span>Show what I'm playing in my Discord status</span>
+        </label>
+        <form id="discord-form" class="discord-form">
+          <label for="discord-app">Discord application ID</label>
+          <input id="discord-app" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="1234567890123456789" />
+          <button type="submit" class="secondary">Save</button>
+        </form>
+        <p class="muted small">
+          Discord shows the name of an application of your own: create one called "Soundscape" at
+          discord.com/developers/applications and paste its Application ID here. Discord has to run on this computer.
+        </p>
       </section>
 
       <section>

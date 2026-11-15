@@ -27,6 +27,9 @@ function render(settings) {
     input.checked = settings[input.dataset.option];
   }
 
+  const discordApp = document.getElementById("discord-app");
+  if (document.activeElement !== discordApp) discordApp.value = settings.discord_app_id ?? "";
+
   const paused = settings.paused_minutes;
   document.getElementById("listening").textContent = !settings.scrobbling
     ? "Scrobbling is paused."
@@ -180,6 +183,11 @@ for (const button of document.querySelectorAll("[data-action]")) {
 document.getElementById("pause").addEventListener("click", async () => {
   await invoke("settings_action", { action: "pause" });
   refresh();
+});
+
+document.getElementById("discord-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  act(() => invoke("set_discord_app", { appId: document.getElementById("discord-app").value }));
 });
 
 document.getElementById("send-now").addEventListener("click", () => act(() => invoke("send_now")));

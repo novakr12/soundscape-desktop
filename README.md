@@ -59,6 +59,10 @@ The tray shows a line like "Today: 42 plays · 2 h 51 min · 🔥 121-day streak
 
 In December (or in January, if the app wasn't running in December) a notification tells you your Yearscape for the year is ready, with your plays, hours, most played artist and new artists. It comes once a year; turn it off in Settings.
 
+Once a day the app looks at the [releases page](https://github.com/novakr12/soundscape-desktop/releases) for a newer version. When there is one, a notification tells you once, and the tray gets a "Download Soundscape Desktop …" item that opens the download page. Nothing is downloaded or installed by itself; turn the check off in Settings.
+
+Your Discord status can show what you're playing ("Listening to …" with the song, artist and album). Discord needs an application of your own for it: create one called "Soundscape" at [discord.com/developers/applications](https://discord.com/developers/applications), turn on "Show what I'm playing in my Discord status" in Settings and paste the Application ID. The status clears when the music stops or you turn it off.
+
 On Monday or Tuesday a notification sums up last week: plays, listening time, your most played artist and your place among friends. It comes once per week; turn it off in Settings.
 
 Soundscape → Friends listening, also in the tray, shows who you follow is playing right now. Each friend has **▶ Play this song**, which opens the song in the window and plays it (the whole song if your Navidrome has it, otherwise the preview), and **Open profile**.
@@ -102,7 +106,7 @@ flatpak run io.github.novakr12.SoundscapeDesktop
 
 CI builds the same Flatpak on every push and keeps it as `soundscape-desktop.flatpak` under the run's artifacts, which installs with `flatpak install --user soundscape-desktop.flatpak`.
 
-The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), show its own media player for media keys (`org.mpris.MediaPlayer2.SoundscapeDesktop`), play sound (for song previews) and use the network. It can't see your files.
+The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), show its own media player for media keys (`org.mpris.MediaPlayer2.SoundscapeDesktop`), play sound (for song previews), use the network and reach Discord's local socket (`xdg-run/discord-ipc-0`, and `xdg-run/app/com.discordapp.Discord` for the Discord Flatpak) for the Discord status. It can't see your files.
 
 ## Releases
 

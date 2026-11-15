@@ -51,6 +51,14 @@ pub struct Config {
     pub yearscape_notification: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_yearscape: Option<i32>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub update_notice: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub told_update: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub discord: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord_app_id: Option<String>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -100,6 +108,10 @@ impl Default for Config {
             last_streak_reminder: None,
             yearscape_notification: true,
             last_yearscape: None,
+            update_notice: true,
+            told_update: None,
+            discord: false,
+            discord_app_id: None,
         }
     }
 }

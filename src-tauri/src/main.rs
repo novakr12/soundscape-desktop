@@ -1,5 +1,6 @@
 mod autostart;
 mod config;
+mod discord;
 mod fixes;
 mod friends;
 mod links;
@@ -21,6 +22,7 @@ mod submit;
 mod tidy;
 mod today;
 mod tray;
+mod updates;
 mod yearscape;
 
 use config::Config;
@@ -50,6 +52,7 @@ pub struct AppState {
     today: Mutex<Option<today::Today>>,
     mini: Mutex<Option<mini::Source>>,
     preview: Mutex<Option<media::Preview>>,
+    update: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -155,6 +158,19 @@ impl AppState {
 
     pub fn set_preview(&self, preview: Option<media::Preview>) {
         *self.preview.lock().expect("preview lock") = preview;
+    }
+
+    pub fn update_available(&self) -> Option<String> {
+        self.update.lock().expect("update lock").clone()
+    }
+
+    pub fn set_update(&self, version: Option<String>) -> bool {
+        let mut current = self.update.lock().expect("update lock");
+        if *current == version {
+            return false;
+        }
+        *current = version;
+        true
     }
 
     pub fn today(&self) -> Option<today::Today> {
@@ -469,6 +485,7 @@ fn main() {
                 today: Mutex::new(None),
                 mini: Mutex::new(None),
                 preview: Mutex::new(None),
+                update: Mutex::new(None),
             });
             if let Err(error) = tray::create(app.handle(), &config) {
                 eprintln!("No tray icon: {error}");
@@ -484,6 +501,8 @@ fn main() {
             tauri::async_runtime::spawn(love::run(app.handle().clone()));
             tauri::async_runtime::spawn(today::run(app.handle().clone()));
             tauri::async_runtime::spawn(yearscape::run(app.handle().clone()));
+            tauri::async_runtime::spawn(updates::run(app.handle().clone()));
+            discord::run(app.handle().clone());
             tauri::async_runtime::spawn(recap::run(app.handle().clone()));
             tauri::async_runtime::spawn(media::run(app.handle().clone()));
             tauri::async_runtime::spawn(search::run(app.handle().clone()));
@@ -499,6 +518,7 @@ fn main() {
             settings::set_player,
             settings::add_fix,
             settings::remove_fix,
+            settings::set_discord_app,
             mini::get_mini,
             mini::mini_action,
             settings::send_now,

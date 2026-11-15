@@ -98,6 +98,17 @@
   </supports>
 
   <releases>
+    <release version="0.6.0" date="2026-11-15">
+      <description>
+        <p>Your music, closer at hand.</p>
+        <ul>
+          <li>Soundscape → Music, also in the tray, opens the Music tab, and each Navidrome playlist can be started from there with one click</li>
+          <li>The mini player has a seek bar you can click or drag, and shuffle and repeat buttons for players that support them</li>
+          <li>While a song plays in the Soundscape window, the mini player shows which song is up next in the queue</li>
+          <li>The Music menu needs an up-to-date Soundscape server</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-11-14">
       <description>
         <p>Lighter and better with the Soundscape player.</p>

@@ -6,6 +6,7 @@ mod love;
 mod media;
 mod mini;
 mod mpris;
+mod music;
 mod notify;
 mod queue;
 mod recap;
@@ -42,6 +43,7 @@ pub struct AppState {
     signed_out: AtomicBool,
     status: Mutex<scrobbler::Status>,
     friends: Mutex<Vec<friends::Friend>>,
+    playlists: Mutex<Vec<music::Playlist>>,
     loved: Mutex<Option<(scrobble::Track, bool)>>,
     skip_request: Mutex<Option<scrobble::Track>>,
     skipped: Mutex<Option<scrobble::Track>>,
@@ -92,6 +94,19 @@ impl AppState {
             return false;
         }
         *current = friends;
+        true
+    }
+
+    pub fn playlists(&self) -> Vec<music::Playlist> {
+        self.playlists.lock().expect("playlists lock").clone()
+    }
+
+    pub fn set_playlists(&self, playlists: Vec<music::Playlist>) -> bool {
+        let mut current = self.playlists.lock().expect("playlists lock");
+        if *current == playlists {
+            return false;
+        }
+        *current = playlists;
         true
     }
 
@@ -285,6 +300,7 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
             &MenuItem::with_id(app, tray::FIX, tray::FIX_TEXT, true, None::<&str>)?,
             &tray::players_menu(app)?,
             &tray::friends_menu(app)?,
+            &tray::music_menu(app)?,
             &CheckMenuItem::with_id(
                 app,
                 "keep-running",
@@ -384,6 +400,19 @@ fn open_friend(app: &AppHandle, user: &str, play: bool) {
     }
 }
 
+fn open_music(app: &AppHandle, playlist: Option<&str>) {
+    let Some(server) = app.state::<AppState>().server() else {
+        return;
+    };
+    let target = match playlist {
+        Some(id) => music::playlist_page(&server, id),
+        None => music::page(&server),
+    };
+    if let Some(target) = target {
+        let _ = open_main(app, target);
+    }
+}
+
 pub fn toggle_pause(app: &AppHandle) {
     let state = app.state::<AppState>();
     let now = config::now_seconds();
@@ -476,7 +505,11 @@ fn handle_menu(app: &AppHandle, id: &str) {
             tray::refresh(app);
         }
         "quit" => app.exit(0),
+        tray::MUSIC_OPEN => open_music(app, None),
         other => {
+            if let Some(id) = other.strip_prefix("music-playlist:") {
+                open_music(app, Some(id));
+            }
             if let Some(user) = other.strip_prefix("friend:") {
                 open_friend(app, user, false);
             }
@@ -560,6 +593,7 @@ fn main() {
                 signed_out: AtomicBool::new(false),
                 status: Mutex::new(scrobbler::Status::default()),
                 friends: Mutex::new(Vec::new()),
+                playlists: Mutex::new(Vec::new()),
                 loved: Mutex::new(None),
                 skip_request: Mutex::new(None),
                 skipped: Mutex::new(None),
@@ -577,6 +611,7 @@ fn main() {
             tauri::async_runtime::spawn(scrobbler::run(app.handle().clone()));
             tauri::async_runtime::spawn(notify::run(app.handle().clone()));
             tauri::async_runtime::spawn(friends::run(app.handle().clone()));
+            tauri::async_runtime::spawn(music::run(app.handle().clone()));
             tauri::async_runtime::spawn(love::run(app.handle().clone()));
             tauri::async_runtime::spawn(today::run(app.handle().clone()));
             tauri::async_runtime::spawn(yearscape::run(app.handle().clone()));

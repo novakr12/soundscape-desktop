@@ -14,6 +14,7 @@ pub struct Tray {
     scrobbling: CheckMenuItem<Wry>,
     players: Submenu<Wry>,
     friends: Submenu<Wry>,
+    music: Submenu<Wry>,
     love: CheckMenuItem<Wry>,
     skip: MenuItem<Wry>,
     pause: MenuItem<Wry>,
@@ -21,6 +22,8 @@ pub struct Tray {
 
 pub const PLAYERS_MENU: &str = "players-menu";
 pub const FRIENDS_MENU: &str = "friends-menu";
+pub const MUSIC_MENU: &str = "music-menu";
+pub const MUSIC_OPEN: &str = "music-open";
 pub const LOVE: &str = "love";
 pub const SKIP: &str = "skip-scrobble";
 pub const LOVE_TEXT: &str = "♥ Love this song";
@@ -199,6 +202,48 @@ fn fill_friends(app: &AppHandle, menu: &Submenu<Wry>, friends: &[crate::friends:
     }
 }
 
+pub fn music_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
+    let open = MenuItem::with_id(app, MUSIC_OPEN, "Open Music", true, None::<&str>)?;
+    Submenu::with_id_and_items(app, MUSIC_MENU, "Music", true, &[&open])
+}
+
+fn fill_music(app: &AppHandle, menu: &Submenu<Wry>, playlists: &[crate::music::Playlist]) {
+    if let Ok(items) = menu.items() {
+        for item in items {
+            let _ = menu.remove(&item);
+        }
+    }
+    if let Ok(open) = MenuItem::with_id(app, MUSIC_OPEN, "Open Music", true, None::<&str>) {
+        let _ = menu.append(&open);
+    }
+    if playlists.is_empty() {
+        return;
+    }
+    if let Ok(separator) = PredefinedMenuItem::separator(app) {
+        let _ = menu.append(&separator);
+    }
+    if let Ok(heading) = MenuItem::with_id(
+        app,
+        "music-playlists",
+        "Play a playlist",
+        false,
+        None::<&str>,
+    ) {
+        let _ = menu.append(&heading);
+    }
+    for playlist in playlists {
+        if let Ok(item) = MenuItem::with_id(
+            app,
+            format!("music-playlist:{}", playlist.id),
+            short(&format!("▶ {}", crate::music::label(playlist))),
+            true,
+            None::<&str>,
+        ) {
+            let _ = menu.append(&item);
+        }
+    }
+}
+
 pub fn players_menu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
     let empty = MenuItem::with_id(app, "no-players", "No players open", false, None::<&str>)?;
     Submenu::with_id_and_items(app, PLAYERS_MENU, "Players", true, &[&empty])
@@ -264,6 +309,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     )?;
     let players = players_menu(app)?;
     let friends = friends_menu(app)?;
+    let music = music_menu(app)?;
     let today = MenuItem::with_id(app, "tray-today", "", false, None::<&str>)?;
     let love = CheckMenuItem::with_id(app, LOVE, LOVE_TEXT, false, false, None::<&str>)?;
     let skip = MenuItem::with_id(app, SKIP, SKIP_TEXT, false, None::<&str>)?;
@@ -286,6 +332,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
             &friends,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "tray-open", "Open Soundscape", true, None::<&str>)?,
+            &music,
             &MenuItem::with_id(app, MINI, "Mini player", true, None::<&str>)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,
             &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
@@ -310,6 +357,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
         scrobbling,
         players,
         friends,
+        music,
         love,
         skip,
         pause,
@@ -322,6 +370,7 @@ pub fn refresh(app: &AppHandle) {
     let status = state.status();
     let config = state.config();
     let friends = state.friends();
+    let playlists = state.playlists();
     let today_line = state.today().map(|today| crate::today::text(&today));
     if let Some(tray) = app.try_state::<Tray>() {
         let _ = tray.listening.set_text(listening_text(&status));
@@ -333,6 +382,7 @@ pub fn refresh(app: &AppHandle) {
             .set_enabled(!config.connected() || status.signed_out);
         fill_players(app, &tray.players, &status.players);
         fill_friends(app, &tray.friends, &friends);
+        fill_music(app, &tray.music, &playlists);
         show_actions(&tray.love, &tray.skip, &current_actions(app, &status));
         let _ = tray.pause.set_text(pause_text(&status));
         let _ = tray
@@ -391,6 +441,12 @@ pub fn refresh(app: &AppHandle) {
             .and_then(|item| item.as_submenu().cloned())
         {
             fill_friends(app, &menu, &friends);
+        }
+        if let Some(menu) = submenu
+            .get(MUSIC_MENU)
+            .and_then(|item| item.as_submenu().cloned())
+        {
+            fill_music(app, &menu, &playlists);
         }
     }
 }

@@ -42,6 +42,86 @@ pub async fn control(bus: &str, method: &str) -> zbus::Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Modes {
+    pub shuffle: Option<bool>,
+    pub repeat: Option<&'static str>,
+    pub can_seek: bool,
+}
+
+pub fn repeat_name(loop_status: &str) -> Option<&'static str> {
+    match loop_status {
+        "None" => Some("off"),
+        "Playlist" => Some("all"),
+        "Track" => Some("one"),
+        _ => None,
+    }
+}
+
+pub fn next_loop(loop_status: &str) -> &'static str {
+    match loop_status {
+        "None" => "Playlist",
+        "Playlist" => "Track",
+        _ => "None",
+    }
+}
+
+pub async fn modes(bus: &str) -> Modes {
+    let Ok(connection) = Connection::session().await else {
+        return Modes::default();
+    };
+    let Ok(player) = proxy(&connection, bus, PLAYER).await else {
+        return Modes::default();
+    };
+    let loop_status: Option<String> = player.get_property("LoopStatus").await.ok();
+    Modes {
+        shuffle: player.get_property("Shuffle").await.ok(),
+        repeat: loop_status.as_deref().and_then(repeat_name),
+        can_seek: player.get_property("CanSeek").await.unwrap_or(false),
+    }
+}
+
+pub async fn toggle_shuffle(bus: &str) -> zbus::Result<()> {
+    let connection = Connection::session().await?;
+    let player = proxy(&connection, bus, PLAYER).await?;
+    let shuffle: bool = player.get_property("Shuffle").await?;
+    player.set_property("Shuffle", !shuffle).await?;
+    Ok(())
+}
+
+pub async fn cycle_repeat(bus: &str) -> zbus::Result<()> {
+    let connection = Connection::session().await?;
+    let player = proxy(&connection, bus, PLAYER).await?;
+    let loop_status: String = player.get_property("LoopStatus").await?;
+    player
+        .set_property("LoopStatus", next_loop(&loop_status))
+        .await?;
+    Ok(())
+}
+
+pub async fn seek_to(bus: &str, position_ms: u64) -> zbus::Result<()> {
+    let connection = Connection::session().await?;
+    let player = proxy(&connection, bus, PLAYER).await?;
+    let target = i64::try_from(position_ms.saturating_mul(1000)).unwrap_or(i64::MAX);
+    let metadata: HashMap<String, OwnedValue> =
+        player.get_property("Metadata").await.unwrap_or_default();
+    let track = metadata
+        .get("mpris:trackid")
+        .and_then(|value| zbus::zvariant::OwnedObjectPath::try_from(value.clone()).ok());
+    if let Some(track) = track {
+        if player
+            .call_method("SetPosition", &(track, target))
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    let now: i64 = player.get_property("Position").await?;
+    player.call_method("Seek", &(target - now)).await?;
+    Ok(())
+}
+
 pub fn player_id(bus_name: &str) -> Option<String> {
     let rest = bus_name.strip_prefix(PREFIX)?;
     let id = match rest.find(".instance") {
@@ -257,6 +337,17 @@ async fn list(connection: &Connection, skip_this_app: bool) -> zbus::Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turns_loop_status_into_repeat_and_cycles_it_like_soundscape() {
+        assert_eq!(repeat_name("None"), Some("off"));
+        assert_eq!(repeat_name("Playlist"), Some("all"));
+        assert_eq!(repeat_name("Track"), Some("one"));
+        assert_eq!(repeat_name("Weird"), None);
+        assert_eq!(next_loop("None"), "Playlist");
+        assert_eq!(next_loop("Playlist"), "Track");
+        assert_eq!(next_loop("Track"), "None");
+    }
     use zbus::interface;
     use zbus::zvariant::{Str, Value};
 

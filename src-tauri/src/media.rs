@@ -28,8 +28,34 @@ const READ: &str = r#"(() => {
     length: Number.isFinite(audio.duration) ? audio.duration : null,
     hasNext: Boolean(document.querySelector('[data-player="next"]:not([disabled])')),
     hasPrevious: Boolean(document.querySelector('[data-player="previous"]')),
+    shuffle: (() => {
+      const button = document.querySelector('[data-player="shuffle"]');
+      return button ? button.getAttribute("aria-pressed") === "true" : null;
+    })(),
+    repeat: document.querySelector('[data-player="repeat"]')?.dataset.repeat ?? null,
+    upNext: (() => {
+      try {
+        const queue = JSON.parse(localStorage.getItem("soundscape:queue") ?? "null");
+        const repeat = document.querySelector('[data-player="repeat"]')?.dataset.repeat;
+        if (!queue || !Array.isArray(queue.order) || !Array.isArray(queue.tracks) || repeat === "one") return null;
+        let at = queue.position + 1;
+        if (at >= queue.order.length) at = repeat === "all" && queue.order.length > 1 ? 0 : -1;
+        const track = at >= 0 ? queue.tracks[queue.order[at]] : null;
+        return track && typeof track.title === "string" && typeof track.artist === "string"
+          ? { title: track.title, artist: track.artist }
+          : null;
+      } catch {
+        return null;
+      }
+    })(),
   });
 })()"#;
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct UpNext {
+    pub title: String,
+    pub artist: String,
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Preview {
@@ -44,6 +70,12 @@ pub struct Preview {
     pub has_next: bool,
     #[serde(default, rename = "hasPrevious")]
     pub has_previous: bool,
+    #[serde(default)]
+    pub shuffle: Option<bool>,
+    #[serde(default)]
+    pub repeat: Option<String>,
+    #[serde(default, rename = "upNext")]
+    pub up_next: Option<UpNext>,
 }
 
 impl Preview {
@@ -114,7 +146,7 @@ pub fn script(action: &str, seconds: f64) -> Option<String> {
         "stop" => "a.pause(); a.currentTime = 0".to_string(),
         "seek" => format!("a.currentTime = Math.max(0, a.currentTime + {seconds})"),
         "position" => format!("a.currentTime = {}", seconds.max(0.0)),
-        "next" | "previous" => {
+        "next" | "previous" | "shuffle" | "repeat" => {
             return Some(format!(
                 "document.querySelector('[data-player=\"{action}\"]:not([disabled])')?.click()"
             ))
@@ -359,7 +391,11 @@ async fn connect(app: &AppHandle, shared: &Arc<Shared>) -> Option<Connection> {
 }
 
 pub fn control(app: &AppHandle, action: &str) {
-    if let (Some(window), Some(js)) = (app.get_webview_window(MAIN), script(action, 0.0)) {
+    control_at(app, action, 0.0);
+}
+
+pub fn control_at(app: &AppHandle, action: &str, seconds: f64) {
+    if let (Some(window), Some(js)) = (app.get_webview_window(MAIN), script(action, seconds)) {
         let _ = window.eval(js);
     }
 }
@@ -420,6 +456,19 @@ mod tests {
     }
 
     #[test]
+    fn reads_shuffle_repeat_and_the_next_song() {
+        let preview = parse(r#"{"title":"Says","artist":"Nils Frahm","album":null,"cover":null,"playing":true,"position":3,"length":60,"shuffle":true,"repeat":"all","upNext":{"title":"Teardrop","artist":"Massive Attack"}}"#).unwrap();
+        assert_eq!(preview.shuffle, Some(true));
+        assert_eq!(preview.repeat.as_deref(), Some("all"));
+        assert_eq!(preview.up_next.unwrap().title, "Teardrop");
+        let older = parse(r#"{"title":"Says","artist":"Nils Frahm","album":null,"cover":null,"playing":true,"position":3,"length":60}"#).unwrap();
+        assert_eq!(
+            (older.shuffle, older.repeat, older.up_next),
+            (None, None, None)
+        );
+    }
+
+    #[test]
     fn describes_the_preview_for_media_keys() {
         let preview = parse(r#"{"title":"Says","artist":"Nils Frahm","album":"30-second preview","cover":"https://example.com/a.jpg","playing":true,"position":3.2,"length":29.9}"#).unwrap();
         let map = metadata(Some(&preview));
@@ -445,6 +494,10 @@ mod tests {
             .unwrap()
             .contains("a.currentTime = 0"));
         assert_eq!(script("rm -rf", 0.0), None);
+        assert_eq!(
+            script("shuffle", 0.0).unwrap(),
+            "document.querySelector('[data-player=\"shuffle\"]:not([disabled])')?.click()"
+        );
         assert_eq!(
             script("next", 0.0).unwrap(),
             "document.querySelector('[data-player=\"next\"]:not([disabled])')?.click()"

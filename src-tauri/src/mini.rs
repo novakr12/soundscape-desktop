@@ -31,6 +31,10 @@ pub struct MiniView {
     pub can_next: bool,
     pub can_love: bool,
     pub loved: bool,
+    pub shuffle: Option<bool>,
+    pub repeat: Option<String>,
+    pub can_seek: bool,
+    pub up_next: Option<String>,
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -121,6 +125,12 @@ pub fn view(app: &AppHandle) -> MiniView {
             length_ms: preview.length.map(|length| (length * 1000.0) as u64),
             can_skip: preview.has_previous,
             can_next: preview.has_next,
+            shuffle: preview.shuffle,
+            repeat: preview.repeat,
+            can_seek: preview.length.is_some(),
+            up_next: preview
+                .up_next
+                .map(|next| format!("{} — {}", next.title, next.artist)),
             ..MiniView::default()
         };
     }
@@ -149,20 +159,59 @@ pub fn view(app: &AppHandle) -> MiniView {
         can_next: true,
         can_love: current && actions.can_love,
         loved: current && actions.loved,
+        ..MiniView::default()
     }
 }
 
-#[tauri::command]
-pub fn get_mini(app: AppHandle) -> MiniView {
-    view(&app)
+async fn with_modes(app: &AppHandle, mut view: MiniView) -> MiniView {
+    if view.kind != "player" {
+        return view;
+    }
+    let Some(source) = app.state::<AppState>().mini() else {
+        return view;
+    };
+    let modes = crate::mpris::modes(&source.bus).await;
+    view.shuffle = modes.shuffle;
+    view.repeat = modes.repeat.map(str::to_string);
+    view.can_seek = modes.can_seek && view.length_ms.is_some();
+    view
 }
 
 #[tauri::command]
-pub async fn mini_action(app: AppHandle, action: String) -> Result<MiniView, String> {
+pub async fn get_mini(app: AppHandle) -> MiniView {
+    with_modes(&app, view(&app)).await
+}
+
+fn seek_seconds(seconds: Option<f64>) -> f64 {
+    seconds.filter(|s| s.is_finite()).unwrap_or(0.0).max(0.0)
+}
+
+#[tauri::command]
+pub async fn mini_action(
+    app: AppHandle,
+    action: String,
+    seconds: Option<f64>,
+) -> Result<MiniView, String> {
     let state = app.state::<AppState>();
     let preview = preview_shown(&state).is_some();
     match (action.as_str(), preview) {
-        ("toggle" | "next" | "previous", true) => crate::media::control(&app, &action),
+        ("toggle" | "next" | "previous" | "shuffle" | "repeat", true) => {
+            crate::media::control(&app, &action)
+        }
+        ("seek", true) => crate::media::control_at(&app, "position", seek_seconds(seconds)),
+        ("shuffle" | "repeat" | "seek", false) => {
+            if let Some(source) = state.mini() {
+                let done = match action.as_str() {
+                    "shuffle" => crate::mpris::toggle_shuffle(&source.bus).await,
+                    "repeat" => crate::mpris::cycle_repeat(&source.bus).await,
+                    _ => {
+                        crate::mpris::seek_to(&source.bus, (seek_seconds(seconds) * 1000.0) as u64)
+                            .await
+                    }
+                };
+                done.map_err(|error| format!("{} didn't respond: {error}", source.name))?;
+            }
+        }
         ("love", false) => crate::love::toggle(app.clone()).await,
         ("toggle" | "next" | "previous", false) => {
             let method = match action.as_str() {
@@ -178,7 +227,7 @@ pub async fn mini_action(app: AppHandle, action: String) -> Result<MiniView, Str
         }
         _ => {}
     }
-    Ok(view(&app))
+    Ok(with_modes(&app, view(&app)).await)
 }
 
 pub fn open(app: &AppHandle) -> tauri::Result<()> {
@@ -188,7 +237,7 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
     }
     WebviewWindowBuilder::new(app, MINI, WebviewUrl::App("mini.html".into()))
         .title("Soundscape mini player")
-        .inner_size(400.0, 132.0)
+        .inner_size(420.0, 178.0)
         .resizable(false)
         .always_on_top(true)
         .build()?;
@@ -207,6 +256,14 @@ mod tests {
         assert!(shows_preview(Some(&preview), false));
         assert!(!shows_preview(Some(&preview), true));
         assert!(!shows_preview(None, false));
+    }
+
+    #[test]
+    fn seeks_only_to_real_places_in_the_song() {
+        assert_eq!(seek_seconds(Some(12.5)), 12.5);
+        assert_eq!(seek_seconds(Some(-3.0)), 0.0);
+        assert_eq!(seek_seconds(Some(f64::NAN)), 0.0);
+        assert_eq!(seek_seconds(None), 0.0);
     }
 
     #[test]

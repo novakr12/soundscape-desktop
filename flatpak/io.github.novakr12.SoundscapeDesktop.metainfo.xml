@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.6.1" date="2026-11-15">
+      <description>
+        <p>Links and going back.</p>
+        <ul>
+          <li>Links to other websites, like an artist's own site or Bandcamp, now open in your web browser, also from the Flatpak and also when they were meant to open in a new tab</li>
+          <li>A new Go menu with Back (Alt+Left), Forward (Alt+Right) and Home (Alt+Home), like in a browser</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-11-15">
       <description>
         <p>Your music, closer at hand.</p>

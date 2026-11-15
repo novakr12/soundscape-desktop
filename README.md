@@ -47,6 +47,8 @@ The app picks up what Linux music players are playing through MPRIS, the standar
 - When a player sends a wrong or messy name, choose **Fix this title…** in the tray or the Soundscape menu. Settings shows exactly what the player sends; type the right artist and title, or tick the box to fix the artist on every song (handy for channels like "RadioheadVEVO"). The fix applies from then on, to now playing and scrobbles; plays already sent keep their old name. Fixes are listed in Settings, each with a Remove button, and stay on your computer.
 - When the server can't be reached, plays wait in `waiting.jsonl` next to the settings and are sent with their original times once it's back.
 - Closing the window keeps the app running in the background, so it keeps scrobbling. The window's page is closed too, which frees about half the memory (roughly 270 MB down to 140 MB); opening it again from your apps or the tray loads it fresh. Quit from the menu or the tray. Turn this off with Soundscape → Keep running when closed.
+- The window's **Go** menu has **Back** (Alt+←), **Forward** (Alt+→) and **Home** (Alt+Home), like a browser. Your mouse's back button works too.
+- Links that lead off your server, like an artist's website or Bandcamp page, open in your web browser, including links meant for a new tab. In the Flatpak they go through the desktop's portal.
 - The tray icon shows the song playing and how many plays are waiting. GNOME only shows tray icons with the AppIndicator extension (`sudo dnf install gnome-shell-extension-appindicator` on Fedora, then turn it on in Extensions); everything in the tray is also in the window's Soundscape menu.
 
 ## Notifications and settings

@@ -2,6 +2,7 @@ mod autostart;
 mod config;
 mod fixes;
 mod friends;
+mod links;
 mod love;
 mod media;
 mod mini;
@@ -30,12 +31,14 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{
     AppHandle, Manager, RunEvent, State, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
 };
-use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 pub const MAIN: &str = "main";
 const SETUP: &str = "setup";
 const SETTINGS: &str = "settings";
+const GO_BACK: &str = "go-back";
+const GO_FORWARD: &str = "go-forward";
+const GO_HOME: &str = "go-home";
 
 pub struct AppState {
     dir: PathBuf,
@@ -313,7 +316,18 @@ fn menu(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>> {
             &MenuItem::with_id(app, "quit", "Quit", true, Some("CmdOrCtrl+Q"))?,
         ],
     )?;
-    Menu::with_items(app, &[&soundscape])
+    let go = Submenu::with_items(
+        app,
+        "Go",
+        true,
+        &[
+            &MenuItem::with_id(app, GO_BACK, "Back", true, Some("Alt+Left"))?,
+            &MenuItem::with_id(app, GO_FORWARD, "Forward", true, Some("Alt+Right"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, GO_HOME, "Home", true, Some("Alt+Home"))?,
+        ],
+    )?;
+    Menu::with_items(app, &[&soundscape, &go])
 }
 
 fn handle_navigation(app: &AppHandle, target: &Url) -> bool {
@@ -322,9 +336,7 @@ fn handle_navigation(app: &AppHandle, target: &Url) -> bool {
         Navigation::Allow => true,
         Navigation::Block => false,
         Navigation::External => {
-            if let Err(error) = app.opener().open_url(target.as_str(), None::<&str>) {
-                eprintln!("Couldn't open {target}: {error}");
-            }
+            links::open(app, target);
             false
         }
         Navigation::Connected { token, user } => {
@@ -349,6 +361,19 @@ fn handle_navigation(app: &AppHandle, target: &Url) -> bool {
     }
 }
 
+fn open_new_window(app: &AppHandle, target: &Url) {
+    let state = app.state::<AppState>();
+    match server::classify(state.server().as_ref(), target) {
+        Navigation::Allow => {
+            if let Some(window) = app.get_webview_window(MAIN) {
+                let _ = window.navigate(target.clone());
+            }
+        }
+        Navigation::External => links::open(app, target),
+        Navigation::Block | Navigation::Connected { .. } => {}
+    }
+}
+
 pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN) {
         window.navigate(start)?;
@@ -356,6 +381,7 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
         return window.set_focus();
     }
     let handle = app.clone();
+    let opener = app.clone();
     let config = app.state::<AppState>().config();
     WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(start))
         .title("Soundscape")
@@ -363,6 +389,11 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
         .min_inner_size(380.0, 480.0)
         .menu(menu(app, &config)?)
         .on_navigation(move |target| handle_navigation(&handle, target))
+        .initialization_script(links::SAME_WINDOW)
+        .on_new_window(move |target, _| {
+            open_new_window(&opener, &target);
+            tauri::webview::NewWindowResponse::Deny
+        })
         .build()?;
     tray::refresh(app);
     Ok(())
@@ -398,6 +429,27 @@ fn open_friend(app: &AppHandle, user: &str, play: bool) {
     if let Some(target) = target {
         let _ = open_main(app, target);
     }
+}
+
+#[derive(Clone, Copy)]
+enum Step {
+    Back,
+    Forward,
+}
+
+fn go(app: &AppHandle, step: Step) {
+    use webkit2gtk::WebViewExt;
+    let Some(window) = app.get_webview_window(MAIN) else {
+        return;
+    };
+    let _ = window.with_webview(move |webview| {
+        let view = webview.inner();
+        match step {
+            Step::Back if view.can_go_back() => view.go_back(),
+            Step::Forward if view.can_go_forward() => view.go_forward(),
+            _ => {}
+        }
+    });
 }
 
 fn open_music(app: &AppHandle, playlist: Option<&str>) {
@@ -465,6 +517,13 @@ pub fn sign_out(app: &AppHandle) {
 fn handle_menu(app: &AppHandle, id: &str) {
     let state = app.state::<AppState>();
     match id {
+        GO_BACK => go(app, Step::Back),
+        GO_FORWARD => go(app, Step::Forward),
+        GO_HOME => {
+            if let Some(server) = state.server() {
+                let _ = open_main(app, server);
+            }
+        }
         "reload" => {
             if let Some(window) = app.get_webview_window(MAIN) {
                 let _ = window.eval("location.reload()");

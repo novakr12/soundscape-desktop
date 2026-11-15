@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.6.2" date="2026-11-15">
+      <description>
+        <p>Buttons to find your way.</p>
+        <ul>
+          <li>Back, forward and home buttons next to the Soundscape logo in the window, like in a browser</li>
+          <li>The buttons need an up-to-date Soundscape server</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.1" date="2026-11-15">
       <description>
         <p>Links and going back.</p>

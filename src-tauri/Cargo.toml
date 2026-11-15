@@ -1,6 +1,6 @@
 [package]
 name = "soundscape-desktop"
-version = "0.6.1"
+version = "0.6.2"
 description = "Desktop app for Soundscape, the self-hosted music tracker"
 edition = "2021"
 license = "AGPL-3.0-or-later"

@@ -6,6 +6,7 @@ use zbus::zvariant::Value;
 
 pub const SAME_WINDOW: &str = r#"(() => {
   if (window.top !== window) return;
+  Object.defineProperty(window, "soundscapeDesktop", { value: true });
   document.addEventListener(
     "click",
     (event) => {

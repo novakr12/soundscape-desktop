@@ -38,6 +38,7 @@ pub struct SettingsView {
     pub yearscape_notification: bool,
     pub update_notice: bool,
     pub discord: bool,
+    pub native_player: bool,
     pub discord_app_id: Option<String>,
     pub keep_running: bool,
     pub autostart: bool,
@@ -101,6 +102,7 @@ pub fn view(app: &AppHandle) -> SettingsView {
         yearscape_notification: config.yearscape_notification,
         update_notice: config.update_notice,
         discord: config.discord,
+        native_player: config.native_player,
         discord_app_id: config.discord_app_id.clone(),
         keep_running: config.keep_running,
         autostart: config.autostart,
@@ -161,6 +163,9 @@ pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<Set
             if !value && state.set_update(None) {
                 crate::tray::refresh(&app);
             }
+        }
+        "native_player" => {
+            state.update(|config| config.native_player = value);
         }
         "discord" => {
             state.update(|config| config.discord = value);

@@ -1,6 +1,6 @@
 [package]
 name = "soundscape-desktop"
-version = "0.8.0"
+version = "0.9.0"
 description = "Desktop app for Soundscape, the self-hosted music tracker"
 edition = "2021"
 license = "AGPL-3.0-or-later"
@@ -23,6 +23,7 @@ gethostname = "1.1.0"
 zbus = "5.19.0"
 webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
 javascriptcore-rs = "1.1.2"
+gstreamer = "0.21.3"
 
 [profile.release]
 lto = true

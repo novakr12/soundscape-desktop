@@ -59,6 +59,8 @@ pub struct Config {
     pub discord: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discord_app_id: Option<String>,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub native_player: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -112,6 +114,7 @@ impl Default for Config {
             told_update: None,
             discord: false,
             discord_app_id: None,
+            native_player: true,
         }
     }
 }

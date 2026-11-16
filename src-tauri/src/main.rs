@@ -3,6 +3,7 @@ mod config;
 mod discord;
 mod fixes;
 mod friends;
+mod handover;
 mod links;
 mod love;
 mod media;
@@ -10,9 +11,11 @@ mod menu;
 mod mini;
 mod mpris;
 mod music;
+mod native;
 mod notify;
 mod queue;
 mod recap;
+mod relay;
 mod scrobble;
 mod scrobbler;
 mod search;
@@ -53,6 +56,7 @@ pub struct AppState {
     mini: Mutex<Option<mini::Source>>,
     preview: Mutex<Option<media::Preview>>,
     update: Mutex<Option<String>>,
+    native: Mutex<Option<native::Player>>,
 }
 
 impl AppState {
@@ -323,6 +327,7 @@ fn open_new_window(app: &AppHandle, target: &Url) {
 
 pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(MAIN) {
+        handover::hand_back(app);
         window.navigate(start)?;
         window.show()?;
         return window.set_focus();
@@ -330,7 +335,11 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     let handle = app.clone();
     let opener = app.clone();
     let config = app.state::<AppState>().config();
-    WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(start))
+    let mut builder = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(start));
+    if let Some(script) = handover::hand_back(app) {
+        builder = builder.initialization_script(&script);
+    }
+    builder
         .title("Soundscape")
         .inner_size(1200.0, 820.0)
         .min_inner_size(380.0, 480.0)
@@ -418,6 +427,9 @@ fn handle_window_event(window: &Window, event: &WindowEvent) {
         if state.preview().is_some() {
             api.prevent_close();
             let _ = window.hide();
+            if state.preview().is_some_and(|preview| preview.playing) && handover::wanted(app) {
+                tauri::async_runtime::spawn(handover::hand_over(app.clone()));
+            }
         }
         if !config.told_about_background {
             state.update(|config| config.told_about_background = true);
@@ -486,6 +498,7 @@ fn main() {
                 mini: Mutex::new(None),
                 preview: Mutex::new(None),
                 update: Mutex::new(None),
+                native: Mutex::new(None),
             });
             if let Err(error) = tray::create(app.handle(), &config) {
                 eprintln!("No tray icon: {error}");

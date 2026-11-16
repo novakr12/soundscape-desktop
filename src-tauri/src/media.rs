@@ -240,6 +240,10 @@ struct Player {
 
 impl Player {
     fn run(&self, action: &str, seconds: f64) {
+        if crate::handover::control(&self.app, action, seconds) {
+            self.shared.wake.notify_one();
+            return;
+        }
         if let (Some(window), Some(js)) =
             (self.app.get_webview_window(MAIN), script(action, seconds))
         {
@@ -343,7 +347,7 @@ impl Player {
     }
 }
 
-async fn read(app: &AppHandle) -> Option<Preview> {
+pub async fn evaluate(app: &AppHandle, script: &'static str) -> Option<String> {
     use javascriptcore::ValueExt;
     use webkit2gtk::WebViewExt;
     let window = app.get_webview_window(MAIN)?;
@@ -351,7 +355,7 @@ async fn read(app: &AppHandle) -> Option<Preview> {
     window
         .with_webview(move |webview| {
             webview.inner().evaluate_javascript(
-                READ,
+                script,
                 None,
                 None,
                 None::<&webkit2gtk::gio::Cancellable>,
@@ -361,11 +365,17 @@ async fn read(app: &AppHandle) -> Option<Preview> {
             );
         })
         .ok()?;
-    let json = tokio::time::timeout(Duration::from_secs(2), receive)
+    tokio::time::timeout(Duration::from_secs(2), receive)
         .await
         .ok()?
-        .ok()??;
-    parse(&json)
+        .ok()?
+}
+
+async fn read(app: &AppHandle) -> Option<Preview> {
+    if let Some(preview) = crate::handover::preview(app) {
+        return Some(preview);
+    }
+    parse(&evaluate(app, READ).await?)
 }
 
 async fn announce(connection: &Connection, old: Option<&Preview>, new: Option<&Preview>) {
@@ -422,6 +432,9 @@ pub fn control(app: &AppHandle, action: &str) {
 }
 
 pub fn control_at(app: &AppHandle, action: &str, seconds: f64) {
+    if crate::handover::control(app, action, seconds) {
+        return;
+    }
     if let (Some(window), Some(js)) = (app.get_webview_window(MAIN), script(action, seconds)) {
         let _ = window.eval(js);
     }

@@ -98,6 +98,17 @@
   </supports>
 
   <releases>
+    <release version="0.9.0" date="2026-11-16">
+      <description>
+        <p>Music that keeps playing on far less memory.</p>
+        <ul>
+          <li>When you close the window while music plays, the app's own player takes over the same queue at the same second and the page is closed, so the app uses about half the memory</li>
+          <li>Media keys, the mini player, the tray and Discord keep working, songs still count as plays, and the next song follows without a gap</li>
+          <li>Open the window again and the page carries on from where the app's player is</li>
+          <li>Turn it off in Settings to keep the page playing in the background as before</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-11-15">
       <description>
         <p>Your music in your Discord status.</p>

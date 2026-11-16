@@ -41,6 +41,8 @@ pub struct Track {
     pub cover: Option<String>,
     #[serde(default)]
     pub gain: Option<Gain>,
+    #[serde(default)]
+    pub duration: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -495,7 +497,12 @@ impl Engine {
             })
     }
 
-    fn length(&self) -> Option<f64> {
+    fn known_length(&self) -> Option<f64> {
+        self.stream_length()
+            .or_else(|| self.track().and_then(|track| track.duration))
+    }
+
+    fn stream_length(&self) -> Option<f64> {
         self.playbin
             .query_duration::<gst::ClockTime>()
             .map(|time| time.nseconds() as f64 / 1e9)
@@ -503,7 +510,7 @@ impl Engine {
     }
 
     fn seek(&mut self, seconds: f64) {
-        let seconds = match self.length() {
+        let seconds = match self.known_length() {
             Some(length) => seconds.clamp(0.0, length),
             None => seconds.max(0.0),
         };
@@ -648,7 +655,7 @@ impl Engine {
         let Some(seconds) = self.seek_when_ready else {
             return;
         };
-        if self.released || self.length().is_none() {
+        if self.released || self.stream_length().is_none() {
             return;
         }
         let target = gst::ClockTime::from_nseconds((seconds * 1e9) as u64);
@@ -674,7 +681,8 @@ impl Engine {
             return;
         }
         let Some(track) = self.track() else { return };
-        if track.song_id.is_some() && counts_as_play(self.heard, self.length().unwrap_or(0.0)) {
+        if track.song_id.is_some() && counts_as_play(self.heard, self.known_length().unwrap_or(0.0))
+        {
             self.counted = true;
             (self.report)("play", track);
         }
@@ -710,7 +718,7 @@ impl Engine {
             cover: cover_for(&self.server, track),
             playing: self.want_playing && !self.released,
             position,
-            length: self.length(),
+            length: self.stream_length().or(track.duration),
             has_next: next_index(
                 queue.at,
                 queue.tracks.len(),
@@ -872,17 +880,20 @@ mod tests {
             album: album.map(str::to_string),
             cover: Some("/api/navidrome/cover/al-1".into()),
             gain: None,
+            duration: Some(60.0),
         }
     }
 
     #[test]
     fn reads_the_queue_the_page_hands_over() {
-        let json = r#"{"tracks":[{"trackId":"a-1","songId":"nd-1","title":"One","artist":"A","album":"X","gain":{"track":-6,"album":-4,"trackPeak":0.9}},{"trackId":"a-2","title":"Two","artist":"A"}],"position":1,"time":12.5,"playing":true,"volume":0.7,"muted":false,"levelling":true,"repeat":"all"}"#;
+        let json = r#"{"tracks":[{"trackId":"a-1","songId":"nd-1","title":"One","artist":"A","album":"X","duration":245,"gain":{"track":-6,"album":-4,"trackPeak":0.9}},{"trackId":"a-2","title":"Two","artist":"A"}],"position":1,"time":12.5,"playing":true,"volume":0.7,"muted":false,"levelling":true,"repeat":"all"}"#;
         let handover = parse_handover(json).unwrap();
         assert_eq!(handover.tracks.len(), 2);
         assert_eq!(handover.tracks[0].song_id.as_deref(), Some("nd-1"));
         assert_eq!(handover.tracks[0].gain.as_ref().unwrap().album, Some(-4.0));
         assert_eq!(handover.tracks[1].song_id, None);
+        assert_eq!(handover.tracks[0].duration, Some(245.0));
+        assert_eq!(handover.tracks[1].duration, None);
         assert_eq!(handover.time, 12.5);
         assert_eq!(parse_handover("null"), None);
         assert_eq!(

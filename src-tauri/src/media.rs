@@ -52,7 +52,15 @@ const READ: &str = r#"(() => {
     cover: meta.artwork?.[0]?.src ?? null,
     playing: !audio.paused && !audio.ended,
     position: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
-    length: Number.isFinite(audio.duration) ? audio.duration : null,
+    length: Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : (() => {
+      try {
+        const queue = JSON.parse(localStorage.getItem("soundscape:queue") ?? "null");
+        const track = queue?.tracks?.[queue.order?.[queue.position]];
+        return typeof track?.duration === "number" && track.duration > 0 ? track.duration : null;
+      } catch {
+        return null;
+      }
+    })(),
     hasNext: Boolean(document.querySelector('[data-player="next"]:not([disabled])')),
     hasPrevious: Boolean(document.querySelector('[data-player="previous"]')),
     shuffle: (() => {

@@ -1,22 +1,71 @@
 use crate::AppState;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
-const EVERY: Duration = Duration::from_secs(5);
+const EVERY: Duration = Duration::from_secs(3);
 const RETRY_AFTER: Duration = Duration::from_secs(30);
 const HANDSHAKE: u32 = 0;
 const FRAME: u32 = 1;
 const LONGEST_TEXT: usize = 128;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Playing {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Song {
     pub title: String,
     pub artist: String,
     pub album: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Playing {
+    pub song: Song,
+    pub position: Option<f64>,
+    pub length: Option<f64>,
+    pub art: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Shown {
+    pub song: Song,
+    pub start_ms: u64,
+    pub end_ms: Option<u64>,
+    pub image: String,
+}
+
+pub const LOGO: &str =
+    "https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/src-tauri/icons/icon.png";
+const DRIFT_MS: u64 = 2000;
+
+pub fn public_art(art: Option<&str>, server_host: Option<&str>) -> Option<String> {
+    let art = art?;
+    let url = url::Url::parse(art).ok()?;
+    (url.scheme() == "https" && url.host_str().is_some() && url.host_str() != server_host)
+        .then(|| art.to_string())
+}
+
+pub fn timing(now_ms: u64, position: Option<f64>, length: Option<f64>) -> (u64, Option<u64>) {
+    let start = now_ms.saturating_sub((position.unwrap_or(0.0).max(0.0) * 1000.0) as u64);
+    let end = length
+        .filter(|length| *length > 0.0)
+        .map(|length| start + (length * 1000.0) as u64);
+    (start, end)
+}
+
+pub fn needs_update(before: Option<&Shown>, after: Option<&Shown>) -> bool {
+    match (before, after) {
+        (None, None) => false,
+        (Some(before), Some(after)) => {
+            before.song != after.song
+                || before.image != after.image
+                || before.end_ms.is_some() != after.end_ms.is_some()
+                || before.start_ms.abs_diff(after.start_ms) > DRIFT_MS
+        }
+        _ => true,
+    }
 }
 
 pub fn valid_app_id(text: &str) -> bool {
@@ -56,22 +105,25 @@ fn short(text: &str) -> String {
     out
 }
 
-pub fn activity(playing: Option<&Playing>, started: u64, pid: u32, nonce: u64) -> Value {
-    let activity = playing.map(|song| {
-        let mut assets = json!({});
-        if let Some(album) = song
+pub fn activity(shown: Option<&Shown>, pid: u32, nonce: u64) -> Value {
+    let activity = shown.map(|shown| {
+        let mut timestamps = json!({ "start": shown.start_ms });
+        if let Some(end) = shown.end_ms {
+            timestamps["end"] = json!(end);
+        }
+        let label = shown
+            .song
             .album
             .as_deref()
             .filter(|album| !album.trim().is_empty())
-        {
-            assets = json!({ "large_text": short(album) });
-        }
+            .unwrap_or(&shown.song.title);
         json!({
             "type": 2,
-            "details": short(&song.title),
-            "state": short(&format!("by {}", song.artist)),
-            "timestamps": { "start": started },
-            "assets": assets,
+            "status_display_type": 0,
+            "details": short(&shown.song.title),
+            "state": short(&format!("by {}", shown.song.artist)),
+            "timestamps": timestamps,
+            "assets": { "large_image": shown.image, "large_text": short(label) },
         })
     });
     json!({
@@ -85,19 +137,66 @@ fn current(app: &AppHandle) -> Option<Playing> {
     let state = app.state::<AppState>();
     if let Some(source) = state.mini().filter(|source| source.playing) {
         return Some(Playing {
-            title: source.track.title,
-            artist: source.track.artist,
-            album: source.track.album,
+            song: Song {
+                title: source.track.title,
+                artist: source.track.artist,
+                album: source.track.album,
+            },
+            position: source.position_ms.map(|ms| ms as f64 / 1000.0),
+            length: source.track.length_ms.map(|ms| ms as f64 / 1000.0),
+            art: source.art,
         });
     }
     state
         .preview()
         .filter(|preview| preview.playing)
         .map(|preview| Playing {
-            title: preview.title,
-            artist: preview.artist,
-            album: preview.album,
+            song: Song {
+                title: preview.title,
+                artist: preview.artist,
+                album: preview.album,
+            },
+            position: Some(preview.position),
+            length: preview.length,
+            art: preview.cover,
         })
+}
+
+#[derive(serde::Deserialize)]
+struct CoverLink {
+    url: Option<String>,
+}
+
+fn image_for(app: &AppHandle, playing: &Playing, known: &mut HashMap<Song, String>) -> String {
+    if let Some(image) = known.get(&playing.song) {
+        return image.clone();
+    }
+    let credentials = crate::server::credentials(app);
+    let server_host = credentials
+        .as_ref()
+        .and_then(|(server, _)| server.host_str().map(str::to_string));
+    let image = public_art(playing.art.as_deref(), server_host.as_deref())
+        .or_else(|| {
+            let (server, token) = credentials?;
+            let song = &playing.song;
+            tauri::async_runtime::block_on(crate::server::get_json::<CoverLink>(
+                &server,
+                &token,
+                "/api/cover-link",
+                &[
+                    ("artist", song.artist.as_str()),
+                    ("title", song.title.as_str()),
+                ],
+            ))
+            .ok()?
+            .url
+        })
+        .unwrap_or_else(|| LOGO.to_string());
+    if known.len() > 200 {
+        known.clear();
+    }
+    known.insert(playing.song.clone(), image.clone());
+    image
 }
 
 fn read_frame(stream: &mut UnixStream) -> std::io::Result<()> {
@@ -124,10 +223,10 @@ fn connect(app_id: &str) -> Option<UnixStream> {
     None
 }
 
-fn now_seconds() -> u64 {
+fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 
@@ -141,8 +240,8 @@ fn wanted(app: &AppHandle) -> Option<String> {
 pub fn run(app: AppHandle) {
     std::thread::spawn(move || {
         let mut stream: Option<(String, UnixStream)> = None;
-        let mut shown: Option<Option<Playing>> = None;
-        let mut started;
+        let mut shown: Option<Option<Shown>> = None;
+        let mut images: HashMap<Song, String> = HashMap::new();
         let mut nonce = 0u64;
         loop {
             let Some(app_id) = wanted(&app) else {
@@ -166,19 +265,27 @@ pub fn run(app: AppHandle) {
                     }
                 }
             }
-            let playing = current(&app);
-            if shown.as_ref() != Some(&playing) {
-                started = now_seconds();
+            let next = current(&app).map(|playing| {
+                let (start_ms, end_ms) = timing(now_ms(), playing.position, playing.length);
+                Shown {
+                    image: image_for(&app, &playing, &mut images),
+                    song: playing.song,
+                    start_ms,
+                    end_ms,
+                }
+            });
+            let changed = match &shown {
+                None => true,
+                Some(before) => needs_update(before.as_ref(), next.as_ref()),
+            };
+            if changed {
                 nonce += 1;
-                let message = frame(
-                    FRAME,
-                    &activity(playing.as_ref(), started, std::process::id(), nonce),
-                );
+                let message = frame(FRAME, &activity(next.as_ref(), std::process::id(), nonce));
                 let sent = stream.as_mut().is_some_and(|(_, socket)| {
                     socket.write_all(&message).is_ok() && read_frame(socket).is_ok()
                 });
                 if sent {
-                    shown = Some(playing);
+                    shown = Some(next);
                 } else {
                     stream = None;
                     continue;
@@ -222,33 +329,110 @@ mod tests {
         assert_eq!(&bytes[8..], br#"{"a":1}"#);
     }
 
+    fn song() -> Song {
+        Song {
+            title: "Need It".into(),
+            artist: "Migos".into(),
+            album: Some("Culture III".into()),
+        }
+    }
+
     #[test]
-    fn describes_the_song_as_listening() {
-        let song = Playing {
-            title: "Reckoner".into(),
-            artist: "Radiohead".into(),
-            album: Some("In Rainbows".into()),
+    fn describes_the_song_like_a_music_app() {
+        let shown = Shown {
+            song: song(),
+            start_ms: 1_700_000_000_000,
+            end_ms: Some(1_700_000_200_000),
+            image: "https://cdn.example/cover.jpg".into(),
         };
-        let message = activity(Some(&song), 1_700_000_000, 42, 7);
+        let message = activity(Some(&shown), 42, 7);
         assert_eq!(message["cmd"], "SET_ACTIVITY");
         assert_eq!(message["nonce"], "7");
         assert_eq!(message["args"]["pid"], 42);
-        let shown = &message["args"]["activity"];
-        assert_eq!(shown["type"], 2);
-        assert_eq!(shown["details"], "Reckoner");
-        assert_eq!(shown["state"], "by Radiohead");
-        assert_eq!(shown["timestamps"]["start"], 1_700_000_000u64);
-        assert_eq!(shown["assets"]["large_text"], "In Rainbows");
-        let cleared = activity(None, 0, 42, 8);
-        assert!(cleared["args"]["activity"].is_null());
-        let tiny = Playing {
-            title: "X".into(),
-            artist: "Y".into(),
-            album: None,
-        };
+        let sent = &message["args"]["activity"];
+        assert_eq!(sent["type"], 2);
+        assert_eq!(sent["details"], "Need It");
+        assert_eq!(sent["state"], "by Migos");
+        assert_eq!(sent["timestamps"]["start"], 1_700_000_000_000u64);
+        assert_eq!(sent["timestamps"]["end"], 1_700_000_200_000u64);
         assert_eq!(
-            activity(Some(&tiny), 0, 1, 1)["args"]["activity"]["details"],
-            "X "
+            sent["assets"]["large_image"],
+            "https://cdn.example/cover.jpg"
         );
+        assert_eq!(sent["assets"]["large_text"], "Culture III");
+        assert!(activity(None, 42, 8)["args"]["activity"].is_null());
+        let open_ended = Shown {
+            end_ms: None,
+            ..shown
+        };
+        assert!(
+            activity(Some(&open_ended), 1, 1)["args"]["activity"]["timestamps"]
+                .get("end")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn works_out_where_the_song_started_and_ends() {
+        assert_eq!(
+            timing(100_000, Some(30.0), Some(200.0)),
+            (70_000, Some(270_000))
+        );
+        assert_eq!(timing(100_000, None, None), (100_000, None));
+        assert_eq!(timing(10_000, Some(30.0), Some(0.0)), (0, None));
+    }
+
+    #[test]
+    fn only_uses_covers_anyone_can_see() {
+        assert_eq!(
+            public_art(Some("https://i.scdn.co/image/abc"), Some("music.example")).as_deref(),
+            Some("https://i.scdn.co/image/abc")
+        );
+        assert_eq!(
+            public_art(
+                Some("https://music.example/api/navidrome/cover/1"),
+                Some("music.example")
+            ),
+            None
+        );
+        assert_eq!(
+            public_art(Some("file:///home/me/cover.jpg"), Some("music.example")),
+            None
+        );
+        assert_eq!(public_art(Some("http://cdn.example/a.jpg"), None), None);
+        assert_eq!(public_art(None, None), None);
+    }
+
+    #[test]
+    fn sends_again_only_when_something_shows_differently() {
+        let first = Shown {
+            song: song(),
+            start_ms: 100_000,
+            end_ms: Some(300_000),
+            image: LOGO.into(),
+        };
+        let a_moment_later = Shown {
+            start_ms: 100_900,
+            end_ms: Some(300_900),
+            ..first.clone()
+        };
+        let after_a_seek = Shown {
+            start_ms: 60_000,
+            end_ms: Some(260_000),
+            ..first.clone()
+        };
+        assert!(!needs_update(Some(&first), Some(&a_moment_later)));
+        assert!(needs_update(Some(&first), Some(&after_a_seek)));
+        assert!(needs_update(Some(&first), None));
+        assert!(needs_update(None, Some(&first)));
+        assert!(!needs_update(None, None));
+        let other_song = Shown {
+            song: Song {
+                title: "Bad and Boujee".into(),
+                ..song()
+            },
+            ..first.clone()
+        };
+        assert!(needs_update(Some(&first), Some(&other_song)));
     }
 }

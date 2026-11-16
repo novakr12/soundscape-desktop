@@ -98,6 +98,16 @@
   </supports>
 
   <releases>
+    <release version="0.9.4" date="2026-11-17">
+      <description>
+        <p>A Discord status that looks like a music app's.</p>
+        <ul>
+          <li>The album cover, with the album name when you point at it, and a progress bar with the song's length</li>
+          <li>Jumping in a song moves the bar, and pausing clears the status</li>
+          <li>Covers come from the player, or from your Soundscape server when it's on https; otherwise the Soundscape logo</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.3" date="2026-11-16">
       <description>
         <p>Song lengths everywhere.</p>

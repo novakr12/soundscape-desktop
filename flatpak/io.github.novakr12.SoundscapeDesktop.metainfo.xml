@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.1" date="2026-11-16">
+      <description>
+        <p>No more pause when the player changes over.</p>
+        <ul>
+          <li>Closing the window: the app's player starts quietly in step with the page, then the two cross over in a third of a second, so the music doesn't stop</li>
+          <li>Opening it again: the app's player keeps playing while the page loads, and the page takes over in step the same way</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.0" date="2026-11-16">
       <description>
         <p>Music that keeps playing on far less memory.</p>

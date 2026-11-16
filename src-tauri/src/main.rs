@@ -336,8 +336,9 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     let opener = app.clone();
     let config = app.state::<AppState>().config();
     let mut builder = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(start));
-    if let Some(script) = handover::hand_back(app) {
-        builder = builder.initialization_script(&script);
+    let handback = handover::handback_script(app);
+    if let Some(script) = &handback {
+        builder = builder.initialization_script(script);
     }
     builder
         .title("Soundscape")
@@ -351,6 +352,9 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
             tauri::webview::NewWindowResponse::Deny
         })
         .build()?;
+    if handback.is_some() {
+        tauri::async_runtime::spawn(handover::take_back(app.clone()));
+    }
     tray::refresh(app);
     Ok(())
 }

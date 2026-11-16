@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 const TICK: Duration = Duration::from_millis(250);
+const FADE_TICK: Duration = Duration::from_millis(20);
 const RESTART_AFTER_SECONDS: f64 = 3.0;
 const SHORTEST_SONG_SECONDS: f64 = 30.0;
 const LONGEST_WAIT_SECONDS: f64 = 240.0;
@@ -80,8 +81,78 @@ pub const READ_HANDOVER: &str = r#"(() => {
 pub const PAUSE_PAGE: &str =
     r#"(() => { for (const audio of document.querySelectorAll("audio")) audio.pause(); })()"#;
 
-pub const RESUME_PAGE: &str =
-    r#"(() => { document.querySelector(".player audio")?.play().catch(() => {}); })()"#;
+pub const PAGE_CLOCK: &str = r#"(() => {
+  const audio = document.querySelector(".player audio");
+  let queue = null;
+  try {
+    queue = JSON.parse(localStorage.getItem("soundscape:queue") ?? "null");
+  } catch {}
+  if (!audio || !audio.currentSrc) return "null";
+  return JSON.stringify({
+    time: audio.currentTime,
+    playing: !audio.paused && !audio.ended,
+    ready: audio.readyState >= 3,
+    position: typeof queue?.position === "number" ? queue.position : -1,
+    volume: audio.volume,
+  });
+})()"#;
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+pub struct PageClock {
+    pub time: f64,
+    pub playing: bool,
+    pub ready: bool,
+    pub position: i64,
+    pub volume: f64,
+}
+
+pub fn parse_page_clock(json: &str) -> Option<PageClock> {
+    serde_json::from_str::<Option<PageClock>>(json).ok()?
+}
+
+pub fn page_volume(volume: f64) -> String {
+    format!(
+        r#"(() => {{ const audio = document.querySelector(".player audio"); if (audio) audio.volume = {}; }})()"#,
+        volume.clamp(0.0, 1.0)
+    )
+}
+
+pub fn page_play_at(time: f64) -> String {
+    format!(
+        r#"(() => {{ const audio = document.querySelector(".player audio"); if (!audio) return; audio.volume = 0; audio.currentTime = {}; audio.play().catch(() => {{}}); }})()"#,
+        time.max(0.0)
+    )
+}
+
+pub fn page_move_to(time: f64) -> String {
+    format!(
+        r#"(() => {{ const audio = document.querySelector(".player audio"); if (audio) audio.currentTime = {}; }})()"#,
+        time.max(0.0)
+    )
+}
+
+pub fn page_pause_with_volume(volume: f64) -> String {
+    format!(
+        r#"(() => {{ const audio = document.querySelector(".player audio"); if (!audio) return; audio.pause(); audio.volume = {}; }})()"#,
+        volume.clamp(0.0, 1.0)
+    )
+}
+
+pub const IN_STEP: f64 = 0.06;
+
+pub fn in_step(drift: f64) -> bool {
+    drift.abs() <= IN_STEP
+}
+
+pub fn next_lead(lead: f64, drift: f64) -> f64 {
+    (lead - drift).clamp(0.0, 2.0)
+}
+
+pub fn fade_steps(from: f64, to: f64, steps: usize) -> Vec<f64> {
+    (1..=steps)
+        .map(|step| from + (to - from) * step as f64 / steps as f64)
+        .collect()
+}
 
 pub fn parse_handover(json: &str) -> Option<Handover> {
     let handover = serde_json::from_str::<Option<Handover>>(json).ok()??;
@@ -214,6 +285,7 @@ pub enum Command {
     SeekBy(f64),
     SeekTo(f64),
     Repeat,
+    FadeTo(f64, Duration),
     Stop,
 }
 
@@ -242,6 +314,19 @@ struct Queue {
 struct Shown {
     preview: Option<Preview>,
     resume: Resume,
+    clock: Option<Clock>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Clock {
+    at: usize,
+    position: f64,
+    measured: Instant,
+    moving: bool,
+}
+
+pub fn clock_now(at: usize, position: f64, elapsed: f64, moving: bool) -> (usize, f64) {
+    (at, if moving { position + elapsed } else { position })
 }
 
 pub struct Player {
@@ -260,6 +345,17 @@ impl Player {
 
     pub fn resume(&self) -> Resume {
         self.shown.lock().expect("shown lock").resume.clone()
+    }
+
+    pub fn now(&self) -> Option<(usize, f64, bool)> {
+        let clock = self.shown.lock().expect("shown lock").clock?;
+        let (at, position) = clock_now(
+            clock.at,
+            clock.position,
+            clock.measured.elapsed().as_secs_f64(),
+            clock.moving,
+        );
+        Some((at, position, clock.moving))
     }
 }
 
@@ -290,9 +386,42 @@ struct Engine {
     counted: bool,
     failures: u32,
     report: Report,
+    fade_gain: f64,
+    fade: Option<(f64, f64, Instant, Duration)>,
+    previous_position: Option<f64>,
 }
 
 impl Engine {
+    fn step_fade(&mut self) {
+        let Some((from, to, began, length)) = self.fade else {
+            return;
+        };
+        let done = (began.elapsed().as_secs_f64() / length.as_secs_f64().max(0.001)).min(1.0);
+        self.fade_gain = from + (to - from) * done;
+        if done >= 1.0 {
+            self.fade = None;
+        }
+        self.apply_volume();
+    }
+
+    fn measure(&mut self) {
+        let position = self.position();
+        let moving = self.want_playing
+            && !self.released
+            && self.seek_when_ready.is_none()
+            && self
+                .previous_position
+                .is_some_and(|before| position > before);
+        self.previous_position = Some(position);
+        let at = self.queue.lock().expect("queue lock").at;
+        self.shown.lock().expect("shown lock").clock = Some(Clock {
+            at,
+            position,
+            measured: Instant::now(),
+            moving,
+        });
+    }
+
     fn track(&self) -> Option<Track> {
         let queue = self.queue.lock().expect("queue lock");
         queue.tracks.get(queue.at).cloned()
@@ -311,8 +440,10 @@ impl Engine {
         } else {
             1.0
         };
-        self.playbin
-            .set_property("volume", (self.volume * level).clamp(0.0, 1.0));
+        self.playbin.set_property(
+            "volume",
+            (self.volume * level * self.fade_gain).clamp(0.0, 1.0),
+        );
         self.playbin.set_property("mute", self.muted);
     }
 
@@ -383,7 +514,7 @@ impl Engine {
         let target = gst::ClockTime::from_nseconds((seconds * 1e9) as u64);
         if self
             .playbin
-            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT, target)
+            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target)
             .is_err()
         {
             self.seek_when_ready = Some(seconds);
@@ -445,6 +576,10 @@ impl Engine {
             Command::Repeat => {
                 let mut queue = self.queue.lock().expect("queue lock");
                 queue.repeat = next_repeat(&queue.repeat).to_string();
+            }
+            Command::FadeTo(to, length) => {
+                self.fade = Some((self.fade_gain, to.clamp(0.0, 1.0), Instant::now(), length));
+                self.step_fade();
             }
             Command::Stop => {
                 let _ = self.playbin.set_state(gst::State::Null);
@@ -519,7 +654,7 @@ impl Engine {
         let target = gst::ClockTime::from_nseconds((seconds * 1e9) as u64);
         if self
             .playbin
-            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT, target)
+            .seek_simple(gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE, target)
             .is_ok()
         {
             self.seek_when_ready = None;
@@ -616,6 +751,7 @@ pub fn start(
     token: String,
     handover: Handover,
     report: Report,
+    silent: bool,
 ) -> Result<Player, String> {
     gst::init().map_err(|error| error.to_string())?;
     let playbin = gst::ElementFactory::make("playbin")
@@ -662,6 +798,7 @@ pub fn start(
             time: handover.time,
             playing: handover.playing,
         },
+        clock: None,
     }));
     let (commands, receive) = channel::<Command>();
     let mut engine = Engine {
@@ -683,13 +820,21 @@ pub fn start(
         counted: false,
         failures: 0,
         report,
+        fade_gain: if silent { 0.0 } else { 1.0 },
+        fade: None,
+        previous_position: None,
     };
     std::thread::Builder::new()
         .name("soundscape-player".into())
         .spawn(move || {
             engine.load(handover.position, handover.time);
             loop {
-                match receive.recv_timeout(TICK) {
+                let wait = if engine.fade.is_some() {
+                    FADE_TICK
+                } else {
+                    TICK
+                };
+                match receive.recv_timeout(wait) {
                     Ok(command) => {
                         if !engine.handle(command) {
                             break;
@@ -701,8 +846,10 @@ pub fn start(
                         break;
                     }
                 }
+                engine.step_fade();
                 engine.messages();
                 engine.seek_when_ready();
+                engine.measure();
                 engine.listen();
                 engine.release_when_quiet();
                 engine.publish();
@@ -843,6 +990,34 @@ mod tests {
         assert!(script.contains("queue.time = 61.4;"));
         assert!(script.contains(r#"=== "42""#));
         assert!(script.contains("if (true)"));
+    }
+
+    #[test]
+    fn lines_the_two_players_up() {
+        assert!(in_step(0.05));
+        assert!(in_step(-0.06));
+        assert!(!in_step(0.2));
+        assert_eq!(next_lead(0.25, 0.1), 0.15);
+        assert_eq!(next_lead(0.25, -0.3), 0.55);
+        assert_eq!(next_lead(0.1, 0.5), 0.0);
+        assert_eq!(
+            fade_steps(0.0, 0.8, 4),
+            vec![0.2, 0.4, 0.6000000000000001, 0.8]
+        );
+        let clock = parse_page_clock(
+            r#"{"time":12.5,"playing":true,"ready":true,"position":2,"volume":0.64}"#,
+        )
+        .unwrap();
+        assert_eq!(clock.position, 2);
+        assert_eq!(parse_page_clock("null"), None);
+        assert!(page_play_at(-1.0).contains("audio.currentTime = 0;"));
+        assert!(page_volume(2.0).contains("audio.volume = 1;"));
+    }
+
+    #[test]
+    fn keeps_time_between_measurements() {
+        assert_eq!(clock_now(2, 10.0, 0.25, true), (2, 10.25));
+        assert_eq!(clock_now(2, 10.0, 0.25, false), (2, 10.0));
     }
 
     #[test]

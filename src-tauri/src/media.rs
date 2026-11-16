@@ -347,7 +347,8 @@ impl Player {
     }
 }
 
-pub async fn evaluate(app: &AppHandle, script: &'static str) -> Option<String> {
+pub async fn evaluate(app: &AppHandle, script: impl Into<String>) -> Option<String> {
+    let script: String = script.into();
     use javascriptcore::ValueExt;
     use webkit2gtk::WebViewExt;
     let window = app.get_webview_window(MAIN)?;
@@ -355,7 +356,7 @@ pub async fn evaluate(app: &AppHandle, script: &'static str) -> Option<String> {
     window
         .with_webview(move |webview| {
             webview.inner().evaluate_javascript(
-                script,
+                &script,
                 None,
                 None,
                 None::<&webkit2gtk::gio::Cancellable>,

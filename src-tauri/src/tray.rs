@@ -298,7 +298,7 @@ fn show_update(app: &AppHandle, menu: &Menu<Wry>, version: Option<&str>) {
                 true,
                 None::<&str>,
             ) {
-                let _ = menu.insert(&item, 0);
+                let _ = menu.insert(&item, 1);
             }
         }
         (None, None) => {}
@@ -346,6 +346,8 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
+            &MenuItem::with_id(app, "tray-open", "Open Soundscape", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
             &listening,
             &today,
             &love,
@@ -359,7 +361,6 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
             &players,
             &friends,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "tray-open", "Open Soundscape", true, None::<&str>)?,
             &music,
             &MenuItem::with_id(app, MINI, "Mini player", true, None::<&str>)?,
             &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,

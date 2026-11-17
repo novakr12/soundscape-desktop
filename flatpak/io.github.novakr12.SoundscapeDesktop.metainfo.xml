@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.9" date="2026-11-17">
+      <description>
+        <p>One settings page.</p>
+        <ul>
+          <li>Settings (Ctrl+, the menu and the tray) now opens Soundscape's Settings page, where the app's settings are under This app, next to your account and the player</li>
+          <li>The small settings window is still there for title fixes, changing the server and signing out, and for when the server can't be reached</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.8" date="2026-11-17">
       <description>
         <p>Clearer settings.</p>

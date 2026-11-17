@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::{
-    connect_app, friends, love, mini, music, open_main, open_settings, open_settings_at,
-    open_setup, scrobbler, show, sign_out, toggle_pause, tray, AppState, MAIN,
+    connect_app, friends, love, mini, music, open_main, open_settings_at, open_setup, scrobbler,
+    show, sign_out, toggle_pause, tray, AppState, MAIN,
 };
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager};
@@ -25,7 +25,7 @@ pub fn build(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
-            &MenuItem::with_id(app, "settings", "App settings…", true, Some("CmdOrCtrl+,"))?,
+            &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
             &MenuItem::with_id(app, tray::MINI, "Mini player", true, Some("CmdOrCtrl+M"))?,
             &MenuItem::with_id(
                 app,
@@ -156,9 +156,7 @@ pub fn handle(app: &AppHandle, id: &str) {
         "change-server" => {
             let _ = open_setup(app);
         }
-        "settings" => {
-            let _ = open_settings(app);
-        }
+        "settings" => crate::settings_page::open(app),
         "sign-out" => sign_out(app),
         tray::CONNECT => connect_app(app),
         "tray-open" => show(app),

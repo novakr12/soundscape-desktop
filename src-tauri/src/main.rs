@@ -21,6 +21,7 @@ mod scrobbler;
 mod search;
 mod server;
 mod settings;
+mod settings_page;
 mod submit;
 mod tidy;
 mod today;
@@ -526,6 +527,7 @@ fn main() {
             tauri::async_runtime::spawn(today::run(app.handle().clone()));
             tauri::async_runtime::spawn(yearscape::run(app.handle().clone()));
             tauri::async_runtime::spawn(updates::run(app.handle().clone()));
+            tauri::async_runtime::spawn(settings_page::run(app.handle().clone()));
             discord::run(app.handle().clone());
             tauri::async_runtime::spawn(recap::run(app.handle().clone()));
             tauri::async_runtime::spawn(media::run(app.handle().clone()));

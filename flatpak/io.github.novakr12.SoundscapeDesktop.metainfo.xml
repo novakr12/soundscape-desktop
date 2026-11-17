@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.9.7" date="2026-11-17">
+      <description>
+        <p>The version also shows under the Soundscape logo on the home page.</p>
+        <ul>
+          <li>Needs an up-to-date Soundscape server</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.6" date="2026-11-17">
       <description>
         <p>See which version you have.</p>

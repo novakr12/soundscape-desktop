@@ -4,9 +4,13 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 use zbus::zvariant::Value;
 
-pub const SAME_WINDOW: &str = r#"(() => {
+pub const SAME_WINDOW: &str = concat!(
+    r#"(() => {
   if (window.top !== window) return;
   Object.defineProperty(window, "soundscapeDesktop", { value: true });
+  Object.defineProperty(window, "soundscapeDesktopVersion", { value: ""#,
+    env!("CARGO_PKG_VERSION"),
+    r#"" });
   document.addEventListener(
     "click",
     (event) => {
@@ -19,7 +23,8 @@ pub const SAME_WINDOW: &str = r#"(() => {
     if (address) window.location.assign(new URL(String(address), window.location.href).href);
     return null;
   };
-})();"#;
+})();"#
+);
 
 pub fn openable(target: &Url) -> bool {
     matches!(target.scheme(), "http" | "https" | "mailto")
@@ -59,6 +64,15 @@ pub fn open(app: &AppHandle, target: &Url) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tells_the_page_which_version_it_runs_in() {
+        let line = format!(
+            r#"Object.defineProperty(window, "soundscapeDesktopVersion", {{ value: "{}" }});"#,
+            env!("CARGO_PKG_VERSION")
+        );
+        assert!(SAME_WINDOW.contains(&line));
+    }
 
     #[test]
     fn opens_only_web_and_mail_links_outside() {

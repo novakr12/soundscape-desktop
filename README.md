@@ -77,7 +77,7 @@ Your artists and songs show up when you search from GNOME's Activities overview 
 
 Previews and full songs you play in the window work with your keyboard's media keys and your desktop's media controls (play, pause and seeking), and show up there with their cover. This needs a server new enough to describe its previews to the system.
 
-Settings (Ctrl+, or from the menu and the tray) has everything in one place: your account, scrobbling and players, plays waiting to be sent with a Send now button, notifications, starting when you log in, and keeping the app running when the window is closed. The version you have is at the bottom of Settings and at the top of the Soundscape menu; when a newer one is out, Settings says so and has a Download button.
+Settings (Ctrl+, or from the menu and the tray) has everything in one place: your account, scrobbling and players, plays waiting to be sent with a Send now button, notifications, starting when you log in, and keeping the app running when the window is closed. The version you have is at the bottom of Settings, at the top of the Soundscape menu and, with an up-to-date server, under the logo on the home page; when a newer one is out, Settings says so and has a Download button.
 
 Starting when you log in opens no window; the app scrobbles in the background until you open it from your apps. Outside Flatpak this writes `~/.config/autostart/io.github.novakr12.SoundscapeDesktop.desktop`; inside Flatpak it asks your desktop for permission instead.
 

@@ -348,6 +348,9 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     if let Some(script) = &handback {
         builder = builder.initialization_script(script);
     }
+    if links::wants_frame_counter(std::env::var("SOUNDSCAPE_SHOW_FPS").ok().as_deref()) {
+        builder = builder.initialization_script(links::FRAME_COUNTER);
+    }
     builder
         .title("Soundscape")
         .inner_size(1200.0, 820.0)

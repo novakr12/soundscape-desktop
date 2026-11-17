@@ -34,6 +34,14 @@ On first start it asks for your server's address, for example `https://music.exa
 
 Settings live in `~/.config/io.github.novakr12.SoundscapeDesktop/config.json`, readable only by you.
 
+To see how smoothly the window draws, start the app with a frame counter in its corner:
+
+```
+flatpak run --env=SOUNDSCAPE_SHOW_FPS=1 io.github.novakr12.SoundscapeDesktop
+```
+
+Quit it from the tray first, so the new start isn't handed to the copy already running. The number follows your screen's refresh rate while nothing is moving and drops when scrolling or an animation stutters.
+
 ## Scrobbling
 
 The app picks up what Linux music players are playing through MPRIS, the standard every player supports: Spotify, Strawberry, Rhythmbox, Elisa, Lollypop, Amberol, VLC, mpv with the MPRIS plugin, and video sites in your browser.

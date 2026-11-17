@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.9.10" date="2026-11-17">
+      <description>
+        <p>A frame counter for checking how smoothly the window draws.</p>
+        <ul>
+          <li>Start the app with SOUNDSCAPE_SHOW_FPS=1 to show frames per second in the corner of the window</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.9" date="2026-11-17">
       <description>
         <p>One settings page.</p>

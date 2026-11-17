@@ -50,6 +50,8 @@ pub struct SettingsView {
     pub sent_as: Option<SongView>,
     pub paused_minutes: Option<u64>,
     pub fixes: Vec<FixView>,
+    pub version: String,
+    pub update: Option<String>,
 }
 
 pub fn players(
@@ -137,6 +139,8 @@ pub fn view(app: &AppHandle) -> SettingsView {
                 FixView { from, to }
             })
             .collect(),
+        version: crate::updates::CURRENT.to_string(),
+        update: state.update_available(),
     }
 }
 
@@ -275,6 +279,7 @@ pub fn settings_action(app: AppHandle, action: String) {
         "connect" => crate::connect_app(&app),
         "open" => crate::show(&app),
         "pause" => crate::toggle_pause(&app),
+        "download" => crate::updates::open_downloads(&app),
         _ => {}
     }
 }

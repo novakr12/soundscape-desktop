@@ -16,6 +16,14 @@ pub fn build(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>
         "Soundscape",
         true,
         &[
+            &MenuItem::with_id(
+                app,
+                "version",
+                crate::updates::version_text(crate::updates::CURRENT),
+                false,
+                None::<&str>,
+            )?,
+            &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
             &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
             &MenuItem::with_id(app, tray::MINI, "Mini player", true, Some("CmdOrCtrl+M"))?,

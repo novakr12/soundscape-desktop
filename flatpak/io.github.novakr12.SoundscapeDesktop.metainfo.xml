@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.6" date="2026-11-17">
+      <description>
+        <p>See which version you have.</p>
+        <ul>
+          <li>The version is at the bottom of Settings and at the top of the Soundscape menu</li>
+          <li>When a newer version is out, Settings says so, with a Download button</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.5" date="2026-11-17">
       <description>
         <p>The Discord status always names the album.</p>

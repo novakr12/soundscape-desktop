@@ -329,3 +329,10 @@ body.mini main {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+.version {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}

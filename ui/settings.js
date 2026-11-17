@@ -27,6 +27,11 @@ function render(settings) {
     input.checked = settings[input.dataset.option];
   }
 
+  document.getElementById("version").textContent = settings.update
+    ? `Soundscape Desktop ${settings.version} · ${settings.update} is out`
+    : `Soundscape Desktop ${settings.version}`;
+  document.querySelector('[data-action="download"]').hidden = !settings.update;
+
   const discordApp = document.getElementById("discord-app");
   if (document.activeElement !== discordApp) discordApp.value = settings.discord_app_id ?? "";
 

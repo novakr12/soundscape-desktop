@@ -116,7 +116,7 @@ pub fn view(app: &AppHandle) -> MiniView {
             kind: "preview",
             title: preview.title,
             artist: preview.artist,
-            source: preview.album.unwrap_or_else(|| "Song preview".into()),
+            source: preview.album.unwrap_or_else(|| "Soundscape".into()),
             art: preview
                 .cover
                 .filter(|cover| cover.starts_with("https://") || cover.starts_with("http://")),

@@ -3649,7 +3649,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-desktop"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "gethostname",
  "gstreamer",

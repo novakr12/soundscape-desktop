@@ -34,6 +34,34 @@ pub struct Shown {
     pub start_ms: u64,
     pub end_ms: Option<u64>,
     pub image: String,
+    pub album: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Looked {
+    pub image: String,
+    pub album: Option<String>,
+}
+
+const NOT_ALBUMS: [&str; 4] = [
+    "Soundscape",
+    "30-second preview",
+    "Song preview",
+    "Unknown album",
+];
+pub const UNKNOWN_ALBUM: &str = "Unknown album";
+
+pub fn real_album(album: Option<&str>) -> Option<&str> {
+    album
+        .map(str::trim)
+        .filter(|album| !album.is_empty() && !NOT_ALBUMS.contains(album))
+}
+
+pub fn album_label(page: Option<&str>, looked: Option<&str>) -> String {
+    real_album(page)
+        .or_else(|| real_album(looked))
+        .unwrap_or(UNKNOWN_ALBUM)
+        .to_string()
 }
 
 pub const LOGO: &str =
@@ -61,6 +89,7 @@ pub fn needs_update(before: Option<&Shown>, after: Option<&Shown>) -> bool {
         (Some(before), Some(after)) => {
             before.song != after.song
                 || before.image != after.image
+                || before.album != after.album
                 || before.end_ms.is_some() != after.end_ms.is_some()
                 || before.start_ms.abs_diff(after.start_ms) > DRIFT_MS
         }
@@ -111,19 +140,13 @@ pub fn activity(shown: Option<&Shown>, pid: u32, nonce: u64) -> Value {
         if let Some(end) = shown.end_ms {
             timestamps["end"] = json!(end);
         }
-        let label = shown
-            .song
-            .album
-            .as_deref()
-            .filter(|album| !album.trim().is_empty())
-            .unwrap_or(&shown.song.title);
         json!({
             "type": 2,
             "status_display_type": 0,
             "details": short(&shown.song.title),
             "state": short(&format!("by {}", shown.song.artist)),
             "timestamps": timestamps,
-            "assets": { "large_image": shown.image, "large_text": short(label) },
+            "assets": { "large_image": shown.image, "large_text": short(&shown.album) },
         })
     });
     json!({
@@ -165,18 +188,22 @@ fn current(app: &AppHandle) -> Option<Playing> {
 #[derive(serde::Deserialize)]
 struct CoverLink {
     url: Option<String>,
+    #[serde(default)]
+    album: Option<String>,
 }
 
-fn image_for(app: &AppHandle, playing: &Playing, known: &mut HashMap<Song, String>) -> String {
-    if let Some(image) = known.get(&playing.song) {
-        return image.clone();
+fn look_up(app: &AppHandle, playing: &Playing, known: &mut HashMap<Song, Looked>) -> Looked {
+    if let Some(looked) = known.get(&playing.song) {
+        return looked.clone();
     }
     let credentials = crate::server::credentials(app);
     let server_host = credentials
         .as_ref()
         .and_then(|(server, _)| server.host_str().map(str::to_string));
-    let image = public_art(playing.art.as_deref(), server_host.as_deref())
-        .or_else(|| {
+    let art = public_art(playing.art.as_deref(), server_host.as_deref());
+    let page_album = real_album(playing.song.album.as_deref()).map(str::to_string);
+    let asked = (art.is_none() || page_album.is_none())
+        .then(|| {
             let (server, token) = credentials?;
             let song = &playing.song;
             tauri::async_runtime::block_on(crate::server::get_json::<CoverLink>(
@@ -188,15 +215,19 @@ fn image_for(app: &AppHandle, playing: &Playing, known: &mut HashMap<Song, Strin
                     ("title", song.title.as_str()),
                 ],
             ))
-            .ok()?
-            .url
+            .ok()
         })
-        .unwrap_or_else(|| LOGO.to_string());
+        .flatten();
+    let (url, album) = asked.map_or((None, None), |link| (link.url, link.album));
+    let looked = Looked {
+        image: art.or(url).unwrap_or_else(|| LOGO.to_string()),
+        album: page_album.or(album),
+    };
     if known.len() > 200 {
         known.clear();
     }
-    known.insert(playing.song.clone(), image.clone());
-    image
+    known.insert(playing.song.clone(), looked.clone());
+    looked
 }
 
 fn read_frame(stream: &mut UnixStream) -> std::io::Result<()> {
@@ -241,7 +272,7 @@ pub fn run(app: AppHandle) {
     std::thread::spawn(move || {
         let mut stream: Option<(String, UnixStream)> = None;
         let mut shown: Option<Option<Shown>> = None;
-        let mut images: HashMap<Song, String> = HashMap::new();
+        let mut looked: HashMap<Song, Looked> = HashMap::new();
         let mut nonce = 0u64;
         loop {
             let Some(app_id) = wanted(&app) else {
@@ -267,8 +298,10 @@ pub fn run(app: AppHandle) {
             }
             let next = current(&app).map(|playing| {
                 let (start_ms, end_ms) = timing(now_ms(), playing.position, playing.length);
+                let found = look_up(&app, &playing, &mut looked);
                 Shown {
-                    image: image_for(&app, &playing, &mut images),
+                    album: album_label(playing.song.album.as_deref(), found.album.as_deref()),
+                    image: found.image,
                     song: playing.song,
                     start_ms,
                     end_ms,
@@ -344,6 +377,7 @@ mod tests {
             start_ms: 1_700_000_000_000,
             end_ms: Some(1_700_000_200_000),
             image: "https://cdn.example/cover.jpg".into(),
+            album: "Culture III".into(),
         };
         let message = activity(Some(&shown), 42, 7);
         assert_eq!(message["cmd"], "SET_ACTIVITY");
@@ -370,6 +404,22 @@ mod tests {
                 .get("end")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn always_names_an_album() {
+        assert_eq!(album_label(Some("Culture III"), None), "Culture III");
+        assert_eq!(
+            album_label(Some("Soundscape"), Some("Culture III")),
+            "Culture III"
+        );
+        assert_eq!(album_label(None, Some("Culture III")), "Culture III");
+        assert_eq!(
+            album_label(Some("30-second preview"), None),
+            "Unknown album"
+        );
+        assert_eq!(album_label(Some("  "), Some("")), "Unknown album");
+        assert_eq!(album_label(None, None), "Unknown album");
     }
 
     #[test]
@@ -410,6 +460,7 @@ mod tests {
             start_ms: 100_000,
             end_ms: Some(300_000),
             image: LOGO.into(),
+            album: UNKNOWN_ALBUM.into(),
         };
         let a_moment_later = Shown {
             start_ms: 100_900,
@@ -434,5 +485,10 @@ mod tests {
             ..first.clone()
         };
         assert!(needs_update(Some(&first), Some(&other_song)));
+        let album_found = Shown {
+            album: "Culture III".into(),
+            ..first.clone()
+        };
+        assert!(needs_update(Some(&first), Some(&album_found)));
     }
 }

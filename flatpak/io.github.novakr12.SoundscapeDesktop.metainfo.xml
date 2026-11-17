@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.5" date="2026-11-17">
+      <description>
+        <p>The Discord status always names the album.</p>
+        <ul>
+          <li>Songs started from the home page or the feed show their album, looked up on your Soundscape server</li>
+          <li>When no album is known, the status says Unknown album</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.4" date="2026-11-17">
       <description>
         <p>A Discord status that looks like a music app's.</p>

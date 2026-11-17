@@ -363,7 +363,7 @@ pub fn create(app: &AppHandle, config: &Config) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &music,
             &MenuItem::with_id(app, MINI, "Mini player", true, None::<&str>)?,
-            &MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "settings", "App settings…", true, None::<&str>)?,
             &MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?,
         ],
     )?;

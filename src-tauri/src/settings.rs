@@ -280,6 +280,15 @@ pub fn settings_action(app: AppHandle, action: String) {
         "open" => crate::show(&app),
         "pause" => crate::toggle_pause(&app),
         "download" => crate::updates::open_downloads(&app),
+        "web-settings" => {
+            if let Some(page) = app
+                .state::<AppState>()
+                .server()
+                .and_then(|server| server.join("/settings").ok())
+            {
+                let _ = crate::open_main(&app, page);
+            }
+        }
         _ => {}
     }
 }

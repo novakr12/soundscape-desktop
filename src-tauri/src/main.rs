@@ -261,7 +261,7 @@ pub fn open_settings_at(app: &AppHandle, part: Option<&str>) -> tauri::Result<()
         None => "settings.html".into(),
     };
     WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(page.into()))
-        .title("Soundscape settings")
+        .title("Soundscape Desktop settings")
         .inner_size(520.0, 680.0)
         .min_inner_size(380.0, 420.0)
         .build()?;
@@ -286,6 +286,10 @@ fn handle_navigation(app: &AppHandle, target: &Url) -> bool {
     match server::classify(state.server().as_ref(), target) {
         Navigation::Allow => true,
         Navigation::Block => false,
+        Navigation::AppSettings => {
+            let _ = open_settings(app);
+            false
+        }
         Navigation::External => {
             links::open(app, target);
             false
@@ -321,6 +325,9 @@ fn open_new_window(app: &AppHandle, target: &Url) {
             }
         }
         Navigation::External => links::open(app, target),
+        Navigation::AppSettings => {
+            let _ = open_settings(app);
+        }
         Navigation::Block | Navigation::Connected { .. } => {}
     }
 }

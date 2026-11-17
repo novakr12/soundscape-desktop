@@ -25,7 +25,7 @@ pub fn build(app: &AppHandle, config: &Config) -> tauri::Result<Menu<tauri::Wry>
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
-            &MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?,
+            &MenuItem::with_id(app, "settings", "App settings…", true, Some("CmdOrCtrl+,"))?,
             &MenuItem::with_id(app, tray::MINI, "Mini player", true, Some("CmdOrCtrl+M"))?,
             &MenuItem::with_id(
                 app,

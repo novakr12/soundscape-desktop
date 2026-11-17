@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.8" date="2026-11-17">
+      <description>
+        <p>Clearer settings.</p>
+        <ul>
+          <li>The app's own settings are now called App settings, and say what is on Soundscape's Settings page instead</li>
+          <li>Each settings page has a button that opens the other one (Soundscape's needs an up-to-date server)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.7" date="2026-11-17">
       <description>
         <p>The version also shows under the Soundscape logo on the home page.</p>

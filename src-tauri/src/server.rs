@@ -169,6 +169,7 @@ pub fn device_name() -> String {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Navigation {
     Allow,
+    AppSettings,
     Connected { token: String, user: String },
     External,
     Block,
@@ -191,6 +192,9 @@ fn connected(pairs: url::form_urlencoded::Parse<'_>) -> Option<Navigation> {
 
 pub fn classify(server: Option<&Url>, target: &Url) -> Navigation {
     if target.scheme() == APP_SCHEME {
+        if target.host_str() == Some("settings") {
+            return Navigation::AppSettings;
+        }
         if target.host_str() != Some("connected") {
             return Navigation::Block;
         }
@@ -313,6 +317,10 @@ mod tests {
         assert_eq!(
             classify(here, &url("soundscape-desktop://other?token=a&user=b")),
             Navigation::Block
+        );
+        assert_eq!(
+            classify(here, &url("soundscape-desktop://settings")),
+            Navigation::AppSettings
         );
         assert_eq!(
             classify(

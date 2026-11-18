@@ -1,3 +1,4 @@
+mod glide;
 mod keys;
 mod pickers;
 mod profile;
@@ -8,11 +9,12 @@ use pickers::{Answer, Ask, Picked};
 use profile::Profile;
 use servo::{
     CompositionEvent, CompositionState, CreateNewWebViewRequest, Cursor, DevicePoint,
-    EmbedderControl, EmbedderControlId, EventLoopWaker, FilePicker, ImeEvent, InputEvent,
-    MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent,
-    NavigationRequest, Opts, RenderingContext, SelectElement, Servo, ServoBuilder, SimpleDialog,
-    Theme, UserContentManager, UserScript, WebView, WebViewBuilder, WebViewDelegate, WebViewPoint,
-    WheelDelta, WheelEvent, WheelMode, WindowRenderingContext,
+    DeviceVector2D, EmbedderControl, EmbedderControlId, EventLoopWaker, FilePicker, ImeEvent,
+    InputEvent, MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
+    MouseMoveEvent, NavigationRequest, Opts, RenderingContext, Scroll, SelectElement, Servo,
+    ServoBuilder, SimpleDialog, Theme, UserContentManager, UserScript, WebView, WebViewBuilder,
+    WebViewDelegate, WebViewPoint, WebViewVector, WheelDelta, WheelEvent, WheelMode,
+    WindowRenderingContext,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -27,7 +29,6 @@ use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::{CursorIcon, Window, WindowId};
 
-const SMOOTH_WHEEL: &str = include_str!("smooth_wheel.js");
 const FRAME_COUNTER: &str = include_str!("frame_counter.js");
 const FORM_ENTER: &str = include_str!("form_enter.js");
 const CONTROLS: &str = include_str!("controls.css");
@@ -72,6 +73,8 @@ struct Shell {
     asked: Cell<u64>,
     typing: RefCell<Option<EmbedderControlId>>,
     composing: Cell<bool>,
+    smooth: bool,
+    glide: RefCell<glide::Glide>,
     server: Option<Url>,
     nonce: String,
     debug: bool,
@@ -491,9 +494,6 @@ impl App {
                 place,
             )));
         }
-        if profile.smooth_scrolling {
-            scripts.add_script(Rc::new(UserScript::new(SMOOTH_WHEEL.into(), None)));
-        }
         if let Some(extra) = std::env::var_os("SOUNDSCAPE_EXTRA_SCRIPT")
             .and_then(|path| std::fs::read_to_string(path).ok())
         {
@@ -513,6 +513,8 @@ impl App {
             asked: Cell::new(0),
             typing: RefCell::new(None),
             composing: Cell::new(false),
+            smooth: profile.smooth_scrolling,
+            glide: RefCell::new(glide::Glide::default()),
             server: profile.server.clone(),
             nonce: nonce(),
             debug: profile::wants(std::env::var("SOUNDSCAPE_DEBUG").ok().as_deref()),
@@ -586,8 +588,21 @@ impl ApplicationHandler<Wake> for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
+                let moved = shell.glide.borrow_mut().tick(std::time::Instant::now());
+                if let Some((x, y)) = moved {
+                    let (left, top) = shell.glide.borrow().point();
+                    webview.notify_scroll_event(
+                        Scroll::Delta(WebViewVector::Device(DeviceVector2D::new(
+                            x as f32, y as f32,
+                        ))),
+                        WebViewPoint::Device(DevicePoint::new(left as f32, top as f32)),
+                    );
+                }
                 webview.paint();
                 shell.context.present();
+                if shell.glide.borrow().active() {
+                    shell.window.request_redraw();
+                }
             }
             WindowEvent::Resized(size) => webview.resize(size),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -652,6 +667,21 @@ impl ApplicationHandler<Wake> for App {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let (x, y) = wheel(delta, shell.window.scale_factor());
+                if shell.debug {
+                    eprintln!("wheel {delta:?}");
+                }
+                if shell.smooth
+                    && matches!(delta, MouseScrollDelta::LineDelta(..))
+                    && !shell.held.get().control_key()
+                {
+                    let at = shell.pointer.get();
+                    shell
+                        .glide
+                        .borrow_mut()
+                        .add(-x, -y, (at.x, at.y), std::time::Instant::now());
+                    shell.window.request_redraw();
+                    return;
+                }
                 let mode = WheelMode::DeltaPixel;
                 shell.send(InputEvent::Wheel(WheelEvent::new(
                     WheelDelta { x, y, z: 0.0, mode },

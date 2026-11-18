@@ -47,6 +47,15 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+pub fn smooth_scrolling(window: &tauri::WebviewWindow, enabled: bool) {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+    let _ = window.with_webview(move |webview| {
+        if let Some(settings) = webview.inner().settings() {
+            settings.set_enable_smooth_scrolling(enabled);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

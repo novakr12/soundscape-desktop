@@ -41,6 +41,7 @@ pub struct SettingsView {
     pub native_player: bool,
     pub cpu_rendering: bool,
     pub cpu_rendering_now: bool,
+    pub smooth_scrolling: bool,
     pub discord_app_id: Option<String>,
     pub keep_running: bool,
     pub autostart: bool,
@@ -109,6 +110,7 @@ pub fn view(app: &AppHandle) -> SettingsView {
         native_player: config.native_player,
         cpu_rendering: config.cpu_rendering,
         cpu_rendering_now: crate::rendering::active(),
+        smooth_scrolling: config.smooth_scrolling,
         discord_app_id: config.discord_app_id.clone(),
         keep_running: config.keep_running,
         autostart: config.autostart,
@@ -177,6 +179,12 @@ pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<Set
         }
         "cpu_rendering" => {
             state.update(|config| config.cpu_rendering = value);
+        }
+        "smooth_scrolling" => {
+            state.update(|config| config.smooth_scrolling = value);
+            if let Some(window) = app.get_webview_window(crate::MAIN) {
+                crate::rendering::smooth_scrolling(&window, value);
+            }
         }
         "discord" => {
             state.update(|config| config.discord = value);

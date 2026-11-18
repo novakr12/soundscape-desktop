@@ -352,7 +352,7 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     if links::wants_frame_counter(std::env::var("SOUNDSCAPE_SHOW_FPS").ok().as_deref()) {
         builder = builder.initialization_script(links::FRAME_COUNTER);
     }
-    builder
+    let window = builder
         .title("Soundscape")
         .inner_size(1200.0, 820.0)
         .min_inner_size(380.0, 480.0)
@@ -364,6 +364,7 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
             tauri::webview::NewWindowResponse::Deny
         })
         .build()?;
+    rendering::smooth_scrolling(&window, config.smooth_scrolling);
     if handback.is_some() {
         tauri::async_runtime::spawn(handover::take_back(app.clone()));
     }

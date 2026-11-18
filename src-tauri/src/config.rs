@@ -63,6 +63,8 @@ pub struct Config {
     pub native_player: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub cpu_rendering: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub smooth_scrolling: bool,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -118,6 +120,7 @@ impl Default for Config {
             discord_app_id: None,
             native_player: true,
             cpu_rendering: true,
+            smooth_scrolling: true,
         }
     }
 }

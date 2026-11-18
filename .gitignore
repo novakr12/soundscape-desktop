@@ -1,5 +1,6 @@
 src-tauri/target/
 src-tauri/gen/
+servo-shell/target/
 flatpak/.flatpak-builder/
 flatpak/build-dir/
 flatpak/repo/

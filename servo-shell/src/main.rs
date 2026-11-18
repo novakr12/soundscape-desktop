@@ -764,8 +764,15 @@ impl ApplicationHandler<Wake> for App {
 }
 
 fn main() {
-    let profile = profile::load();
+    let mut profile = profile::load();
+    profile.cpu_rendering = software::guard(profile.storage.as_deref(), profile.cpu_rendering);
     let ours = software::prepare(profile.cpu_rendering);
+    let settling = profile.storage.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(software::SETTLED_AFTER);
+        software::settled(settling.as_deref());
+    });
+    let storage = profile.storage.clone();
     if profile::wants(std::env::var("SOUNDSCAPE_DEBUG").ok().as_deref()) {
         for name in &ours {
             eprintln!("set {name}={}", std::env::var(name).unwrap_or_default());
@@ -799,6 +806,7 @@ fn main() {
         eprintln!("Soundscape stopped: {error}");
     }
     drop(app);
+    software::settled(storage.as_deref());
     if RESTART.load(std::sync::atomic::Ordering::Relaxed)
         && let Ok(me) = std::env::current_exe()
     {

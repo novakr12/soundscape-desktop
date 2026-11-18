@@ -5,12 +5,13 @@
   const PAINTS = ["fill", "stroke", "stop-color", "flood-color", "lighting-color", "color", "style"];
   const NUDGE = "data-soundscape-redraw";
   const COPY = "data-soundscape-copy";
-  const GAP_MS = 33;
-  const KEEP_MS = 120;
+  const GAP_MS = 16;
+  const KEEP_MS = 80;
   const copies = new WeakMap();
   const originals = new WeakMap();
   const families = new WeakMap();
   let stamps = 0;
+  const tokens = new WeakMap();
   const pending = new Set();
   let resolving = false;
   let nudges = 0;
@@ -35,7 +36,14 @@
     if (element.localName === "text" && !families.has(element)) {
       const given = element.getAttribute("font-family") || getComputedStyle(element).fontFamily;
       families.set(element, given ? `${given}, sans-serif` : "sans-serif");
-      stamp(element);
+      const svg = element.ownerSVGElement ?? element.closest("svg");
+      let token = svg ? tokens.get(svg) : undefined;
+      if (token === undefined) {
+        stamps += 1;
+        token = stamps;
+        if (svg) tokens.set(svg, token);
+      }
+      stamp(element, token);
     }
     for (const name of PAINTS) {
       const value = element.getAttribute(name);
@@ -52,9 +60,8 @@
     }
   };
 
-  const stamp = (text) => {
-    stamps += 1;
-    text.setAttribute("font-family", `soundscape-${stamps}, ${families.get(text)}`);
+  const stamp = (text, token) => {
+    text.setAttribute("font-family", `soundscape-${token}, ${families.get(text)}`);
   };
 
   const fixTree = (root) => {
@@ -84,13 +91,35 @@
   };
 
   const restamp = (root) => {
+    stamps += 1;
+    tokens.set(root, stamps);
     for (const text of root.querySelectorAll("text")) {
       if (!families.has(text)) {
         const given = text.getAttribute("font-family") || "sans-serif";
         families.set(text, given.replace(/^soundscape-\d+,\s*/, ""));
       }
-      stamp(text);
+      stamp(text, stamps);
     }
+  };
+
+  const backdrop = (element) => {
+    for (let at = element; at && at.nodeType === 1; at = at.parentElement) {
+      const color = getComputedStyle(at).backgroundColor;
+      if (color && color !== "transparent" && !/^rgba\(.*,\s*0\)$/.test(color)) return color;
+    }
+    return getComputedStyle(document.body).backgroundColor || "#111111";
+  };
+
+  const cover = (copy, color) => {
+    const box = copy.viewBox?.baseVal;
+    const fill = document.createElementNS(SVG, "rect");
+    const wide = box && box.width > 0 ? box : null;
+    fill.setAttribute("x", String(wide ? wide.x - wide.width : -10000));
+    fill.setAttribute("y", String(wide ? wide.y - wide.height : -10000));
+    fill.setAttribute("width", String(wide ? wide.width * 3 : 20000));
+    fill.setAttribute("height", String(wide ? wide.height * 3 : 20000));
+    fill.setAttribute("fill", color);
+    copy.prepend(fill);
   };
 
   const layer = (svg) => {
@@ -111,6 +140,7 @@
     copy.style.pointerEvents = "none";
     copy.style.opacity = "1";
     restamp(copy);
+    cover(copy, backdrop(svg.parentElement));
     const older = copies.get(svg) ?? [];
     if (older.length > 0) older.at(-1).after(copy);
     else parent.prepend(copy);

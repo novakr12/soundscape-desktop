@@ -9,6 +9,46 @@ const VENDOR_DIRS: [&str; 3] = [
     "/usr/lib/x86_64-linux-gnu/GL/glvnd/egl_vendor.d",
 ];
 
+const STARTING: &str = "starting";
+pub const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
+
+pub fn after_crash(crashed: bool, cpu_rendering: bool) -> Option<bool> {
+    crashed.then_some(!cpu_rendering)
+}
+
+pub fn starting_marker(storage: &Path) -> PathBuf {
+    storage.join(STARTING)
+}
+
+pub fn guard(storage: Option<&Path>, cpu_rendering: bool) -> bool {
+    let Some(dir) = storage else {
+        return cpu_rendering;
+    };
+    let marker = starting_marker(dir);
+    let flipped = after_crash(marker.exists(), cpu_rendering);
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(&marker, b"");
+    match flipped {
+        Some(now) => {
+            let mut own = crate::bridge::load(Some(dir));
+            own.cpu_rendering = Some(now);
+            crate::bridge::save(Some(dir), &own);
+            eprintln!(
+                "Soundscape didn't start properly last time, so CPU rendering is now {}.",
+                if now { "on" } else { "off" }
+            );
+            now
+        }
+        None => cpu_rendering,
+    }
+}
+
+pub fn settled(storage: Option<&Path>) {
+    if let Some(dir) = storage {
+        let _ = std::fs::remove_file(starting_marker(dir));
+    }
+}
+
 pub fn mesa_vendor(exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     VENDOR_DIRS
         .iter()
@@ -74,6 +114,26 @@ mod tests {
             to_set(true, |name| name == EGL_VENDORS, mesa),
             vec![(SOFTWARE, "1".to_string())]
         );
+    }
+
+    #[test]
+    fn flips_cpu_rendering_after_a_crashed_start() {
+        assert_eq!(after_crash(true, true), Some(false));
+        assert_eq!(after_crash(true, false), Some(true));
+        assert_eq!(after_crash(false, true), None);
+        let dir =
+            std::env::temp_dir().join(format!("soundscape-servo-guard-{}", std::process::id()));
+        assert!(guard(Some(&dir), true));
+        assert!(starting_marker(&dir).exists());
+        assert!(!guard(Some(&dir), true));
+        assert_eq!(crate::bridge::load(Some(&dir)).cpu_rendering, Some(false));
+        settled(Some(&dir));
+        assert!(!starting_marker(&dir).exists());
+        assert!(guard(Some(&dir), true));
+        settled(Some(&dir));
+        let _ = std::fs::remove_file(crate::bridge::own_file(&dir));
+        let _ = std::fs::remove_dir(&dir);
+        assert!(!guard(None, false));
     }
 
     #[test]

@@ -21,6 +21,7 @@ pub enum Command {
     TestNotification,
     Download,
     Window,
+    Restart,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +118,7 @@ async fn perform(app: &AppHandle, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::Window => crate::open_settings(app).map_err(|error| error.to_string()),
+        Command::Restart => app.restart(),
     }
 }
 
@@ -169,6 +171,7 @@ mod tests {
             json!({ "do": "test-notification" }),
             json!({ "do": "download" }),
             json!({ "do": "window" }),
+            json!({ "do": "restart" }),
             json!({ "do": "sign-out" }),
             json!({ "do": "option", "name": "scrobbling", "value": "no" }),
             json!("pause"),
@@ -192,6 +195,7 @@ mod tests {
                 Command::TestNotification,
                 Command::Download,
                 Command::Window,
+                Command::Restart,
             ]
         );
         assert_eq!(commands(vec![json!({ "do": "pause" }); 50]).len(), 20);

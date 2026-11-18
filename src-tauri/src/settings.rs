@@ -39,6 +39,8 @@ pub struct SettingsView {
     pub update_notice: bool,
     pub discord: bool,
     pub native_player: bool,
+    pub cpu_rendering: bool,
+    pub cpu_rendering_now: bool,
     pub discord_app_id: Option<String>,
     pub keep_running: bool,
     pub autostart: bool,
@@ -105,6 +107,8 @@ pub fn view(app: &AppHandle) -> SettingsView {
         update_notice: config.update_notice,
         discord: config.discord,
         native_player: config.native_player,
+        cpu_rendering: config.cpu_rendering,
+        cpu_rendering_now: crate::rendering::active(),
         discord_app_id: config.discord_app_id.clone(),
         keep_running: config.keep_running,
         autostart: config.autostart,
@@ -170,6 +174,9 @@ pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<Set
         }
         "native_player" => {
             state.update(|config| config.native_player = value);
+        }
+        "cpu_rendering" => {
+            state.update(|config| config.cpu_rendering = value);
         }
         "discord" => {
             state.update(|config| config.discord = value);
@@ -280,6 +287,7 @@ pub fn settings_action(app: AppHandle, action: String) {
         "open" => crate::show(&app),
         "pause" => crate::toggle_pause(&app),
         "download" => crate::updates::open_downloads(&app),
+        "restart" => app.restart(),
         "web-settings" => {
             if let Some(page) = app
                 .state::<AppState>()

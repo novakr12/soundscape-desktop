@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.11" date="2026-11-18">
+      <description>
+        <p>Smoother scrolling, especially with NVIDIA graphics.</p>
+        <ul>
+          <li>Pages are now drawn with the processor by default, which keeps scrolling smooth on high refresh rate screens</li>
+          <li>Turn it off with Enable CPU rendering under This app on the Settings page, or in the app's own settings window</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.10" date="2026-11-17">
       <description>
         <p>A frame counter for checking how smoothly the window draws.</p>

@@ -16,6 +16,7 @@ mod notify;
 mod queue;
 mod recap;
 mod relay;
+mod rendering;
 mod scrobble;
 mod scrobbler;
 mod search;
@@ -488,6 +489,9 @@ fn start(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    if let Some(dir) = rendering::config_dir() {
+        rendering::prepare(&dir);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
             if !args.iter().any(|arg| arg == autostart::BACKGROUND_FLAG) {

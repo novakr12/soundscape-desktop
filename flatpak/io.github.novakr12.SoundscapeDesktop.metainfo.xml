@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.16" date="2026-11-18">
+      <description>
+        <p>Opening the window while a song plays in the background no longer stutters.</p>
+        <ul>
+          <li>The window stays silent until it has caught up with the background player, then the two fade over</li>
+          <li>The two players line up more closely before they switch</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.15" date="2026-11-18">
       <description>
         <p>Fixes the app closing right after it starts on Wayland desktops that enforce explicit sync, with NVIDIA graphics.</p>

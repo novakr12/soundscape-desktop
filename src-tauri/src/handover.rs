@@ -63,10 +63,18 @@ const START_LEAD: f64 = 1.0;
 const FIRST_LEAD: f64 = 0.25;
 const FADE: Duration = Duration::from_millis(300);
 const FADE_STEPS: usize = 10;
-const ROUNDS: usize = 4;
+const ROUNDS: usize = 6;
 
 async fn page_clock(app: &AppHandle) -> Option<native::PageClock> {
     native::parse_page_clock(&crate::media::evaluate(app, native::PAGE_CLOCK).await?)
+}
+
+fn age(page: &native::PageClock) -> f64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    native::page_age(page.at, now)
 }
 
 async fn wait_moving(player: &Player, limit: Duration) -> bool {
@@ -84,6 +92,14 @@ async fn wait_moving(player: &Player, limit: Duration) -> bool {
         tokio::time::sleep(Duration::from_millis(60)).await;
     }
     false
+}
+
+async fn fade_in_page(app: &AppHandle) {
+    let step = FADE / FADE_STEPS as u32;
+    for gain in native::fade_steps(0.0, 1.0, FADE_STEPS) {
+        let _ = crate::media::evaluate(app, native::page_hold(gain)).await;
+        tokio::time::sleep(step).await;
+    }
 }
 
 async fn fade_page(app: &AppHandle, from: f64, to: f64) {
@@ -107,7 +123,7 @@ async fn line_up_with_page(
         if page.position != at as i64 || native_at != at || !page.playing {
             return None;
         }
-        let drift = native_time - page.time;
+        let drift = native_time - age(&page) - page.time;
         if native::in_step(drift) {
             return Some(page);
         }
@@ -246,47 +262,48 @@ pub async fn take_back(app: AppHandle) {
         hand_back(&app);
         return;
     }
-    let Some(page) = page_ready(&app, at, Duration::from_secs(25)).await else {
+    if page_ready(&app, at, Duration::from_secs(25))
+        .await
+        .is_none()
+    {
         if let Some(player) = drop_player(&app) {
             if let Some((_, time, _)) = player.now() {
                 drop(player);
                 let _ = crate::media::evaluate(&app, native::page_play_at(time)).await;
-                let _ = crate::media::evaluate(&app, native::page_volume(1.0)).await;
+                let _ = crate::media::evaluate(&app, native::PAGE_RELEASE).await;
             }
         }
         return;
-    };
-    let volume = page.volume;
+    }
     let mut lead = FIRST_LEAD;
     let Some((_, time, _)) = with_player(&app, Player::now).flatten() else {
         return;
     };
     let _ = crate::media::evaluate(&app, native::page_play_at(time + lead)).await;
-    let mut lined_up = false;
+    let mut moving = false;
     for _ in 0..ROUNDS {
         let Some(page) = page_moving(&app, Duration::from_secs(4)).await else {
             break;
         };
+        moving = true;
         let Some((native_at, native_time, _)) = with_player(&app, Player::now).flatten() else {
             break;
         };
         if native_at != at || page.position != at as i64 {
             break;
         }
-        let drift = page.time - native_time;
+        let drift = page.time - (native_time - age(&page));
         if native::in_step(drift) {
-            lined_up = true;
             break;
         }
         lead = native::next_lead(lead, drift);
         let _ = crate::media::evaluate(&app, native::page_move_to(native_time + lead)).await;
         tokio::time::sleep(Duration::from_millis(80)).await;
     }
-    if lined_up {
+    if moving {
         with_player(&app, |player| player.send(Command::FadeTo(0.0, FADE)));
-        fade_page(&app, 0.0, volume).await;
-    } else {
-        let _ = crate::media::evaluate(&app, native::page_volume(volume)).await;
+        fade_in_page(&app).await;
     }
+    let _ = crate::media::evaluate(&app, native::PAGE_RELEASE).await;
     hand_back(&app);
 }

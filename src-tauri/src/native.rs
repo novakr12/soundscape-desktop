@@ -96,6 +96,7 @@ pub const PAGE_CLOCK: &str = r#"(() => {
     ready: audio.readyState >= 3,
     position: typeof queue?.position === "number" ? queue.position : -1,
     volume: audio.volume,
+    at: Date.now(),
   });
 })()"#;
 
@@ -106,7 +107,48 @@ pub struct PageClock {
     pub ready: bool,
     pub position: i64,
     pub volume: f64,
+    #[serde(default)]
+    pub at: f64,
 }
+
+pub const LONGEST_AGE: f64 = 0.5;
+
+pub fn page_age(at: f64, now: f64) -> f64 {
+    if at > 0.0 {
+        ((now - at) / 1000.0).clamp(0.0, LONGEST_AGE)
+    } else {
+        0.0
+    }
+}
+
+const HOLD: &str = r#"const hold = (audio, gain) => {
+    const real = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume");
+    if (!Object.prototype.hasOwnProperty.call(audio, "volume")) {
+      let wanted = real.get.call(audio);
+      Object.defineProperty(audio, "volume", { configurable: true, get: () => wanted, set: (value) => { wanted = value; } });
+    }
+    real.set.call(audio, Math.min(Math.max(audio.volume * gain, 0), 1));
+  };"#;
+
+pub fn page_hold(gain: f64) -> String {
+    format!(
+        r#"(() => {{
+  {HOLD}
+  const audio = document.querySelector(".player audio");
+  if (audio) hold(audio, {});
+}})()"#,
+        gain.clamp(0.0, 1.0)
+    )
+}
+
+pub const PAGE_RELEASE: &str = r#"(() => {
+  for (const audio of document.querySelectorAll("audio")) {
+    if (!Object.prototype.hasOwnProperty.call(audio, "volume")) continue;
+    const wanted = audio.volume;
+    delete audio.volume;
+    audio.volume = wanted;
+  }
+})()"#;
 
 pub fn parse_page_clock(json: &str) -> Option<PageClock> {
     serde_json::from_str::<Option<PageClock>>(json).ok()?
@@ -121,7 +163,14 @@ pub fn page_volume(volume: f64) -> String {
 
 pub fn page_play_at(time: f64) -> String {
     format!(
-        r#"(() => {{ const audio = document.querySelector(".player audio"); if (!audio) return; audio.volume = 0; audio.currentTime = {}; audio.play().catch(() => {{}}); }})()"#,
+        r#"(() => {{
+  {HOLD}
+  const audio = document.querySelector(".player audio");
+  if (!audio) return;
+  hold(audio, 0);
+  audio.currentTime = {};
+  audio.play().catch(() => {{}});
+}})()"#,
         time.max(0.0)
     )
 }
@@ -1022,7 +1071,25 @@ mod tests {
         assert_eq!(clock.position, 2);
         assert_eq!(parse_page_clock("null"), None);
         assert!(page_play_at(-1.0).contains("audio.currentTime = 0;"));
+        assert!(page_play_at(3.0).contains("hold(audio, 0);"));
+        assert!(page_hold(0.5).contains("hold(audio, 0.5);"));
+        assert!(page_hold(2.0).contains("hold(audio, 1);"));
+        assert!(PAGE_RELEASE.contains("delete audio.volume;"));
+        assert_eq!(clock.at, 0.0);
+        let stamped = parse_page_clock(
+            r#"{"time":1,"playing":true,"ready":true,"position":0,"volume":1,"at":1000}"#,
+        )
+        .unwrap();
+        assert_eq!(stamped.at, 1000.0);
         assert!(page_volume(2.0).contains("audio.volume = 1;"));
+    }
+
+    #[test]
+    fn knows_how_old_a_page_reading_is() {
+        assert_eq!(page_age(1000.0, 1080.0), 0.08);
+        assert_eq!(page_age(1000.0, 990.0), 0.0);
+        assert_eq!(page_age(1000.0, 9000.0), LONGEST_AGE);
+        assert_eq!(page_age(0.0, 9000.0), 0.0);
     }
 
     #[test]

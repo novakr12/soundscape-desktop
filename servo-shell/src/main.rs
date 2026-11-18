@@ -3,6 +3,7 @@ mod glide;
 mod keys;
 mod pickers;
 mod profile;
+mod software;
 mod theme;
 
 use euclid::Scale;
@@ -41,6 +42,7 @@ const APP_ID: &str = "soundscape-servo";
 enum Wake {
     Servo,
     Poll,
+    Push,
     Quit,
     Theme(Theme),
     Answer(u64, Answer),
@@ -76,6 +78,8 @@ struct Shell {
     typing: RefCell<Option<EmbedderControlId>>,
     composing: Cell<bool>,
     smooth: Cell<bool>,
+    cpu: Cell<bool>,
+    cpu_now: bool,
     storage: Option<std::path::PathBuf>,
     glide: RefCell<glide::Glide>,
     server: Option<Url>,
@@ -180,7 +184,12 @@ impl Shell {
     fn push_settings(&self) {
         if let Some(webview) = self.webview() {
             webview.evaluate_javascript(
-                bridge::settings_script(env!("CARGO_PKG_VERSION"), self.smooth.get()),
+                bridge::settings_script(&bridge::Shown {
+                    version: env!("CARGO_PKG_VERSION"),
+                    smooth_scrolling: self.smooth.get(),
+                    cpu_rendering: self.cpu.get(),
+                    cpu_rendering_now: self.cpu_now,
+                }),
                 |_| {},
             );
         }
@@ -199,12 +208,23 @@ impl Shell {
             };
             for command in bridge::commands(&json) {
                 match command {
+                    bridge::Command::CpuRendering(on) => {
+                        shell.cpu.set(on);
+                        let mut own = bridge::load(shell.storage.as_deref());
+                        own.cpu_rendering = Some(on);
+                        bridge::save(shell.storage.as_deref(), &own);
+                        let _ = shell.proxy.send_event(Wake::Push);
+                    }
+                    bridge::Command::Restart => {
+                        RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
+                        let _ = shell.proxy.send_event(Wake::Quit);
+                    }
                     bridge::Command::SmoothScrolling(on) => {
                         shell.smooth.set(on);
                         let mut own = bridge::load(shell.storage.as_deref());
                         own.smooth_scrolling = Some(on);
                         bridge::save(shell.storage.as_deref(), &own);
-                        shell.push_settings();
+                        let _ = shell.proxy.send_event(Wake::Push);
                     }
                 }
             }
@@ -328,7 +348,7 @@ impl WebViewDelegate for Shell {
 
     fn notify_load_status_changed(&self, _: WebView, status: servo::LoadStatus) {
         if matches!(status, servo::LoadStatus::Complete) {
-            self.push_settings();
+            let _ = self.proxy.send_event(Wake::Push);
         }
     }
 
@@ -444,6 +464,8 @@ impl WebViewDelegate for Shell {
     }
 }
 
+static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 thread_local! {
     static ME: RefCell<Weak<Shell>> = const { RefCell::new(Weak::new()) };
 }
@@ -557,6 +579,8 @@ impl App {
             typing: RefCell::new(None),
             composing: Cell::new(false),
             smooth: Cell::new(profile.smooth_scrolling),
+            cpu: Cell::new(profile.cpu_rendering),
+            cpu_now: profile.cpu_rendering,
             storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
             server: profile.server.clone(),
@@ -606,6 +630,7 @@ impl ApplicationHandler<Wake> for App {
         match wake {
             Wake::Servo => shell.servo.spin_event_loop(),
             Wake::Poll => shell.take_commands(),
+            Wake::Push => shell.push_settings(),
             Wake::Quit => {
                 shell.close();
                 event_loop.exit();
@@ -739,6 +764,13 @@ impl ApplicationHandler<Wake> for App {
 }
 
 fn main() {
+    let profile = profile::load();
+    let ours = software::prepare(profile.cpu_rendering);
+    if profile::wants(std::env::var("SOUNDSCAPE_DEBUG").ok().as_deref()) {
+        for name in &ours {
+            eprintln!("set {name}={}", std::env::var(name).unwrap_or_default());
+        }
+    }
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let event_loop = EventLoop::<Wake>::with_user_event()
         .build()
@@ -762,11 +794,21 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(400));
         }
     });
-    let mut app = App::Starting(proxy, profile::load());
+    let mut app = App::Starting(proxy, profile);
     if let Err(error) = event_loop.run_app(&mut app) {
         eprintln!("Soundscape stopped: {error}");
     }
     drop(app);
+    if RESTART.load(std::sync::atomic::Ordering::Relaxed)
+        && let Ok(me) = std::env::current_exe()
+    {
+        let mut again = std::process::Command::new(me);
+        again.args(std::env::args().skip(1));
+        for name in ours {
+            again.env_remove(name);
+        }
+        let _ = again.spawn();
+    }
 }
 
 #[cfg(test)]

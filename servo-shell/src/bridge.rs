@@ -13,6 +13,8 @@ const OWN_FILE: &str = "settings.json";
 pub struct Own {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smooth_scrolling: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_rendering: Option<bool>,
 }
 
 pub fn own_file(storage: &Path) -> PathBuf {
@@ -36,12 +38,21 @@ pub fn save(storage: Option<&Path>, own: &Own) {
     }
 }
 
-pub fn settings_script(version: &str, smooth_scrolling: bool) -> String {
+pub struct Shown<'a> {
+    pub version: &'a str,
+    pub smooth_scrolling: bool,
+    pub cpu_rendering: bool,
+    pub cpu_rendering_now: bool,
+}
+
+pub fn settings_script(shown: &Shown) -> String {
     let detail = serde_json::json!({
         "settings": {
             "app": "servo",
-            "version": version,
-            "smooth_scrolling": smooth_scrolling,
+            "version": shown.version,
+            "smooth_scrolling": shown.smooth_scrolling,
+            "cpu_rendering": shown.cpu_rendering,
+            "cpu_rendering_now": shown.cpu_rendering_now,
         },
         "error": null,
     });
@@ -57,6 +68,8 @@ pub fn settings_script(version: &str, smooth_scrolling: bool) -> String {
 #[derive(Debug, PartialEq)]
 pub enum Command {
     SmoothScrolling(bool),
+    CpuRendering(bool),
+    Restart,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +90,10 @@ pub fn commands(json: &str) -> Vec<Command> {
                 ("option", Some("smooth_scrolling"), Some(value)) => {
                     Some(Command::SmoothScrolling(value))
                 }
+                ("option", Some("cpu_rendering"), Some(value)) => {
+                    Some(Command::CpuRendering(value))
+                }
+                ("restart", _, _) => Some(Command::Restart),
                 _ => None,
             },
         )
@@ -89,7 +106,14 @@ mod tests {
 
     #[test]
     fn hands_the_page_its_settings() {
-        let script = settings_script("0.1.0", false);
+        let script = settings_script(&Shown {
+            version: "0.1.0",
+            smooth_scrolling: false,
+            cpu_rendering: true,
+            cpu_rendering_now: false,
+        });
+        assert!(script.contains(r#""cpu_rendering":true"#));
+        assert!(script.contains(r#""cpu_rendering_now":false"#));
         assert!(script.contains(r#""app":"servo""#));
         assert!(script.contains(r#""smooth_scrolling":false"#));
         assert!(script.contains(r#""version":"0.1.0""#));
@@ -100,9 +124,13 @@ mod tests {
     fn reads_the_page_commands() {
         assert_eq!(
             commands(
-                r#"[{"do":"option","name":"smooth_scrolling","value":false},{"do":"send-now"},{"do":"option","name":"discord","value":true},5]"#
+                r#"[{"do":"option","name":"smooth_scrolling","value":false},{"do":"send-now"},{"do":"option","name":"discord","value":true},5,{"do":"option","name":"cpu_rendering","value":true},{"do":"restart"}]"#
             ),
-            vec![Command::SmoothScrolling(false)]
+            vec![
+                Command::SmoothScrolling(false),
+                Command::CpuRendering(true),
+                Command::Restart
+            ]
         );
         assert!(commands("nonsense").is_empty());
         assert!(commands("[]").is_empty());
@@ -117,9 +145,11 @@ mod tests {
             Some(&dir),
             &Own {
                 smooth_scrolling: Some(false),
+                cpu_rendering: Some(true),
             },
         );
         assert_eq!(load(Some(&dir)).smooth_scrolling, Some(false));
+        assert_eq!(load(Some(&dir)).cpu_rendering, Some(true));
         let _ = std::fs::remove_file(own_file(&dir));
         let _ = std::fs::remove_dir(&dir);
         assert_eq!(load(None), Own::default());

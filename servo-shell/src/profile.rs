@@ -17,6 +17,7 @@ fn yes() -> bool {
 
 pub struct Profile {
     pub server: Option<Url>,
+    pub cpu_rendering: bool,
     pub smooth_scrolling: bool,
     pub storage: Option<PathBuf>,
     pub show_fps: bool,
@@ -78,12 +79,14 @@ pub fn load() -> Profile {
     let given = std::env::args()
         .nth(1)
         .or_else(|| std::env::var("SOUNDSCAPE_SERVER").ok());
+    let own = crate::bridge::load(storage.as_deref());
     Profile {
+        cpu_rendering: own.cpu_rendering.unwrap_or(false),
         server: server_from(
             given.as_deref(),
             saved.as_ref().and_then(|saved| saved.server.as_deref()),
         ),
-        smooth_scrolling: crate::bridge::load(storage.as_deref())
+        smooth_scrolling: own
             .smooth_scrolling
             .or(saved.map(|saved| saved.smooth_scrolling))
             .unwrap_or(true),

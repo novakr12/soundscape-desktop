@@ -3,16 +3,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub const CPU_RENDERING: &str = "WEBKIT_SKIA_ENABLE_CPU_RENDERING";
-pub const NO_DMABUF: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
 const IDENTIFIER: &str = "io.github.novakr12.SoundscapeDesktop";
+const STARTING: &str = "starting";
+pub const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+static RECOVERED: AtomicBool = AtomicBool::new(false);
 
 pub fn to_set(enabled: bool, present: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static str)> {
     if !enabled {
         return Vec::new();
     }
-    [(CPU_RENDERING, "1"), (NO_DMABUF, "1")]
+    [(CPU_RENDERING, "1")]
         .into_iter()
         .filter(|(name, _)| !present(name))
         .collect()
@@ -30,8 +32,22 @@ pub fn config_dir() -> Option<PathBuf> {
     Some(base.join(IDENTIFIER))
 }
 
+pub fn after_crash(crashed: bool, cpu_rendering: bool) -> bool {
+    crashed && cpu_rendering
+}
+
 pub fn prepare(dir: &Path) {
-    let config = Config::load(dir);
+    let mut config = Config::load(dir);
+    let marker = dir.join(STARTING);
+    if after_crash(marker.exists(), config.cpu_rendering) {
+        config.cpu_rendering = false;
+        if config.save(dir).is_ok() {
+            RECOVERED.store(true, Ordering::Relaxed);
+        }
+    }
+    if std::fs::create_dir_all(dir).is_ok() {
+        let _ = std::fs::write(&marker, b"");
+    }
     for (name, value) in to_set(config.cpu_rendering, |name| {
         std::env::var_os(name).is_some()
     }) {
@@ -47,10 +63,19 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+pub fn recovered() -> bool {
+    RECOVERED.load(Ordering::Relaxed)
+}
+
+pub fn settled(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(STARTING));
+}
+
 pub const SMOOTH_WHEEL: &str = r#"(() => {
   if (window.top !== window || window.soundscapeSmoothWheelReady) return;
   window.soundscapeSmoothWheelReady = true;
-  const DURATION = 140;
+  const STIFFNESS = 0.024;
+  const STEP_MS = 4;
   const LINE = 40;
   const glides = new WeakMap();
   const isWheel = (event) =>
@@ -82,22 +107,41 @@ pub const SMOOTH_WHEEL: &str = r#"(() => {
       const most = element.scrollHeight - element.clientHeight;
       let glide = glides.get(element);
       if (!glide) {
-        glide = { from: 0, to: element.scrollTop, start: 0, frame: 0 };
+        glide = { at: element.scrollTop, speed: 0, target: element.scrollTop, last: 0, frame: 0 };
         glides.set(element, glide);
       }
-      const base = glide.frame ? glide.to : element.scrollTop;
-      const to = Math.max(0, Math.min(most, base + step));
-      if (to === element.scrollTop && !glide.frame) return;
+      if (!glide.frame) {
+        glide.at = element.scrollTop;
+        glide.target = element.scrollTop;
+        glide.speed = 0;
+      }
+      const target = Math.max(0, Math.min(most, glide.target + step));
+      if (target === glide.target && !glide.frame) return;
       event.preventDefault();
-      glide.from = element.scrollTop;
-      glide.to = to;
-      glide.start = performance.now();
+      glide.target = target;
       if (glide.frame) return;
+      glide.last = performance.now();
       const move = (now) => {
-        const done = Math.min(1, (now - glide.start) / DURATION);
-        const eased = 1 - (1 - done) ** 3;
-        element.scrollTop = glide.from + (glide.to - glide.from) * eased;
-        glide.frame = done < 1 ? requestAnimationFrame(move) : 0;
+        if (Math.abs(element.scrollTop - glide.at) > 2) {
+          glide.frame = 0;
+          return;
+        }
+        let passed = Math.min(now - glide.last, 50);
+        glide.last = now;
+        while (passed > 0) {
+          const step = Math.min(passed, STEP_MS);
+          const pull = STIFFNESS * STIFFNESS * (glide.target - glide.at) - 2 * STIFFNESS * glide.speed;
+          glide.speed += pull * step;
+          glide.at += glide.speed * step;
+          passed -= step;
+        }
+        glide.at = Math.max(0, Math.min(element.scrollHeight - element.clientHeight, glide.at));
+        if (Math.abs(glide.target - glide.at) < 0.5 && Math.abs(glide.speed) < 0.01) {
+          glide.at = glide.target;
+          glide.speed = 0;
+        }
+        element.scrollTop = glide.at;
+        glide.frame = glide.at === glide.target ? 0 : requestAnimationFrame(move);
       };
       glide.frame = requestAnimationFrame(move);
     },
@@ -125,16 +169,36 @@ mod tests {
 
     #[test]
     fn turns_cpu_rendering_on_unless_asked_otherwise() {
-        assert_eq!(
-            to_set(true, |_| false),
-            vec![(CPU_RENDERING, "1"), (NO_DMABUF, "1")]
-        );
-        assert_eq!(
-            to_set(true, |name| name == NO_DMABUF),
-            vec![(CPU_RENDERING, "1")]
-        );
-        assert!(to_set(true, |_| true).is_empty());
+        assert_eq!(to_set(true, |_| false), vec![(CPU_RENDERING, "1")]);
+        assert!(to_set(true, |name| name == CPU_RENDERING).is_empty());
         assert!(to_set(false, |_| false).is_empty());
+    }
+
+    #[test]
+    fn turns_cpu_rendering_off_after_a_crash() {
+        assert!(after_crash(true, true));
+        assert!(!after_crash(true, false));
+        assert!(!after_crash(false, true));
+    }
+
+    #[test]
+    fn remembers_a_start_until_it_settles() {
+        let dir = std::env::temp_dir().join(format!("soundscape-rendering-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = Config {
+            cpu_rendering: true,
+            ..Config::default()
+        };
+        config.save(&dir).unwrap();
+        std::fs::write(dir.join(STARTING), b"").unwrap();
+        prepare(&dir);
+        assert!(recovered());
+        assert!(!Config::load(&dir).cpu_rendering);
+        assert!(dir.join(STARTING).exists());
+        settled(&dir);
+        assert!(!dir.join(STARTING).exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -478,6 +478,10 @@ pub fn stays_running(config: &config::Config) -> bool {
 }
 
 fn handle_run_event(app: &AppHandle, event: RunEvent) {
+    if let RunEvent::Exit = event {
+        rendering::settled(&app.state::<AppState>().dir);
+        return;
+    }
     if let RunEvent::ExitRequested {
         code: None, api, ..
     } = event
@@ -513,6 +517,18 @@ fn main() {
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let config = Config::load(&dir);
+            let settling = dir.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(rendering::SETTLED_AFTER).await;
+                rendering::settled(&settling);
+            });
+            if rendering::recovered() {
+                let _ = notify::show_notification(
+                    app.handle(),
+                    "Soundscape turned off CPU rendering",
+                    "The app closed right after starting last time. Turn Enable CPU rendering back on under This app on the Settings page.",
+                );
+            }
             app.manage(AppState {
                 config: Mutex::new(config.clone()),
                 dir,

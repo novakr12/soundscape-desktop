@@ -343,6 +343,7 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
     }
     let handle = app.clone();
     let opener = app.clone();
+    let loader = app.clone();
     let config = app.state::<AppState>().config();
     let mut builder = WebviewWindowBuilder::new(app, MAIN, WebviewUrl::External(start));
     let handback = handover::handback_script(app);
@@ -359,6 +360,14 @@ pub fn open_main(app: &AppHandle, start: Url) -> tauri::Result<()> {
         .menu(menu::build(app, &config)?)
         .on_navigation(move |target| handle_navigation(&handle, target))
         .initialization_script(links::SAME_WINDOW)
+        .initialization_script(rendering::SMOOTH_WHEEL)
+        .initialization_script(rendering::wheel_switch(config.smooth_scrolling))
+        .on_page_load(move |window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let smooth = loader.state::<AppState>().config().smooth_scrolling;
+                rendering::smooth_scrolling(&window, smooth);
+            }
+        })
         .on_new_window(move |target, _| {
             open_new_window(&opener, &target);
             tauri::webview::NewWindowResponse::Deny

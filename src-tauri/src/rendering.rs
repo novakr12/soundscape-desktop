@@ -47,13 +47,76 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
+pub const SMOOTH_WHEEL: &str = r#"(() => {
+  if (window.top !== window || window.soundscapeSmoothWheelReady) return;
+  window.soundscapeSmoothWheelReady = true;
+  const DURATION = 140;
+  const LINE = 40;
+  const glides = new WeakMap();
+  const isWheel = (event) =>
+    event.deltaMode !== 0 ||
+    (event.wheelDeltaY !== 0 && event.wheelDeltaY % 120 === 0) ||
+    (Number.isInteger(event.deltaY) && Math.abs(event.deltaY) >= 40);
+  const canScroll = (element, down) => {
+    const style = getComputedStyle(element);
+    if (!/(auto|scroll)/.test(style.overflowY)) return false;
+    if (element.scrollHeight <= element.clientHeight) return false;
+    return down ? element.scrollTop + element.clientHeight < element.scrollHeight - 1 : element.scrollTop > 0;
+  };
+  const scrollerFor = (target, down) => {
+    for (let element = target instanceof Element ? target : null; element && element !== document.body; element = element.parentElement) {
+      if (element === document.documentElement) break;
+      if (canScroll(element, down)) return element;
+    }
+    return document.scrollingElement;
+  };
+  addEventListener(
+    "wheel",
+    (event) => {
+      if (window.soundscapeSmoothWheel === false) return;
+      if (event.defaultPrevented || event.ctrlKey || event.shiftKey || event.deltaX !== 0 || event.deltaY === 0) return;
+      if (!isWheel(event)) return;
+      const element = scrollerFor(event.target, event.deltaY > 0);
+      if (!element) return;
+      const step = event.deltaMode === 1 ? event.deltaY * LINE : event.deltaMode === 2 ? event.deltaY * element.clientHeight : event.deltaY;
+      const most = element.scrollHeight - element.clientHeight;
+      let glide = glides.get(element);
+      if (!glide) {
+        glide = { from: 0, to: element.scrollTop, start: 0, frame: 0 };
+        glides.set(element, glide);
+      }
+      const base = glide.frame ? glide.to : element.scrollTop;
+      const to = Math.max(0, Math.min(most, base + step));
+      if (to === element.scrollTop && !glide.frame) return;
+      event.preventDefault();
+      glide.from = element.scrollTop;
+      glide.to = to;
+      glide.start = performance.now();
+      if (glide.frame) return;
+      const move = (now) => {
+        const done = Math.min(1, (now - glide.start) / DURATION);
+        const eased = 1 - (1 - done) ** 3;
+        element.scrollTop = glide.from + (glide.to - glide.from) * eased;
+        glide.frame = done < 1 ? requestAnimationFrame(move) : 0;
+      };
+      glide.frame = requestAnimationFrame(move);
+    },
+    { passive: false },
+  );
+})();"#;
+
+pub fn wheel_switch(enabled: bool) -> String {
+    format!("window.soundscapeSmoothWheel = {enabled};")
+}
+
 pub fn smooth_scrolling(window: &tauri::WebviewWindow, enabled: bool) {
     use webkit2gtk::{SettingsExt, WebViewExt};
-    let _ = window.with_webview(move |webview| {
+    let _ = window.with_webview(|webview| {
         if let Some(settings) = webview.inner().settings() {
-            settings.set_enable_smooth_scrolling(enabled);
+            settings.set_enable_smooth_scrolling(false);
         }
     });
+    let _ = window.eval(wheel_switch(enabled));
 }
 
 #[cfg(test)]
@@ -81,6 +144,15 @@ mod tests {
         assert!(!is_on(Some("0")));
         assert!(!is_on(Some("")));
         assert!(!is_on(None));
+    }
+
+    #[test]
+    fn glides_the_mouse_wheel_only_when_switched_on() {
+        assert!(SMOOTH_WHEEL.contains("passive: false"));
+        assert!(SMOOTH_WHEEL.contains("window.soundscapeSmoothWheel === false"));
+        assert!(SMOOTH_WHEEL.contains("event.ctrlKey"));
+        assert_eq!(wheel_switch(false), "window.soundscapeSmoothWheel = false;");
+        assert_eq!(wheel_switch(true), "window.soundscapeSmoothWheel = true;");
     }
 
     #[test]

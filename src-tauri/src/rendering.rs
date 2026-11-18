@@ -1,20 +1,22 @@
 use crate::config::Config;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 pub const CPU_RENDERING: &str = "WEBKIT_SKIA_ENABLE_CPU_RENDERING";
+pub const NO_EXPLICIT_SYNC: &str = "__NV_DISABLE_EXPLICIT_SYNC";
 const IDENTIFIER: &str = "io.github.novakr12.SoundscapeDesktop";
 const STARTING: &str = "starting";
 pub const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
-static RECOVERED: AtomicBool = AtomicBool::new(false);
+static RECOVERED: AtomicU8 = AtomicU8::new(0);
 
 pub fn to_set(enabled: bool, present: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static str)> {
-    if !enabled {
-        return Vec::new();
+    let mut wanted = vec![(NO_EXPLICIT_SYNC, "1")];
+    if enabled {
+        wanted.push((CPU_RENDERING, "1"));
     }
-    [(CPU_RENDERING, "1")]
+    wanted
         .into_iter()
         .filter(|(name, _)| !present(name))
         .collect()
@@ -32,17 +34,17 @@ pub fn config_dir() -> Option<PathBuf> {
     Some(base.join(IDENTIFIER))
 }
 
-pub fn after_crash(crashed: bool, cpu_rendering: bool) -> bool {
-    crashed && cpu_rendering
+pub fn after_crash(crashed: bool, cpu_rendering: bool) -> Option<bool> {
+    crashed.then_some(!cpu_rendering)
 }
 
 pub fn prepare(dir: &Path) {
     let mut config = Config::load(dir);
     let marker = dir.join(STARTING);
-    if after_crash(marker.exists(), config.cpu_rendering) {
-        config.cpu_rendering = false;
+    if let Some(next) = after_crash(marker.exists(), config.cpu_rendering) {
+        config.cpu_rendering = next;
         if config.save(dir).is_ok() {
-            RECOVERED.store(true, Ordering::Relaxed);
+            RECOVERED.store(if next { 2 } else { 1 }, Ordering::Relaxed);
         }
     }
     if std::fs::create_dir_all(dir).is_ok() {
@@ -63,8 +65,12 @@ pub fn active() -> bool {
     ACTIVE.load(Ordering::Relaxed)
 }
 
-pub fn recovered() -> bool {
-    RECOVERED.load(Ordering::Relaxed)
+pub fn recovered() -> Option<bool> {
+    match RECOVERED.load(Ordering::Relaxed) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    }
 }
 
 pub fn settled(dir: &Path) {
@@ -169,16 +175,23 @@ mod tests {
 
     #[test]
     fn turns_cpu_rendering_on_unless_asked_otherwise() {
-        assert_eq!(to_set(true, |_| false), vec![(CPU_RENDERING, "1")]);
-        assert!(to_set(true, |name| name == CPU_RENDERING).is_empty());
-        assert!(to_set(false, |_| false).is_empty());
+        assert_eq!(
+            to_set(true, |_| false),
+            vec![(NO_EXPLICIT_SYNC, "1"), (CPU_RENDERING, "1")]
+        );
+        assert_eq!(
+            to_set(true, |name| name == CPU_RENDERING),
+            vec![(NO_EXPLICIT_SYNC, "1")]
+        );
+        assert_eq!(to_set(false, |_| false), vec![(NO_EXPLICIT_SYNC, "1")]);
+        assert!(to_set(false, |name| name == NO_EXPLICIT_SYNC).is_empty());
     }
 
     #[test]
     fn turns_cpu_rendering_off_after_a_crash() {
-        assert!(after_crash(true, true));
-        assert!(!after_crash(true, false));
-        assert!(!after_crash(false, true));
+        assert_eq!(after_crash(true, true), Some(false));
+        assert_eq!(after_crash(true, false), Some(true));
+        assert_eq!(after_crash(false, true), None);
     }
 
     #[test]
@@ -193,7 +206,7 @@ mod tests {
         config.save(&dir).unwrap();
         std::fs::write(dir.join(STARTING), b"").unwrap();
         prepare(&dir);
-        assert!(recovered());
+        assert_eq!(recovered(), Some(false));
         assert!(!Config::load(&dir).cpu_rendering);
         assert!(dir.join(STARTING).exists());
         settled(&dir);

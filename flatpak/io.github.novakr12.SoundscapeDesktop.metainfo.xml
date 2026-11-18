@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.9.15" date="2026-11-18">
+      <description>
+        <p>Fixes the app closing right after it starts on Wayland desktops that enforce explicit sync, with NVIDIA graphics.</p>
+        <ul>
+          <li>The app turns off NVIDIA's explicit sync for itself, which some compositors otherwise refused</li>
+          <li>If the app ever closes right after starting, the next start tries the other rendering setting and says so</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.14" date="2026-11-18">
       <description>
         <p>Fixes the app closing right after it starts on some Wayland desktops with NVIDIA graphics, and makes wheel scrolling glide more evenly.</p>

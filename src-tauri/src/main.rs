@@ -522,12 +522,19 @@ fn main() {
                 tokio::time::sleep(rendering::SETTLED_AFTER).await;
                 rendering::settled(&settling);
             });
-            if rendering::recovered() {
-                let _ = notify::show_notification(
-                    app.handle(),
-                    "Soundscape turned off CPU rendering",
-                    "The app closed right after starting last time. Turn Enable CPU rendering back on under This app on the Settings page.",
-                );
+            if let Some(now_on) = rendering::recovered() {
+                let (title, body) = if now_on {
+                    (
+                        "Soundscape turned on CPU rendering",
+                        "The app closed right after starting last time, so it now draws pages with the processor. You can change this with Enable CPU rendering under This app on the Settings page.",
+                    )
+                } else {
+                    (
+                        "Soundscape turned off CPU rendering",
+                        "The app closed right after starting last time, so it now draws pages with the graphics card. You can change this with Enable CPU rendering under This app on the Settings page.",
+                    )
+                };
+                let _ = notify::show_notification(app.handle(), title, body);
             }
             app.manage(AppState {
                 config: Mutex::new(config.clone()),

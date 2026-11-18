@@ -30,6 +30,8 @@ use winit::window::{CursorIcon, Window, WindowId};
 const SMOOTH_WHEEL: &str = include_str!("smooth_wheel.js");
 const FRAME_COUNTER: &str = include_str!("frame_counter.js");
 const FORM_ENTER: &str = include_str!("form_enter.js");
+const SLIDERS: &str = include_str!("sliders.css");
+const SVG_FIX: &str = include_str!("svg_fix.js");
 const LINE_HEIGHT: f64 = 76.0;
 const APP_ID: &str = "soundscape-servo";
 
@@ -71,6 +73,7 @@ struct Shell {
     composing: Cell<bool>,
     server: Option<Url>,
     nonce: String,
+    debug: bool,
     proxy: EventLoopProxy<Wake>,
     held: Cell<ModifiersState>,
     pointer: Cell<PhysicalPosition<f64>>,
@@ -373,8 +376,11 @@ impl WebViewDelegate for Shell {
         }
     }
 
-    fn show_console_message(&self, _: WebView, _: servo::ConsoleLogLevel, message: String) {
+    fn show_console_message(&self, _: WebView, level: servo::ConsoleLogLevel, message: String) {
         let Some(picked) = pickers::picked(&self.nonce, &message) else {
+            if self.debug {
+                eprintln!("page {level:?}: {message}");
+            }
             return;
         };
         let Some(mut select) = self.select.borrow_mut().take() else {
@@ -476,8 +482,20 @@ impl App {
         servo.setup_logging();
         let scripts = Rc::new(UserContentManager::new(&servo));
         scripts.add_script(Rc::new(UserScript::new(FORM_ENTER.into(), None)));
+        scripts.add_script(Rc::new(UserScript::new(SVG_FIX.into(), None)));
+        if let Ok(place) = Url::parse("soundscape://sliders.css") {
+            scripts.add_stylesheet(Rc::new(servo::user_contents::UserStyleSheet::new(
+                SLIDERS.into(),
+                place,
+            )));
+        }
         if profile.smooth_scrolling {
             scripts.add_script(Rc::new(UserScript::new(SMOOTH_WHEEL.into(), None)));
+        }
+        if let Some(extra) = std::env::var_os("SOUNDSCAPE_EXTRA_SCRIPT")
+            .and_then(|path| std::fs::read_to_string(path).ok())
+        {
+            scripts.add_script(Rc::new(UserScript::new(extra, None)));
         }
         if profile.show_fps {
             scripts.add_script(Rc::new(UserScript::new(FRAME_COUNTER.into(), None)));
@@ -495,6 +513,7 @@ impl App {
             composing: Cell::new(false),
             server: profile.server.clone(),
             nonce: nonce(),
+            debug: profile::wants(std::env::var("SOUNDSCAPE_DEBUG").ok().as_deref()),
             proxy: proxy.clone(),
             held: Cell::new(ModifiersState::empty()),
             pointer: Cell::new(PhysicalPosition::new(0.0, 0.0)),

@@ -1,3 +1,4 @@
+mod bridge;
 mod glide;
 mod keys;
 mod pickers;
@@ -39,6 +40,7 @@ const APP_ID: &str = "soundscape-servo";
 
 enum Wake {
     Servo,
+    Poll,
     Quit,
     Theme(Theme),
     Answer(u64, Answer),
@@ -73,7 +75,8 @@ struct Shell {
     asked: Cell<u64>,
     typing: RefCell<Option<EmbedderControlId>>,
     composing: Cell<bool>,
-    smooth: bool,
+    smooth: Cell<bool>,
+    storage: Option<std::path::PathBuf>,
     glide: RefCell<glide::Glide>,
     server: Option<Url>,
     nonce: String,
@@ -174,6 +177,40 @@ fn nonce() -> String {
 }
 
 impl Shell {
+    fn push_settings(&self) {
+        if let Some(webview) = self.webview() {
+            webview.evaluate_javascript(
+                bridge::settings_script(env!("CARGO_PKG_VERSION"), self.smooth.get()),
+                |_| {},
+            );
+        }
+    }
+
+    fn take_commands(&self) {
+        let Some(webview) = self.webview() else {
+            return;
+        };
+        webview.evaluate_javascript(bridge::TAKE_COMMANDS, |result| {
+            let Ok(servo::JSValue::String(json)) = result else {
+                return;
+            };
+            let Some(shell) = ME.with(|me| me.borrow().upgrade()) else {
+                return;
+            };
+            for command in bridge::commands(&json) {
+                match command {
+                    bridge::Command::SmoothScrolling(on) => {
+                        shell.smooth.set(on);
+                        let mut own = bridge::load(shell.storage.as_deref());
+                        own.smooth_scrolling = Some(on);
+                        bridge::save(shell.storage.as_deref(), &own);
+                        shell.push_settings();
+                    }
+                }
+            }
+        });
+    }
+
     fn close(&self) {
         self.select.borrow_mut().take();
         self.waiting.borrow_mut().clear();
@@ -287,6 +324,12 @@ impl Shell {
 impl WebViewDelegate for Shell {
     fn notify_new_frame_ready(&self, _: WebView) {
         self.window.request_redraw();
+    }
+
+    fn notify_load_status_changed(&self, _: WebView, status: servo::LoadStatus) {
+        if matches!(status, servo::LoadStatus::Complete) {
+            self.push_settings();
+        }
     }
 
     fn notify_page_title_changed(&self, _: WebView, title: Option<String>) {
@@ -513,7 +556,8 @@ impl App {
             asked: Cell::new(0),
             typing: RefCell::new(None),
             composing: Cell::new(false),
-            smooth: profile.smooth_scrolling,
+            smooth: Cell::new(profile.smooth_scrolling),
+            storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
             server: profile.server.clone(),
             nonce: nonce(),
@@ -561,6 +605,7 @@ impl ApplicationHandler<Wake> for App {
         };
         match wake {
             Wake::Servo => shell.servo.spin_event_loop(),
+            Wake::Poll => shell.take_commands(),
             Wake::Quit => {
                 shell.close();
                 event_loop.exit();
@@ -670,7 +715,7 @@ impl ApplicationHandler<Wake> for App {
                 if shell.debug {
                     eprintln!("wheel {delta:?}");
                 }
-                if shell.smooth
+                if shell.smooth.get()
                     && matches!(delta, MouseScrollDelta::LineDelta(..))
                     && !shell.held.get().control_key()
                 {
@@ -711,6 +756,12 @@ fn main() {
             }
         });
     }
+    let poller = proxy.clone();
+    std::thread::spawn(move || {
+        while poller.send_event(Wake::Poll).is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+        }
+    });
     let mut app = App::Starting(proxy, profile::load());
     if let Err(error) = event_loop.run_app(&mut app) {
         eprintln!("Soundscape stopped: {error}");

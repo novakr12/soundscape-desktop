@@ -74,6 +74,7 @@ pub fn load() -> Profile {
         home(),
     );
     let saved = saved(&files);
+    let storage = storage_dir(std::env::var_os("XDG_DATA_HOME").map(PathBuf::from), home());
     let given = std::env::args()
         .nth(1)
         .or_else(|| std::env::var("SOUNDSCAPE_SERVER").ok());
@@ -82,8 +83,11 @@ pub fn load() -> Profile {
             given.as_deref(),
             saved.as_ref().and_then(|saved| saved.server.as_deref()),
         ),
-        smooth_scrolling: saved.map(|saved| saved.smooth_scrolling).unwrap_or(true),
-        storage: storage_dir(std::env::var_os("XDG_DATA_HOME").map(PathBuf::from), home()),
+        smooth_scrolling: crate::bridge::load(storage.as_deref())
+            .smooth_scrolling
+            .or(saved.map(|saved| saved.smooth_scrolling))
+            .unwrap_or(true),
+        storage,
         show_fps: wants(std::env::var("SOUNDSCAPE_SHOW_FPS").ok().as_deref()),
     }
 }

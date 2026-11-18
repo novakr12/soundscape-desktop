@@ -30,7 +30,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 const SMOOTH_WHEEL: &str = include_str!("smooth_wheel.js");
 const FRAME_COUNTER: &str = include_str!("frame_counter.js");
 const FORM_ENTER: &str = include_str!("form_enter.js");
-const SLIDERS: &str = include_str!("sliders.css");
+const CONTROLS: &str = include_str!("controls.css");
 const SVG_FIX: &str = include_str!("svg_fix.js");
 const LOGO_MOTION: &str = include_str!("logo_motion.js");
 const LINE_HEIGHT: f64 = 76.0;
@@ -485,9 +485,9 @@ impl App {
         scripts.add_script(Rc::new(UserScript::new(FORM_ENTER.into(), None)));
         scripts.add_script(Rc::new(UserScript::new(SVG_FIX.into(), None)));
         scripts.add_script(Rc::new(UserScript::new(LOGO_MOTION.into(), None)));
-        if let Ok(place) = Url::parse("soundscape://sliders.css") {
+        if let Ok(place) = Url::parse("soundscape://controls.css") {
             scripts.add_stylesheet(Rc::new(servo::user_contents::UserStyleSheet::new(
-                SLIDERS.into(),
+                CONTROLS.into(),
                 place,
             )));
         }

@@ -112,7 +112,8 @@
     copy.style.opacity = "1";
     restamp(copy);
     const older = copies.get(svg) ?? [];
-    (older.at(-1) ?? svg).after(copy);
+    if (older.length > 0) older.at(-1).after(copy);
+    else parent.prepend(copy);
     copies.set(svg, [...older, copy]);
     setTimeout(() => {
       if (!svg.isConnected) {

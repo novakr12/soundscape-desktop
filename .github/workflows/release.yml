@@ -40,6 +40,11 @@ jobs:
       - name: Free disk space
         run: rm -rf /unused/android/* /unused/dotnet/* /unused/toolcache/* /unused/boost/* /unused/ghcup/*
       - uses: actions/checkout@v5
+      - name: Move the preinstalled runtimes where Flatpak can update them
+        run: |
+          cp -a /var/lib/flatpak /var/lib/flatpak-copy
+          rm -rf /var/lib/flatpak
+          mv /var/lib/flatpak-copy /var/lib/flatpak
       - name: List the Rust crates for the offline build
         run: python3 flatpak/cargo-sources.py
       - uses: flathub-infra/flatpak-github-actions/flatpak-builder@933e9e8ca36e85046ebca8e211f0785c6becac40

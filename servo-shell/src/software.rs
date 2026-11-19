@@ -22,7 +22,7 @@ pub fn starting_marker(storage: &Path) -> PathBuf {
     storage.join(STARTING)
 }
 
-pub fn guard(storage: Option<&Path>, cpu_rendering: bool) -> bool {
+pub fn guard(storage: Option<&Path>, cpu_rendering: bool, save: impl FnOnce(bool)) -> bool {
     let Some(dir) = storage else {
         return cpu_rendering;
     };
@@ -32,9 +32,7 @@ pub fn guard(storage: Option<&Path>, cpu_rendering: bool) -> bool {
     let _ = std::fs::write(&marker, b"");
     match flipped {
         Some(now) => {
-            let mut own = crate::bridge::load(Some(dir));
-            own.cpu_rendering = Some(now);
-            crate::bridge::save(Some(dir), &own);
+            save(now);
             eprintln!(
                 "Soundscape didn't start properly last time, so CPU rendering is now {}.",
                 if now { "on" } else { "off" }
@@ -140,17 +138,18 @@ mod tests {
         assert_eq!(after_crash(false, true), None);
         let dir =
             std::env::temp_dir().join(format!("soundscape-servo-guard-{}", std::process::id()));
-        assert!(guard(Some(&dir), true));
+        let saved = std::cell::Cell::new(None);
+        assert!(guard(Some(&dir), true, |now| saved.set(Some(now))));
         assert!(starting_marker(&dir).exists());
-        assert!(!guard(Some(&dir), true));
-        assert_eq!(crate::bridge::load(Some(&dir)).cpu_rendering, Some(false));
+        assert_eq!(saved.get(), None);
+        assert!(!guard(Some(&dir), true, |now| saved.set(Some(now))));
+        assert_eq!(saved.get(), Some(false));
         settled(Some(&dir));
         assert!(!starting_marker(&dir).exists());
-        assert!(guard(Some(&dir), true));
+        assert!(guard(Some(&dir), true, |_| {}));
         settled(Some(&dir));
-        let _ = std::fs::remove_file(crate::bridge::own_file(&dir));
         let _ = std::fs::remove_dir(&dir);
-        assert!(!guard(None, false));
+        assert!(!guard(None, false, |_| {}));
     }
 
     #[test]

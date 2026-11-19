@@ -1,19 +1,6 @@
-use serde::Deserialize;
+use soundscape_desktop::config::Config;
 use std::path::PathBuf;
 use url::Url;
-
-const IDENTIFIER: &str = "io.github.novakr12.SoundscapeDesktop";
-
-#[derive(Deserialize)]
-struct Saved {
-    server: Option<String>,
-    #[serde(default = "yes")]
-    smooth_scrolling: bool,
-}
-
-fn yes() -> bool {
-    true
-}
 
 pub struct Profile {
     pub server: Option<Url>,
@@ -23,29 +10,12 @@ pub struct Profile {
     pub theme: servo::Theme,
     pub smooth_scrolling: bool,
     pub storage: Option<PathBuf>,
+    pub config: Option<PathBuf>,
     pub show_fps: bool,
 }
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
-}
-
-pub fn config_files(config_home: Option<PathBuf>, home: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    if let Some(dir) = config_home {
-        files.push(dir.join(IDENTIFIER).join("config.json"));
-    }
-    if let Some(home) = home {
-        files.push(
-            home.join(".var/app")
-                .join(IDENTIFIER)
-                .join("config")
-                .join(IDENTIFIER)
-                .join("config.json"),
-        );
-        files.push(home.join(".config").join(IDENTIFIER).join("config.json"));
-    }
-    files
 }
 
 pub fn server_from(given: Option<&str>, saved: Option<&str>) -> Option<Url> {
@@ -65,42 +35,32 @@ pub fn wants(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some("1" | "true" | "yes"))
 }
 
-fn saved(files: &[PathBuf]) -> Option<Saved> {
-    files
-        .iter()
-        .find_map(|file| std::fs::read_to_string(file).ok())
-        .and_then(|text| serde_json::from_str(&text).ok())
+pub fn given_server() -> Option<String> {
+    std::env::args()
+        .skip(1)
+        .find(|arg| !arg.starts_with("--"))
+        .or_else(|| std::env::var("SOUNDSCAPE_SERVER").ok())
 }
 
 pub fn load() -> Profile {
-    let files = config_files(
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        home(),
-    );
-    let saved = saved(&files);
+    let config_dir = soundscape_desktop::config_dir();
+    let saved = config_dir.as_deref().map(Config::load).unwrap_or_default();
     let storage = storage_dir(std::env::var_os("XDG_DATA_HOME").map(PathBuf::from), home());
-    let given = std::env::args()
-        .nth(1)
-        .or_else(|| std::env::var("SOUNDSCAPE_SERVER").ok());
-    let own = crate::bridge::load(storage.as_deref());
     Profile {
-        cpu_rendering: own.cpu_rendering.unwrap_or(false),
-        faster_scripts: own.faster_scripts.unwrap_or(false),
+        server: server_from(given_server().as_deref(), saved.server.as_deref()),
+        cpu_rendering: saved.cpu_rendering,
+        faster_scripts: saved.faster_scripts,
+        memory_limit: soundscape_desktop::allowed_memory_limit(
+            saved
+                .memory_limit
+                .unwrap_or(soundscape_desktop::MEMORY_LIMIT_MB),
+        ),
         theme: crate::theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref())
             .or_else(crate::theme::current)
             .unwrap_or(servo::Theme::Light),
-        memory_limit: crate::valve::allowed(
-            own.memory_limit.unwrap_or(crate::valve::DEFAULT_LIMIT_MB),
-        ),
-        server: server_from(
-            given.as_deref(),
-            saved.as_ref().and_then(|saved| saved.server.as_deref()),
-        ),
-        smooth_scrolling: own
-            .smooth_scrolling
-            .or(saved.map(|saved| saved.smooth_scrolling))
-            .unwrap_or(true),
+        smooth_scrolling: saved.smooth_scrolling,
         storage,
+        config: config_dir,
         show_fps: wants(std::env::var("SOUNDSCAPE_SHOW_FPS").ok().as_deref()),
     }
 }
@@ -108,21 +68,6 @@ pub fn load() -> Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn looks_where_the_desktop_app_keeps_its_settings() {
-        let files = config_files(Some("/c".into()), Some("/h".into()));
-        assert_eq!(
-            files,
-            vec![
-                PathBuf::from("/c/io.github.novakr12.SoundscapeDesktop/config.json"),
-                PathBuf::from(
-                    "/h/.var/app/io.github.novakr12.SoundscapeDesktop/config/io.github.novakr12.SoundscapeDesktop/config.json"
-                ),
-                PathBuf::from("/h/.config/io.github.novakr12.SoundscapeDesktop/config.json"),
-            ]
-        );
-    }
 
     #[test]
     fn prefers_the_given_server() {
@@ -140,16 +85,6 @@ mod tests {
         );
         assert!(server_from(Some("file:///etc"), None).is_none());
         assert!(server_from(None, None).is_none());
-    }
-
-    #[test]
-    fn reads_the_saved_settings() {
-        let saved: Saved =
-            serde_json::from_str(r#"{"server":"https://a.example","token":"x"}"#).unwrap();
-        assert!(saved.smooth_scrolling);
-        let saved: Saved = serde_json::from_str(r#"{"smooth_scrolling":false}"#).unwrap();
-        assert!(!saved.smooth_scrolling);
-        assert!(saved.server.is_none());
     }
 
     #[test]

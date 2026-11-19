@@ -1,5 +1,5 @@
-mod bridge;
 mod glide;
+mod host;
 mod keys;
 mod memory;
 mod pickers;
@@ -20,6 +20,7 @@ use servo::{
     WebViewDelegate, WebViewPoint, WebViewVector, WheelDelta, WheelEvent, WheelMode,
     WindowRenderingContext,
 };
+use soundscape_desktop::host::Manager;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -43,7 +44,7 @@ const COVERS: &str = include_str!("covers.js");
 const LINE_HEIGHT: f64 = 76.0;
 const APP_ID: &str = "soundscape-servo";
 
-enum Wake {
+pub enum Wake {
     Servo,
     Poll,
     Push,
@@ -51,6 +52,7 @@ enum Wake {
     Quit,
     Theme(Theme),
     Answer(u64, Answer),
+    Call(host::Call),
 }
 
 #[derive(Clone)]
@@ -83,10 +85,6 @@ struct Shell {
     typing: RefCell<Option<EmbedderControlId>>,
     composing: Cell<bool>,
     smooth: Cell<bool>,
-    cpu: Cell<bool>,
-    cpu_now: bool,
-    faster: Cell<bool>,
-    faster_now: bool,
     memory_limit: Cell<u32>,
     armed: Cell<bool>,
     loaded_at: Cell<std::time::Instant>,
@@ -97,6 +95,8 @@ struct Shell {
     storage: Option<std::path::PathBuf>,
     glide: RefCell<glide::Glide>,
     server: Option<Url>,
+    app: soundscape_desktop::host::AppHandle,
+    seen: std::sync::Arc<std::sync::Mutex<host::Seen>>,
     nonce: String,
     debug: bool,
     proxy: EventLoopProxy<Wake>,
@@ -104,26 +104,8 @@ struct Shell {
     pointer: Cell<PhysicalPosition<f64>>,
 }
 
-pub fn internal(server: Option<&Url>, url: &Url) -> bool {
-    match url.scheme() {
-        "http" | "https" => server.is_some_and(|server| server.origin() == url.origin()),
-        "mailto" | "tel" => false,
-        _ => true,
-    }
-}
-
-fn open_outside(url: &Url) {
-    let _ = std::process::Command::new("xdg-open")
-        .arg(url.as_str())
-        .spawn();
-}
-
-pub fn notice() -> Url {
-    let page = "<!doctype html><meta charset=utf-8><body style=\"font:16px system-ui,sans-serif;padding:32px;color-scheme:light dark\"><h1>Soundscape on Servo</h1><p>No server address was found. Sign in with the Soundscape desktop app once, or start this test build with the address, for example:</p><pre>soundscape-servo https://music.example.com</pre></body>";
-    let encoded: String = url::form_urlencoded::byte_serialize(page.as_bytes())
-        .collect::<String>()
-        .replace('+', "%20");
-    Url::parse(&format!("data:text/html;charset=utf-8,{encoded}")).expect("notice page")
+fn notice() -> Url {
+    soundscape_desktop::setup::page("", None)
 }
 
 pub fn icon(cursor: Cursor) -> CursorIcon {
@@ -195,21 +177,113 @@ fn nonce() -> String {
 }
 
 impl Shell {
-    fn push_settings(&self) {
+    fn push_valve(&self) {
         if let Some(webview) = self.webview() {
-            webview.evaluate_javascript(
-                bridge::settings_script(&bridge::Shown {
-                    version: env!("CARGO_PKG_VERSION"),
-                    smooth_scrolling: self.smooth.get(),
-                    cpu_rendering: self.cpu.get(),
-                    cpu_rendering_now: self.cpu_now,
-                    memory_limit: self.memory_limit.get(),
-                    faster_scripts: self.faster.get(),
-                    faster_scripts_now: self.faster_now,
-                }),
-                |_| {},
-            );
             webview.evaluate_javascript(valve::flag_script(self.armed.get()), |_| {});
+        }
+    }
+
+    fn server(&self) -> Option<Url> {
+        self.app
+            .state::<soundscape_desktop::AppState>()
+            .server()
+            .or_else(|| self.server.clone())
+    }
+
+    fn allowed(&self, url: &Url) -> bool {
+        use soundscape_desktop::server::Navigation;
+        if soundscape_desktop::setup::follow(&self.app, url) {
+            return false;
+        }
+        match soundscape_desktop::server::classify(self.server().as_ref(), url) {
+            Navigation::Allow => true,
+            Navigation::Block => false,
+            Navigation::AppSettings => {
+                let _ = soundscape_desktop::open_settings(&self.app);
+                false
+            }
+            Navigation::External => {
+                soundscape_desktop::links::open(&self.app, url);
+                false
+            }
+            Navigation::Connected { .. } => {
+                soundscape_desktop::connected_through(&self.app, url);
+                false
+            }
+        }
+    }
+
+    fn note_url(&self) {
+        let Some(url) = self.webview().and_then(|webview| webview.url()) else {
+            return;
+        };
+        if let Ok(mut seen) = self.seen.lock()
+            && seen.url.as_ref() != Some(&url)
+        {
+            seen.url = Some(url);
+        }
+    }
+
+    fn set_hidden(&self, hidden: bool) {
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.hidden = hidden;
+        }
+    }
+
+    fn obey(&self, call: host::Call, event_loop: &ActiveEventLoop) {
+        match call {
+            host::Call::Eval(script) => {
+                if let Some(webview) = self.webview() {
+                    webview.evaluate_javascript(script, |_| {});
+                }
+            }
+            host::Call::Evaluate(script, reply) => match self.webview() {
+                Some(webview) => webview.evaluate_javascript(script, move |result| {
+                    reply(result.ok().as_ref().and_then(host::text));
+                }),
+                None => reply(None),
+            },
+            host::Call::Show => {
+                self.set_hidden(false);
+                self.window.set_visible(true);
+                self.shown();
+            }
+            host::Call::Hide => {
+                self.set_hidden(true);
+                self.window.set_visible(false);
+                if self.hidden_since.get().is_none() {
+                    self.hidden_since.set(Some(std::time::Instant::now()));
+                }
+            }
+            host::Call::Focus => self.window.focus_window(),
+            host::Call::Navigate(url) => {
+                self.parked.borrow_mut().take();
+                if let Some(webview) = self.webview() {
+                    webview.load(url);
+                }
+            }
+            host::Call::Setup => {
+                if let Some(webview) = self.webview() {
+                    webview.load(notice());
+                }
+            }
+            host::Call::Main(work) => work(),
+            host::Call::Smooth(on) => self.smooth.set(on),
+            host::Call::Memory(mb) => {
+                self.memory_limit.set(mb);
+                self.check_memory();
+            }
+            host::Call::Restart => {
+                RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
+                software::settled(self.storage.as_deref());
+                self.close();
+                event_loop.exit();
+            }
+            host::Call::Exit => {
+                software::settled(self.storage.as_deref());
+                self.close();
+                event_loop.exit();
+            }
         }
     }
 
@@ -278,57 +352,6 @@ impl Shell {
         }
     }
 
-    fn take_commands(&self) {
-        let Some(webview) = self.webview() else {
-            return;
-        };
-        webview.evaluate_javascript(bridge::TAKE_COMMANDS, |result| {
-            let Ok(servo::JSValue::String(json)) = result else {
-                return;
-            };
-            let Some(shell) = ME.with(|me| me.borrow().upgrade()) else {
-                return;
-            };
-            for command in bridge::commands(&json) {
-                match command {
-                    bridge::Command::CpuRendering(on) => {
-                        shell.cpu.set(on);
-                        let mut own = bridge::load(shell.storage.as_deref());
-                        own.cpu_rendering = Some(on);
-                        bridge::save(shell.storage.as_deref(), &own);
-                        let _ = shell.proxy.send_event(Wake::Push);
-                    }
-                    bridge::Command::FasterScripts(on) => {
-                        shell.faster.set(on);
-                        let mut own = bridge::load(shell.storage.as_deref());
-                        own.faster_scripts = Some(on);
-                        bridge::save(shell.storage.as_deref(), &own);
-                        let _ = shell.proxy.send_event(Wake::Push);
-                    }
-                    bridge::Command::MemoryLimit(mb) => {
-                        let mb = valve::allowed(mb);
-                        shell.memory_limit.set(mb);
-                        let mut own = bridge::load(shell.storage.as_deref());
-                        own.memory_limit = Some(mb);
-                        bridge::save(shell.storage.as_deref(), &own);
-                        let _ = shell.proxy.send_event(Wake::Push);
-                    }
-                    bridge::Command::Restart => {
-                        RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
-                        let _ = shell.proxy.send_event(Wake::Quit);
-                    }
-                    bridge::Command::SmoothScrolling(on) => {
-                        shell.smooth.set(on);
-                        let mut own = bridge::load(shell.storage.as_deref());
-                        own.smooth_scrolling = Some(on);
-                        bridge::save(shell.storage.as_deref(), &own);
-                        let _ = shell.proxy.send_event(Wake::Push);
-                    }
-                }
-            }
-        });
-    }
-
     fn close(&self) {
         self.select.borrow_mut().take();
         self.waiting.borrow_mut().clear();
@@ -395,12 +418,10 @@ impl Shell {
     }
 
     fn go(&self, url: &Url) {
-        if internal(self.server.as_ref(), url) {
-            if let Some(webview) = self.webview() {
-                webview.load(url.clone());
-            }
-        } else {
-            open_outside(url);
+        if self.allowed(url)
+            && let Some(webview) = self.webview()
+        {
+            webview.load(url.clone());
         }
     }
 
@@ -477,11 +498,16 @@ impl WebViewDelegate for Shell {
     }
 
     fn request_navigation(&self, _: WebView, request: NavigationRequest) {
-        if internal(self.server.as_ref(), &request.url) {
+        if self.allowed(&request.url) {
             request.allow();
         } else {
-            open_outside(&request.url);
             request.deny();
+        }
+    }
+
+    fn notify_url_changed(&self, _: WebView, url: Url) {
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.url = Some(url);
         }
     }
 
@@ -631,7 +657,7 @@ impl WebViewDelegate for Opener {
 }
 
 enum App {
-    Starting(EventLoopProxy<Wake>, Profile),
+    Starting(EventLoopProxy<Wake>, Profile, Launched),
     Running(Rc<Shell>),
     Stopped,
 }
@@ -641,6 +667,7 @@ impl App {
         event_loop: &ActiveEventLoop,
         proxy: EventLoopProxy<Wake>,
         profile: Profile,
+        launched: Launched,
     ) -> Rc<Shell> {
         let attributes = Window::default_attributes()
             .with_title("Soundscape")
@@ -711,7 +738,6 @@ impl App {
             typing: RefCell::new(None),
             composing: Cell::new(false),
             smooth: Cell::new(profile.smooth_scrolling),
-            cpu: Cell::new(profile.cpu_rendering),
             memory_limit: Cell::new(profile.memory_limit),
             armed: Cell::new(false),
             loaded_at: Cell::new(std::time::Instant::now()),
@@ -719,12 +745,11 @@ impl App {
             parked: RefCell::new(None),
             asking: Cell::new(false),
             park_after: valve::park_after(std::env::var("SOUNDSCAPE_PARK_SECONDS").ok().as_deref()),
-            cpu_now: profile.cpu_rendering,
-            faster: Cell::new(profile.faster_scripts),
-            faster_now: profile.faster_scripts,
             storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
             server: profile.server.clone(),
+            app: launched.app.clone(),
+            seen: launched.seen.clone(),
             nonce: nonce(),
             debug: profile::wants(std::env::var("SOUNDSCAPE_DEBUG").ok().as_deref()),
             proxy: proxy.clone(),
@@ -732,7 +757,14 @@ impl App {
             pointer: Cell::new(PhysicalPosition::new(0.0, 0.0)),
         });
         ME.with(|me| *me.borrow_mut() = Rc::downgrade(&shell));
-        let start = profile.server.clone().unwrap_or_else(notice);
+        let start = profile::given_server()
+            .and(profile.server.clone())
+            .or_else(|| soundscape_desktop::first_page(&launched.app))
+            .or_else(|| profile.server.clone())
+            .unwrap_or_else(notice);
+        if let Ok(mut seen) = launched.seen.lock() {
+            seen.url = Some(start.clone());
+        }
         let webview = WebViewBuilder::new(&shell.servo, shell.context.clone())
             .url(start)
             .hidpi_scale_factor(Scale::new(shell.window.scale_factor() as f32))
@@ -758,10 +790,11 @@ impl App {
 impl ApplicationHandler<Wake> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let App::Starting(..) = self {
-            let App::Starting(proxy, profile) = std::mem::replace(self, App::Stopped) else {
+            let App::Starting(proxy, profile, launched) = std::mem::replace(self, App::Stopped)
+            else {
                 return;
             };
-            *self = App::Running(App::start(event_loop, proxy, profile));
+            *self = App::Running(App::start(event_loop, proxy, profile, launched));
         }
     }
 
@@ -772,11 +805,12 @@ impl ApplicationHandler<Wake> for App {
         match wake {
             Wake::Servo => shell.servo.spin_event_loop(),
             Wake::Poll => {
-                shell.take_commands();
+                shell.note_url();
                 shell.check_memory();
                 shell.check_hidden();
             }
-            Wake::Push => shell.push_settings(),
+            Wake::Push => shell.push_valve(),
+            Wake::Call(call) => shell.obey(call, event_loop),
             Wake::Park(playing) => shell.park(playing),
             Wake::Quit => {
                 software::settled(shell.storage.as_deref());
@@ -929,9 +963,22 @@ impl ApplicationHandler<Wake> for App {
     }
 }
 
+struct Launched {
+    app: soundscape_desktop::host::AppHandle,
+    seen: std::sync::Arc<std::sync::Mutex<host::Seen>>,
+}
+
 fn main() {
     let mut profile = profile::load();
-    profile.cpu_rendering = software::guard(profile.storage.as_deref(), profile.cpu_rendering);
+    let config_dir = profile.config.clone();
+    profile.cpu_rendering =
+        software::guard(profile.storage.as_deref(), profile.cpu_rendering, |now| {
+            if let Some(dir) = &config_dir {
+                let mut config = soundscape_desktop::config::Config::load(dir);
+                config.cpu_rendering = now;
+                let _ = config.save(dir);
+            }
+        });
     let ours = software::prepare(profile.cpu_rendering);
     let settling = profile.storage.clone();
     std::thread::spawn(move || {
@@ -967,7 +1014,30 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(400));
         }
     });
-    let mut app = App::Starting(proxy, profile);
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(host::Seen::default()));
+    let dir = profile
+        .config
+        .clone()
+        .unwrap_or_else(|| std::env::temp_dir().join(soundscape_desktop::IDENTIFIER));
+    let launched = Launched {
+        app: soundscape_desktop::launch(
+            Box::new(host::ServoHost {
+                proxy: proxy.clone(),
+                seen: seen.clone(),
+                running: soundscape_desktop::host::Running {
+                    cpu_rendering: profile.cpu_rendering,
+                    faster_scripts: profile.faster_scripts,
+                },
+            }),
+            dir,
+            soundscape_desktop::host::Running {
+                cpu_rendering: profile.cpu_rendering,
+                faster_scripts: profile.faster_scripts,
+            },
+        ),
+        seen,
+    };
+    let mut app = App::Starting(proxy, profile, launched);
     if let Err(error) = event_loop.run_app(&mut app) {
         eprintln!("Soundscape stopped: {error}");
     }
@@ -988,27 +1058,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn keeps_the_server_inside_and_the_rest_outside() {
-        let server = Url::parse("https://music.example.com").unwrap();
-        let inside = |text: &str| internal(Some(&server), &Url::parse(text).unwrap());
-        assert!(inside("https://music.example.com/albums"));
-        assert!(!inside("https://www.last.fm/user/x"));
-        assert!(!inside("http://music.example.com/"));
-        assert!(!inside("mailto:a@example.com"));
-        assert!(inside("about:blank"));
-        assert!(inside("data:text/html,x"));
-        assert!(!internal(None, &Url::parse("https://a.example").unwrap()));
-    }
-
-    #[test]
-    fn explains_a_missing_server() {
-        let page = notice();
-        assert_eq!(page.scheme(), "data");
-        assert!(!page.as_str().contains(' '));
-        assert!(page.as_str().contains("Servo"));
-    }
 
     #[test]
     fn scrolls_a_notch_at_a_time() {

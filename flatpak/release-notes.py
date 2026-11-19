@@ -1,4 +1,3 @@
-import json
 import sys
 import tomllib
 import xml.etree.ElementTree as ElementTree
@@ -6,8 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 METAINFO = ROOT / "flatpak" / "io.github.novakr12.SoundscapeDesktop.metainfo.xml"
-CARGO = ROOT / "src-tauri" / "Cargo.toml"
-TAURI = ROOT / "src-tauri" / "tauri.conf.json"
+CARGO = ROOT / "Cargo.toml"
+CORE = ROOT / "core" / "Cargo.toml"
 
 
 def text(element):
@@ -30,12 +29,12 @@ def main():
     tag = sys.argv[1]
     version = tag.removeprefix("v")
     cargo = tomllib.loads(CARGO.read_text())["package"]["version"]
-    tauri = json.loads(TAURI.read_text())["version"]
+    core = tomllib.loads(CORE.read_text())["package"]["version"]
     releases = ElementTree.parse(METAINFO).getroot().findall("./releases/release")
     newest = releases[0].get("version") if releases else None
     problems = [
         f"{name} says {found}"
-        for name, found in (("Cargo.toml", cargo), ("tauri.conf.json", tauri), ("the newest metainfo release", newest))
+        for name, found in (("Cargo.toml", cargo), ("core/Cargo.toml", core), ("the newest metainfo release", newest))
         if found != version
     ]
     if problems:

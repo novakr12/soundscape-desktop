@@ -10,4 +10,4 @@ Categories=AudioVideo;Audio;
 Keywords=scrobble;scrobbler;listenbrainz;music;history;stats;
 StartupNotify=true
 SingleMainWindow=true
-StartupWMClass=soundscape-desktop
+StartupWMClass=io.github.novakr12.SoundscapeDesktop

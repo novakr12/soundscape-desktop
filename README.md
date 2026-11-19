@@ -1,38 +1,37 @@
 # Soundscape Desktop
 
-A Linux desktop app for [Soundscape](https://github.com/novakr12/soundscape), the self-hosted music tracker. It opens your own Soundscape server in its own window, connects to it with a token of its own, sends what any music player on your computer plays, and shows your Soundscape notifications on the desktop.
+A Linux desktop app for [Soundscape](https://github.com/novakr12/soundscape), the self-hosted music tracker. It opens your own Soundscape server in its own window, connects to it with a token of its own, sends what any music player on your computer plays, and shows your Soundscape notifications on the desktop. The window is drawn by the [Servo](https://servo.org) browser engine.
 
 ![Soundscape Desktop showing a Soundscape server](screenshots/home.png)
 
 ## What you need
 
 - A Soundscape server new enough to have desktop app support (the `/api/info` address answers).
-- To build it yourself: Rust and the WebKitGTK development libraries.
+- To build it yourself: Rust, Python 3, a C and C++ compiler, and the development files for GStreamer, fonts, D-Bus and your graphics stack.
 
 On Fedora:
 
 ```
-sudo dnf install webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel openssl-devel gcc
+sudo dnf install gcc gcc-c++ clang cmake m4 gperf python3 pkgconf dbus-devel freetype-devel fontconfig-devel harfbuzz-devel xz-devel systemd-devel libunwind-devel mesa-libGL-devel mesa-libEGL-devel wayland-devel libxkbcommon-devel libX11-devel libxcb-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-bad-free-devel
 ```
 
 On Ubuntu or Debian:
 
 ```
-sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential
+sudo apt install build-essential clang cmake m4 gperf python3 pkg-config libdbus-1-dev libfreetype6-dev libfontconfig-dev libharfbuzz-dev liblzma-dev libudev-dev libunwind-dev libgl-dev libegl1-mesa-dev libgles2-mesa-dev libwayland-dev libxkbcommon-dev libx11-dev libx11-xcb-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev
 ```
 
-Install Rust from [rustup.rs](https://rustup.rs) if you don't have it.
+Install Rust from [rustup.rs](https://rustup.rs) if you don't have it. The first build compiles Servo and takes a while; later builds only compile the app.
 
 ## Run it
 
 ```
-cd src-tauri
-cargo run
+cargo run --release
 ```
 
-On first start it asks for your server's address, for example `https://music.example.com`. You log in on the next page and approve the connection; the app gets its own token, which shows up on Soundscape's Connect page as "Desktop app on" your computer's name. Use the Soundscape menu to reload, change server or sign out. Signing out revokes the token and clears the app's cookies.
+On first start it asks for your server's address, for example `https://music.example.com`. You log in on the next page and approve the connection; the app gets its own token, which shows up on Soundscape's Connect page as "Desktop app on" your computer's name. Change the server or sign out from Soundscape's Settings page, under **This app**. Signing out revokes the token.
 
-Settings live in `~/.config/io.github.novakr12.SoundscapeDesktop/config.json`, readable only by you.
+Settings live in `~/.config/io.github.novakr12.SoundscapeDesktop/config.json`, readable only by you. The window's cookies and site data live in `~/.local/share/io.github.novakr12.SoundscapeDesktop/servo`.
 
 To see how smoothly the window draws, start the app with a frame counter in its corner:
 
@@ -42,56 +41,75 @@ flatpak run --env=SOUNDSCAPE_SHOW_FPS=1 io.github.novakr12.SoundscapeDesktop
 
 Quit it from the tray first, so the new start isn't handed to the copy already running. The number follows your screen's refresh rate while nothing is moving and drops when scrolling or an animation stutters.
 
+## Keyboard shortcuts
+
+| Keys | What they do |
+|---|---|
+| Ctrl+M | Open the mini player |
+| Ctrl+, | Open Settings |
+| Ctrl+R or F5 | Reload the page |
+| Alt+← and Alt+→ | Back and forward (your mouse's back and forward buttons work too) |
+| Alt+Home | Go to your server's home page |
+
 ## Scrobbling
 
 The app picks up what Linux music players are playing through MPRIS, the standard every player supports: Spotify, Strawberry, Rhythmbox, Elisa, Lollypop, Amberol, VLC, mpv with the MPRIS plugin, and video sites in your browser.
 
 - "Listening now" is sent as soon as a song starts. A play counts once you've heard half the song or four minutes, whichever comes first, the same rule as ListenBrainz and Last.fm. Songs under 30 seconds and paused time don't count, and a song you play again counts again.
-- Browsers are off by default, so YouTube videos don't end up in your history. Turn any player on or off under Soundscape → Players, or from the tray.
+- Browsers are off by default, so YouTube videos don't end up in your history. Turn any player on or off from the tray's **Players** menu or in Settings.
 - When a browser is on, only songs count: videos titled "Artist - Song", topic and VEVO channels, and music sites that send the album, like YouTube Music. Titles are cleaned up, so "Radiohead - Creep (Official Video)" is scrobbled as Creep by Radiohead. Other videos and anything longer than 20 minutes are left out.
-- While a song plays, the tray and the Soundscape menu offer **♥ Love this song**, which marks it on your server (and on Last.fm, if your server sends there), and **Don't scrobble this one**, which keeps the current song out of your history. If you play it again later, it counts again.
+- While a song plays, the tray offers **♥ Love this song**, which marks it on your server (and on Last.fm, if your server sends there), and **Don't scrobble this one**, which keeps the current song out of your history. If you play it again later, it counts again.
 - Untagged music files are tidied up: file endings and track numbers are dropped ("03 - Talisman.flac" becomes Talisman), underscores become spaces, and when there's no artist, "Artist - Song" in the name supplies it. Titles like "1999" or "7 rings" are left alone, and "Unknown Album" isn't sent.
-- **Pause scrobbling for an hour**, in the tray, the Soundscape menu and Settings, stops sending for 60 minutes and then turns itself back on, even across a restart. While it's paused, the same item says how long is left and resumes right away.
-- When a player sends a wrong or messy name, choose **Fix this title…** in the tray or the Soundscape menu. Settings shows exactly what the player sends; type the right artist and title, or tick the box to fix the artist on every song (handy for channels like "RadioheadVEVO"). The fix applies from then on, to now playing and scrobbles; plays already sent keep their old name. Fixes are listed in Settings, each with a Remove button, and stay on your computer.
+- **Pause scrobbling for an hour**, in the tray and Settings, stops sending for 60 minutes and then turns itself back on, even across a restart. While it's paused, the same item says how long is left and resumes right away.
+- When a player sends a wrong or messy name, choose **Fix this title…** in the tray. Settings shows exactly what the player sends; type the right artist and title, or tick the box to fix the artist on every song (handy for channels like "RadioheadVEVO"). The fix applies from then on, to now playing and scrobbles; plays already sent keep their old name. Fixes are listed in Settings, each with a Remove button, and stay on your computer.
 - When the server can't be reached, plays wait in `waiting.jsonl` next to the settings and are sent with their original times once it's back.
-- Closing the window keeps the app running in the background, so it keeps scrobbling. If a song is playing in the window, the app's own player carries it on (see below) and the mini player, your media keys and the tray still control it. If the music is paused, closing only hides the page, and once nothing has played for 5 minutes the page is closed too, which frees about half the memory; opening it again from your apps or the tray loads it fresh. Quit from the menu or the tray. Turn this off with Soundscape → Keep running when closed.
-- Back, forward and home buttons sit next to the Soundscape logo in the window, like in a browser (with an up-to-date server). The window's **Go** menu has the same: **Back** (Alt+←), **Forward** (Alt+→) and **Home** (Alt+Home). Your mouse's back button works too.
 - Links that lead off your server, like an artist's website or Bandcamp page, open in your web browser, including links meant for a new tab. In the Flatpak they go through the desktop's portal.
-- The tray icon shows the song playing and how many plays are waiting. GNOME only shows tray icons with the AppIndicator extension (`sudo dnf install gnome-shell-extension-appindicator` on Fedora, then turn it on in Extensions); everything in the tray is also in the window's Soundscape menu.
 
-## Notifications and settings
+## Running in the background
 
-New followers, friends passing you on the weekly leaderboard and play milestones show up as desktop notifications. The app checks about once a minute. The first check after you connect only notes what's already there, so you don't get a burst of old ones.
+Closing the window keeps the app running in the tray, so it keeps scrobbling. The window and its graphics memory are freed; the page itself stays loaded, so a song playing in it keeps playing. After a minute without music the page is set aside too, and it comes back where you left it when you open the window again from your apps or the tray. Opening the app a second time brings the running one forward instead of starting another. Quit from the tray. Turn this off in Settings ("Keep running when the window is closed").
+
+When the window closes while music plays, the app's own player (GStreamer, which Flatpak's GNOME runtime already has) can carry it on: it starts quietly in step with the page, the two cross over in a third of a second, and then the page is set aside. Media keys, the mini player, the tray and the Discord status keep working, and full songs still count as plays. When you open the window again, the page loads at the song and second the app's player has reached, and takes over in step the same way. It streams through the server with the app's own token. It's on when "When the window is closed, keep the music playing with the app's own player" is ticked in Settings; without it, the page keeps playing in the background instead.
+
+"Start when you log in, without opening the window" in Settings starts the app in the tray only; it scrobbles in the background until you open it from your apps. Outside Flatpak this writes `~/.config/autostart/io.github.novakr12.SoundscapeDesktop.desktop`; inside Flatpak it asks your desktop for permission instead.
+
+The tray icon shows the song playing and today's plays. GNOME only shows tray icons with the AppIndicator extension (`sudo dnf install gnome-shell-extension-appindicator` on Fedora, then turn it on in Extensions).
+
+## Notifications
+
+New followers, friends passing you on the weekly leaderboard, new releases and play milestones show up as desktop notifications. The app checks about once a minute. The first check after you connect only notes what's already there, so you don't get a burst of old ones. Clicking a notification opens what it's about: the follower's profile, the artist, the leaderboard.
 
 The tray shows a line like "Today: 42 plays · 2 h 51 min · 🔥 121-day streak", updated every minute and right after a play is sent. If you haven't played anything yet today, it reminds you that the streak is waiting. Turn on "Remind me at 21:00 if my streak is about to end" in Settings for a notification in the evening, once a day; it's off by default.
 
-In December (or in January, if the app wasn't running in December) a notification tells you your Yearscape for the year is ready, with your plays, hours, most played artist and new artists. It comes once a year; turn it off in Settings.
+On Monday or Tuesday a notification sums up last week: plays, listening time, your most played artist and your place among friends. It comes once per week; turn it off in Settings.
+
+In December (or in January, if the app wasn't running in December) a notification tells you your Yearscape for the year is ready, with your plays, hours, most played artist and new artists. Clicking it opens the Yearscape. It comes once a year; turn it off in Settings.
 
 Once a day the app looks at the [releases page](https://github.com/novakr12/soundscape-desktop/releases) for a newer version. When there is one, a notification tells you once, and the tray gets a "Download Soundscape Desktop …" item that opens the download page. Nothing is downloaded or installed by itself; turn the check off in Settings.
 
-Closing the window while music plays doesn't stop it. The app's own player (GStreamer, which Flatpak's GNOME runtime already has) starts quietly in step with the page and the two cross over in a third of a second, so there's no pause, and then the page is closed, which roughly halves the memory the app uses. Media keys, the mini player, the tray and the Discord status keep working, full songs still count as plays, and when you open the window again the app's player keeps going while the page loads, and the page takes over in step the same way. It streams through the server with the app's own token. Turn it off in Settings ("When the window is closed, keep the music playing with the app's own player") to keep the page playing in the background instead.
+## More from the tray
 
-Your Discord status can show what you're playing, the way music apps do: "Listening to Soundscape" with the song, the artist, the album cover (album name on hover, or "Unknown album" when your Soundscape server doesn't know it) and a progress bar. Discord fetches the cover itself, so it has to be public: the player's own cover when it's on the web, or your Soundscape server's open cover address when the server uses https; otherwise the Soundscape logo shows instead. Discord needs an application of your own for it: create one called "Soundscape" at [discord.com/developers/applications](https://discord.com/developers/applications), turn on "Show what I'm playing in my Discord status" in Settings and paste the Application ID. The status clears when the music stops or you turn it off.
+**Friends listening** shows who you follow is playing right now. Each friend has **▶ Play this song**, which opens the song in the window and plays it (the whole song if your Navidrome has it, otherwise the preview), and **Open profile**.
 
-On Monday or Tuesday a notification sums up last week: plays, listening time, your most played artist and your place among friends. It comes once per week; turn it off in Settings.
+**Music** opens the Music tab with your Navidrome libraries and playlists. Below it, each Navidrome playlist has a ▶ item that opens the playlist and starts playing it from the top (shuffled if shuffle is on). The list refreshes every 5 minutes and needs a Soundscape server with the Music tab.
 
-Soundscape → Friends listening, also in the tray, shows who you follow is playing right now. Each friend has **▶ Play this song**, which opens the song in the window and plays it (the whole song if your Navidrome has it, otherwise the preview), and **Open profile**.
+**Mini player** (also Ctrl+M) opens a small window that stays on top of other windows: the cover, the song, a seek bar you can click or drag, and previous, play/pause, next and ♥, plus shuffle and repeat for players that support them. Repeat goes from off to the whole queue to this song, like in Soundscape. While a song plays in the Soundscape window, a line below shows which song is up next in its queue. It follows whichever music player is playing (and stays on it while it's paused), and controls it the same way your media keys would. While a song plays in the Soundscape window, it shows and controls that instead. On GNOME with Wayland, "stay on top" depends on the desktop and may not work.
 
-Soundscape → Music, also in the tray, opens the Music tab with your Navidrome libraries and playlists. Below it, each Navidrome playlist has a ▶ item that opens the playlist and starts playing it from the top (shuffled if shuffle is on). The list refreshes every 5 minutes and needs a Soundscape server with the Music tab.
+## Media keys, search and Discord
+
+Songs you play in the window work with your keyboard's media keys and your desktop's media controls (play, pause, next, previous and seeking), and show up there with their cover. Clicking Soundscape in the media controls opens the window.
 
 Your artists and songs show up when you search from GNOME's Activities overview or KDE's KRunner, with their play counts. Pick one to open it in the app, or in GNOME click the app icon to open the full search. This works while the app is running, which it usually is in the background. In GNOME you can turn it off under Settings → Search.
 
-**Mini player** (Ctrl+M, or from the tray) opens a small window that stays on top of other windows: the cover, the song, a seek bar you can click or drag, and ⏮ ⏯ ⏭ ♥, plus shuffle and repeat for players that support them. Repeat goes from off to the whole queue to this song, like in Soundscape. While a song plays in the Soundscape window, a line below shows which song is up next in its queue. It follows whichever music player is playing (and stays on it while it's paused), and controls it the same way your media keys would. While a song plays in the Soundscape window, it shows and controls that instead. Covers that players keep as local files are read by the app, since the window can't open them itself. On GNOME with Wayland, "stay on top" depends on the desktop and may not work.
+Your Discord status can show what you're playing, the way music apps do: "Listening to Soundscape" with the song, the artist, the album cover (album name on hover, or "Unknown album" when your Soundscape server doesn't know it) and a progress bar. Discord fetches the cover itself, so it has to be public: the player's own cover when it's on the web, or your Soundscape server's open cover address when the server uses https; otherwise the Soundscape logo shows instead. Discord needs an application of your own for it: create one called "Soundscape" at [discord.com/developers/applications](https://discord.com/developers/applications), turn on "Show what I'm playing in my Discord status" in Settings and paste the Application ID. The status clears when the music stops or you turn it off.
 
-Previews and full songs you play in the window work with your keyboard's media keys and your desktop's media controls (play, pause and seeking), and show up there with their cover. This needs a server new enough to describe its previews to the system.
+## Settings
 
-Settings (Ctrl+, or from the menu and the tray) opens Soundscape's own Settings page in the window, with this app's settings under **This app**: scrobbling and players, plays waiting to be sent with a Send now button, notifications, the Discord status, starting when you log in, and keeping the app running when the window is closed. They sit next to your account, privacy and the player (volume levelling, crossfade). The app fills that section in itself, so it only shows inside the app and needs an up-to-date server. Title fixes, changing the server and signing out are in the app's small settings window, which also opens when the app isn't connected yet and has every other setting too. The version you have is at the top of This app, in the small window, at the top of the Soundscape menu and under the logo on the home page; when a newer one is out, both settings say so and have a Download button.
-
-Starting when you log in opens no window; the app scrobbles in the background until you open it from your apps. Outside Flatpak this writes `~/.config/autostart/io.github.novakr12.SoundscapeDesktop.desktop`; inside Flatpak it asks your desktop for permission instead.
+Settings (Ctrl+, or from the tray) opens Soundscape's own Settings page in the window, with this app's settings under **This app**: scrobbling and players, title fixes, plays waiting to be sent with a Send now button, notifications, the Discord status, starting when you log in, keeping the app running when the window is closed, display options, changing the server and signing out. They sit next to your account, privacy and the player (volume levelling, crossfade). The app fills that section in itself, so it only shows inside the app and needs an up-to-date server. The version you have is at the top of This app, which also says when a newer one is out.
 
 ## Search from your desktop without Flatpak
 
-The Flatpak sets search up for you. When you run the app from source, copy the two files yourself. GNOME only reads search providers from system folders and needs the app's `.desktop` file installed:
+The Flatpak sets search up for you. When you run the app from source, copy the files yourself. GNOME only reads search providers from system folders and needs the app's `.desktop` file installed:
 
 ```
 sudo install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.search-provider.ini /usr/local/share/gnome-shell/search-providers/io.github.novakr12.SoundscapeDesktop.search-provider.ini
@@ -103,12 +121,11 @@ Log out and back in for GNOME to pick it up.
 
 ## Flatpak
 
-The `flatpak` folder holds everything to build the app as a Flatpak: the manifest, the desktop entry, the store listing, and `cargo-sources.py`, which lists every Rust crate so the build can run without network access. The tray library comes from Flathub's shared modules, a git submodule in `flatpak/shared-modules`.
+The `flatpak` folder holds everything to build the app as a Flatpak: the manifest, the desktop entry, the store listing, and `cargo-sources.py`, which lists every Rust crate so the build can run without network access. The manifest also fetches the prebuilt SpiderMonkey library that Servo's JavaScript engine links against, so the offline build doesn't have to compile it.
 
 To build and install it yourself (install `flatpak-builder` first; on Fedora `sudo dnf install flatpak-builder`):
 
 ```
-git submodule update --init
 python3 flatpak/cargo-sources.py
 flatpak-builder --user --install-deps-from=flathub --install --force-clean flatpak/build-dir flatpak/io.github.novakr12.SoundscapeDesktop.yml
 flatpak run io.github.novakr12.SoundscapeDesktop
@@ -116,7 +133,7 @@ flatpak run io.github.novakr12.SoundscapeDesktop
 
 CI builds the same Flatpak on every push and keeps it as `soundscape-desktop.flatpak` under the run's artifacts, which installs with `flatpak install --user soundscape-desktop.flatpak`.
 
-The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), show its own media player for media keys (`org.mpris.MediaPlayer2.SoundscapeDesktop`), play sound (for song previews), use the network and reach Discord's local socket (`xdg-run/discord-ipc-0`, and `xdg-run/app/com.discordapp.Discord` for the Discord Flatpak) for the Discord status. It can't see your files.
+The Flatpak may talk to music players (`org.mpris.MediaPlayer2.*`), the tray (`org.kde.StatusNotifierWatcher`) and notifications (`org.freedesktop.Notifications`), show its own media player for media keys (`org.mpris.MediaPlayer2.SoundscapeDesktop`), use your graphics card to draw the window, play sound, use the network and reach Discord's local socket (`xdg-run/discord-ipc-0`, and `xdg-run/app/com.discordapp.Discord` for the Discord Flatpak) for the Discord status. It can't see your files.
 
 ## Releases
 
@@ -130,24 +147,33 @@ Flatpak fetches the GNOME runtime from Flathub if you don't have it yet. `SHA256
 
 To make a release:
 
-1. Set the new version in `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, run `cargo update -p soundscape-desktop` in `src-tauri`, and add a `<release>` with notes at the top of the metainfo's `<releases>`.
+1. Set the new version in `Cargo.toml` and `core/Cargo.toml`, run `cargo update -w`, and add a `<release>` with notes at the top of the metainfo's `<releases>`.
 2. Commit and push, then tag the commit and push the tag:
 
    ```
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.10.0
+   git push origin v0.10.0
    ```
 
-The release workflow checks that the tag, `Cargo.toml` and the metainfo agree, builds the Flatpak, and publishes the release with the notes from the metainfo.
+The release workflow checks that the tag, both `Cargo.toml` files and the metainfo agree, builds the Flatpak, and publishes the release with the notes from the metainfo.
+
+## How it's put together
+
+| Folder | What's in it |
+|---|---|
+| `src` | The window: Servo, keyboard and mouse input, the mini player's window, the background and single-copy handling |
+| `core` | Everything else: scrobbling, the tray, notifications, media keys, search, Discord, the app's own player and the settings |
+| `icons` | The app icon in every size the desktop needs |
+| `flatpak` | The Flatpak manifest, desktop entry, store listing and release scripts |
 
 ## Useful commands
 
 | Command | What it does |
 |---|---|
-| `cargo run` | Start the app |
-| `cargo test` | Run the tests (`dbus-run-session -- cargo test` also runs the one that talks to a real player over D-Bus) |
-| `cargo clippy --all-targets -- -D warnings` | Lint |
-| `cargo fmt` | Format the code |
+| `cargo run --release` | Start the app |
+| `cargo test --workspace --release` | Run the tests (`dbus-run-session -- cargo test --workspace --release` also runs the ones that talk to D-Bus) |
+| `cargo clippy --workspace --all-targets --release -- -D warnings` | Lint |
+| `cargo fmt --all` | Format the code |
 | `cargo build --release` | Build an optimised binary in `target/release/soundscape-desktop` |
 
 ## License

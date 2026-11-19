@@ -98,6 +98,19 @@
   </supports>
 
   <releases>
+    <release version="0.10.0" date="2026-11-19">
+      <description>
+        <p>The app now draws its window with the Servo browser engine instead of WebKitGTK.</p>
+        <ul>
+          <li>Closing the window frees its graphics memory, and on Wayland the window really closes instead of staying around</li>
+          <li>While the app's own player carries on the music, the page is set aside completely and comes back where the music is when you open the window</li>
+          <li>Clicking a notification opens what it is about, like the new follower's profile or your Yearscape</li>
+          <li>Clicking Soundscape in your desktop's media controls opens the window</li>
+          <li>Title fixes, changing the server and signing out are now in Soundscape's Settings page, under This app</li>
+          <li>The tray no longer needs extra libraries, and opening the app a second time brings the running one forward</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.16" date="2026-11-18">
       <description>
         <p>Opening the window while a song plays in the background no longer stutters.</p>

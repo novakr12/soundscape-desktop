@@ -20,8 +20,6 @@ finish-args:
   - --filesystem=xdg-run/app/com.discordapp.Discord:create
 
 modules:
-  - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
-
   - name: soundscape-desktop
     buildsystem: simple
     build-options:
@@ -29,25 +27,27 @@ modules:
       env:
         CARGO_HOME: /run/build/soundscape-desktop/cargo
         CARGO_NET_OFFLINE: 'true'
+        MOZJS_ARCHIVE: /run/build/soundscape-desktop/libmozjs-x86_64-unknown-linux-gnu.tar.gz
     build-commands:
-      - cargo build --release --locked --offline --manifest-path src-tauri/Cargo.toml
-      - install -Dm755 src-tauri/target/release/soundscape-desktop /app/bin/soundscape-desktop
+      - cargo build --release --locked --offline
+      - install -Dm755 target/release/soundscape-desktop /app/bin/soundscape-desktop
       - install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.desktop /app/share/applications/io.github.novakr12.SoundscapeDesktop.desktop
       - install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.metainfo.xml /app/share/metainfo/io.github.novakr12.SoundscapeDesktop.metainfo.xml
       - install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.search-provider.ini /app/share/gnome-shell/search-providers/io.github.novakr12.SoundscapeDesktop.search-provider.ini
       - install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.krunner.desktop /app/share/krunner/dbusplugins/io.github.novakr12.SoundscapeDesktop.desktop
-      - install -Dm644 src-tauri/icons/icon.svg /app/share/icons/hicolor/scalable/apps/io.github.novakr12.SoundscapeDesktop.svg
-      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.novakr12.SoundscapeDesktop.png
-      - install -Dm644 src-tauri/icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/io.github.novakr12.SoundscapeDesktop.png
-      - install -Dm644 src-tauri/icons/icon.png /app/share/icons/hicolor/512x512/apps/io.github.novakr12.SoundscapeDesktop.png
+      - install -Dm644 icons/icon.svg /app/share/icons/hicolor/scalable/apps/io.github.novakr12.SoundscapeDesktop.svg
+      - install -Dm644 icons/128x128.png /app/share/icons/hicolor/128x128/apps/io.github.novakr12.SoundscapeDesktop.png
+      - install -Dm644 icons/128x128@2x.png /app/share/icons/hicolor/256x256/apps/io.github.novakr12.SoundscapeDesktop.png
+      - install -Dm644 icons/icon.png /app/share/icons/hicolor/512x512/apps/io.github.novakr12.SoundscapeDesktop.png
     sources:
       - type: dir
         path: ..
         skip:
-          - src-tauri/target
-          - src-tauri/gen
+          - target
           - flatpak/.flatpak-builder
           - flatpak/build-dir
           - flatpak/repo
-          - flatpak/shared-modules
+      - type: file
+        url: https://github.com/servo/mozjs/releases/download/mozjs-sys-v153.6.0-1/libmozjs-x86_64-unknown-linux-gnu.tar.gz
+        sha256: 4b08d48e98839e058c6523ed103f7874874acfa57a1d54ef93cadc21e7168f37
       - cargo-sources.json

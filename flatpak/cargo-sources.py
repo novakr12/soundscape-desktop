@@ -46,7 +46,7 @@ def sources(lock: dict) -> list[dict]:
 
 def main() -> None:
     here = Path(__file__).resolve().parent
-    lock_path = Path(sys.argv[1]) if len(sys.argv) > 1 else here.parent / "src-tauri" / "Cargo.lock"
+    lock_path = Path(sys.argv[1]) if len(sys.argv) > 1 else here.parent / "Cargo.lock"
     out_path = Path(sys.argv[2]) if len(sys.argv) > 2 else here / "cargo-sources.json"
     with open(lock_path, "rb") as file:
         lock = tomllib.load(file)

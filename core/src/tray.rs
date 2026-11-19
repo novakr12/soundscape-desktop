@@ -208,8 +208,10 @@ fn icon(bytes: &[u8]) -> Option<Icon> {
         height: shown.height as i32,
         data: shown
             .rgba
-            .chunks_exact(4)
-            .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|[red, green, blue, alpha]| [*alpha, *red, *green, *blue])
             .collect(),
     })
 }

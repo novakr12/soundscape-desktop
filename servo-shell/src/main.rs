@@ -46,6 +46,7 @@ enum Wake {
     Servo,
     Poll,
     Push,
+    Park(bool),
     Quit,
     Theme(Theme),
     Answer(u64, Answer),
@@ -86,6 +87,10 @@ struct Shell {
     memory_limit: Cell<u32>,
     armed: Cell<bool>,
     loaded_at: Cell<std::time::Instant>,
+    hidden_since: Cell<Option<std::time::Instant>>,
+    parked: RefCell<Option<Url>>,
+    asking: Cell<bool>,
+    park_after: std::time::Duration,
     storage: Option<std::path::PathBuf>,
     glide: RefCell<glide::Glide>,
     server: Option<Url>,
@@ -200,6 +205,57 @@ impl Shell {
                 |_| {},
             );
             webview.evaluate_javascript(valve::flag_script(self.armed.get()), |_| {});
+        }
+    }
+
+    fn check_hidden(&self) {
+        let hidden_for = self.hidden_since.get().map(|since| since.elapsed());
+        if self.asking.get()
+            || !valve::should_park(hidden_for, self.parked.borrow().is_some(), self.park_after)
+        {
+            return;
+        }
+        let Some(webview) = self.webview() else {
+            return;
+        };
+        self.asking.set(true);
+        let proxy = self.proxy.clone();
+        webview.evaluate_javascript(valve::PLAYING, move |result| {
+            let playing = !matches!(result, Ok(servo::JSValue::Boolean(false)));
+            let _ = proxy.send_event(Wake::Park(playing));
+        });
+    }
+
+    fn park(&self, playing: bool) {
+        self.asking.set(false);
+        if self.hidden_since.get().is_none() || self.parked.borrow().is_some() {
+            return;
+        }
+        if playing {
+            self.hidden_since.set(Some(std::time::Instant::now()));
+            return;
+        }
+        let Some(webview) = self.webview() else {
+            return;
+        };
+        let Some(url) = webview.url() else {
+            return;
+        };
+        if self.debug {
+            eprintln!("resting the page while hidden: {url}");
+        }
+        *self.parked.borrow_mut() = Some(url);
+        webview.load(valve::resting_page());
+    }
+
+    fn shown(&self) {
+        self.hidden_since.set(None);
+        let parked = self.parked.borrow_mut().take();
+        if let (Some(url), Some(webview)) = (parked, self.webview()) {
+            if self.debug {
+                eprintln!("bringing the page back: {url}");
+            }
+            webview.load(url);
         }
     }
 
@@ -507,6 +563,10 @@ impl WebViewDelegate for Shell {
     }
 }
 
+#[unsafe(export_name = "_rjem_malloc_conf")]
+pub static MALLOC_CONF: &[u8; 60] =
+    b"background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:0\0";
+
 static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
@@ -639,6 +699,10 @@ impl App {
             memory_limit: Cell::new(profile.memory_limit),
             armed: Cell::new(false),
             loaded_at: Cell::new(std::time::Instant::now()),
+            hidden_since: Cell::new(None),
+            parked: RefCell::new(None),
+            asking: Cell::new(false),
+            park_after: valve::park_after(std::env::var("SOUNDSCAPE_PARK_SECONDS").ok().as_deref()),
             cpu_now: profile.cpu_rendering,
             storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
@@ -692,8 +756,10 @@ impl ApplicationHandler<Wake> for App {
             Wake::Poll => {
                 shell.take_commands();
                 shell.check_memory();
+                shell.check_hidden();
             }
             Wake::Push => shell.push_settings(),
+            Wake::Park(playing) => shell.park(playing),
             Wake::Quit => {
                 shell.close();
                 event_loop.exit();
@@ -744,7 +810,21 @@ impl ApplicationHandler<Wake> for App {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 webview.set_hidpi_scale_factor(Scale::new(scale_factor as f32));
             }
-            WindowEvent::Focused(focused) => webview.set_focused(focused),
+            WindowEvent::Focused(focused) => {
+                webview.set_focused(focused);
+                if focused {
+                    shell.shown();
+                }
+            }
+            WindowEvent::Occluded(hidden) => {
+                if hidden {
+                    if shell.hidden_since.get().is_none() {
+                        shell.hidden_since.set(Some(std::time::Instant::now()));
+                    }
+                } else {
+                    shell.shown();
+                }
+            }
             WindowEvent::ModifiersChanged(modifiers) => shell.held.set(modifiers.state()),
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed && shell.shortcut(&event.logical_key) {

@@ -4,6 +4,24 @@ pub const DEFAULT_LIMIT_MB: u32 = 500;
 pub const LIMITS_MB: [u32; 4] = [0, 400, 500, 700];
 pub const SETTLE: Duration = Duration::from_secs(60);
 const PAGE_BYTES: u64 = 4096;
+pub const PARK_AFTER: Duration = Duration::from_secs(60);
+pub const PLAYING: &str = r#"[...document.querySelectorAll("audio, video")].some((media) => !media.paused && !media.ended)"#;
+const RESTING_PAGE: &str = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Ctitle%3ESoundscape%3C%2Ftitle%3E%3Cbody%3E%3C%2Fbody%3E";
+
+pub fn resting_page() -> url::Url {
+    url::Url::parse(RESTING_PAGE).expect("resting page")
+}
+
+pub fn park_after(value: Option<&str>) -> Duration {
+    value
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(PARK_AFTER)
+}
+
+pub fn should_park(hidden_for: Option<Duration>, parked: bool, wait: Duration) -> bool {
+    !parked && hidden_for.is_some_and(|hidden| hidden >= wait)
+}
 
 pub fn resident_mb(statm: &str) -> Option<u32> {
     let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
@@ -49,6 +67,19 @@ mod tests {
         assert!(!should_arm(500, Some(600), Duration::from_secs(5)));
         assert!(!should_arm(0, Some(900), settled));
         assert!(!should_arm(500, None, settled));
+    }
+
+    #[test]
+    fn rests_the_page_only_after_a_while_hidden() {
+        let wait = Duration::from_secs(60);
+        assert!(should_park(Some(Duration::from_secs(61)), false, wait));
+        assert!(!should_park(Some(Duration::from_secs(10)), false, wait));
+        assert!(!should_park(Some(Duration::from_secs(61)), true, wait));
+        assert!(!should_park(None, false, wait));
+        assert_eq!(park_after(Some("5")), Duration::from_secs(5));
+        assert_eq!(park_after(Some("x")), PARK_AFTER);
+        assert_eq!(park_after(None), PARK_AFTER);
+        assert_eq!(resting_page().scheme(), "data");
     }
 
     #[test]

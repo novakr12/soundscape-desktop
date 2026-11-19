@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 pub const SOFTWARE: &str = "LIBGL_ALWAYS_SOFTWARE";
 pub const EGL_VENDORS: &str = "__EGL_VENDOR_LIBRARY_FILENAMES";
 const MESA_VENDOR: &str = "50_mesa.json";
+const NVIDIA_VENDOR: &str = "10_nvidia.json";
+const NVIDIA_DRIVER: &str = "/proc/driver/nvidia/version";
 const VENDOR_DIRS: [&str; 3] = [
     "/usr/share/glvnd/egl_vendor.d",
     "/etc/glvnd/egl_vendor.d",
@@ -49,23 +51,37 @@ pub fn settled(storage: Option<&Path>) {
     }
 }
 
-pub fn mesa_vendor(exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+fn vendor(name: &str, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     VENDOR_DIRS
         .iter()
-        .map(|dir| Path::new(dir).join(MESA_VENDOR))
+        .map(|dir| Path::new(dir).join(name))
         .find(|path| exists(path))
+}
+
+pub fn mesa_vendor(exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    vendor(MESA_VENDOR, exists)
+}
+
+pub fn nvidia_vendor(exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    if !exists(Path::new(NVIDIA_DRIVER)) {
+        return None;
+    }
+    vendor(NVIDIA_VENDOR, exists)
 }
 
 pub fn to_set(
     enabled: bool,
     present: impl Fn(&str) -> bool,
     mesa: Option<PathBuf>,
+    nvidia: Option<PathBuf>,
 ) -> Vec<(&'static str, String)> {
-    if !enabled {
-        return Vec::new();
-    }
-    let mut wanted = vec![(SOFTWARE, "1".to_string())];
-    if let Some(path) = mesa {
+    let mut wanted = Vec::new();
+    if enabled {
+        wanted.push((SOFTWARE, "1".to_string()));
+        if let Some(path) = mesa {
+            wanted.push((EGL_VENDORS, path.to_string_lossy().into_owned()));
+        }
+    } else if let Some(path) = nvidia {
         wanted.push((EGL_VENDORS, path.to_string_lossy().into_owned()));
     }
     wanted
@@ -79,6 +95,7 @@ pub fn prepare(enabled: bool) -> Vec<&'static str> {
         enabled,
         |name| std::env::var_os(name).is_some(),
         mesa_vendor(|path| path.exists()),
+        nvidia_vendor(|path| path.exists()),
     );
     let mut set = Vec::new();
     for (name, value) in wanted {
@@ -96,7 +113,7 @@ mod tests {
     fn asks_mesa_to_draw_with_the_processor() {
         let mesa = Some(PathBuf::from("/usr/share/glvnd/egl_vendor.d/50_mesa.json"));
         assert_eq!(
-            to_set(true, |_| false, mesa.clone()),
+            to_set(true, |_| false, mesa.clone(), None),
             vec![
                 (SOFTWARE, "1".to_string()),
                 (
@@ -106,12 +123,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            to_set(true, |_| false, None),
+            to_set(true, |_| false, None, None),
             vec![(SOFTWARE, "1".to_string())]
         );
-        assert!(to_set(false, |_| false, mesa.clone()).is_empty());
+        assert!(to_set(false, |_| false, mesa.clone(), None).is_empty());
         assert_eq!(
-            to_set(true, |name| name == EGL_VENDORS, mesa),
+            to_set(true, |name| name == EGL_VENDORS, mesa, None),
             vec![(SOFTWARE, "1".to_string())]
         );
     }
@@ -134,6 +151,53 @@ mod tests {
         let _ = std::fs::remove_file(crate::bridge::own_file(&dir));
         let _ = std::fs::remove_dir(&dir);
         assert!(!guard(None, false));
+    }
+
+    #[test]
+    fn keeps_mesa_out_when_the_nvidia_driver_draws() {
+        let nvidia = Some(PathBuf::from(
+            "/usr/share/glvnd/egl_vendor.d/10_nvidia.json",
+        ));
+        let mesa = Some(PathBuf::from("/usr/share/glvnd/egl_vendor.d/50_mesa.json"));
+        assert_eq!(
+            to_set(false, |_| false, mesa.clone(), nvidia.clone()),
+            vec![(
+                EGL_VENDORS,
+                "/usr/share/glvnd/egl_vendor.d/10_nvidia.json".to_string()
+            )]
+        );
+        assert!(
+            to_set(
+                false,
+                |name| name == EGL_VENDORS,
+                mesa.clone(),
+                nvidia.clone()
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            to_set(true, |_| false, mesa, nvidia),
+            vec![
+                (SOFTWARE, "1".to_string()),
+                (
+                    EGL_VENDORS,
+                    "/usr/share/glvnd/egl_vendor.d/50_mesa.json".to_string()
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn finds_the_nvidia_vendor_file_only_with_the_driver_loaded() {
+        let everything = |_: &Path| true;
+        assert_eq!(
+            nvidia_vendor(everything),
+            Some(PathBuf::from(
+                "/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
+            ))
+        );
+        assert_eq!(nvidia_vendor(|path| path != Path::new(NVIDIA_DRIVER)), None);
+        assert_eq!(nvidia_vendor(|path| path == Path::new(NVIDIA_DRIVER)), None);
     }
 
     #[test]

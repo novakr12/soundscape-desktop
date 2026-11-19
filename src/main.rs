@@ -1,3 +1,4 @@
+mod font;
 mod glide;
 mod host;
 mod keys;
@@ -123,6 +124,15 @@ impl WebViewDelegate for MiniPage {
     }
 }
 
+fn add_font(scripts: &UserContentManager, css: &str) {
+    if let Ok(place) = Url::parse("soundscape://desktop-font.css") {
+        scripts.add_stylesheet(Rc::new(servo::user_contents::UserStyleSheet::new(
+            css.into(),
+            place,
+        )));
+    }
+}
+
 fn mini_page() -> Url {
     Url::parse(&format!(
         "data:text/html;base64,{}",
@@ -137,6 +147,7 @@ struct Shell {
     scripts: Rc<UserContentManager>,
     handback: RefCell<Option<Rc<UserScript>>>,
     theme: Cell<Theme>,
+    desktop_font: Option<String>,
     size: Cell<PhysicalSize<u32>>,
     servo: Servo,
     context: Rc<WindowRenderingContext>,
@@ -448,8 +459,13 @@ impl Shell {
             return;
         };
         let context = Rc::new(context);
+        let mini_scripts = Rc::new(UserContentManager::new(&self.servo));
+        if let Some(css) = &self.desktop_font {
+            add_font(&mini_scripts, css);
+        }
         let webview = WebViewBuilder::new(&self.servo, context.clone())
             .url(mini_page())
+            .user_content_manager(mini_scripts)
             .hidpi_scale_factor(Scale::new(window.scale_factor() as f32))
             .delegate(Rc::new(MiniPage {
                 shell: Rc::downgrade(&me),
@@ -1008,6 +1024,10 @@ impl App {
                 place,
             )));
         }
+        let desktop_font = font::desktop().map(|family| font::stylesheet(&family));
+        if let Some(css) = &desktop_font {
+            add_font(&scripts, css);
+        }
         if let Some(extra) = std::env::var_os("SOUNDSCAPE_EXTRA_SCRIPT")
             .and_then(|path| std::fs::read_to_string(path).ok())
         {
@@ -1023,6 +1043,7 @@ impl App {
             scripts: scripts.clone(),
             handback: RefCell::new(None),
             theme: Cell::new(profile.theme),
+            desktop_font,
             size: Cell::new(size),
             servo,
             context,
@@ -1168,6 +1189,7 @@ impl ApplicationHandler<Wake> for App {
                         ))),
                         WebViewPoint::Device(DevicePoint::new(left as f32, top as f32)),
                     );
+                    shell.servo.spin_event_loop();
                 }
                 webview.paint();
                 shell.context.present();

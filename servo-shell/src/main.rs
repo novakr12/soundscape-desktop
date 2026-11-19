@@ -593,6 +593,7 @@ impl App {
             js_mem_gc_low_frequency_heap_growth: 120,
             js_mem_gc_malloc_threshold_base_mb: 16,
             session_history_max_length: 0,
+            shell_background_color_rgba: theme::backdrop(profile.theme),
             ..Default::default()
         };
         let servo = ServoBuilder::default()
@@ -658,8 +659,9 @@ impl App {
             .build();
         webview.set_focused(true);
         *shell.webview.borrow_mut() = Some(webview.clone());
+        webview.notify_theme_change(profile.theme);
         match theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref()) {
-            Some(theme) => webview.notify_theme_change(theme),
+            Some(_) => {}
             None => {
                 let sender = proxy.clone();
                 theme::watch(move |theme| {
@@ -697,6 +699,9 @@ impl ApplicationHandler<Wake> for App {
                 event_loop.exit();
             }
             Wake::Theme(theme) => {
+                shell
+                    .servo
+                    .set_preference("shell_background_color_rgba", theme::backdrop(theme).into());
                 if let Some(webview) = shell.webview() {
                     webview.notify_theme_change(theme);
                 }

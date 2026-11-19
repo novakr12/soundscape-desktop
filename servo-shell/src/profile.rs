@@ -19,6 +19,7 @@ pub struct Profile {
     pub server: Option<Url>,
     pub cpu_rendering: bool,
     pub memory_limit: u32,
+    pub theme: servo::Theme,
     pub smooth_scrolling: bool,
     pub storage: Option<PathBuf>,
     pub show_fps: bool,
@@ -83,6 +84,9 @@ pub fn load() -> Profile {
     let own = crate::bridge::load(storage.as_deref());
     Profile {
         cpu_rendering: own.cpu_rendering.unwrap_or(false),
+        theme: crate::theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref())
+            .or_else(crate::theme::current)
+            .unwrap_or(servo::Theme::Light),
         memory_limit: crate::valve::allowed(
             own.memory_limit.unwrap_or(crate::valve::DEFAULT_LIMIT_MB),
         ),

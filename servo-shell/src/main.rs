@@ -551,8 +551,10 @@ impl App {
         servo.setup_logging();
         let scripts = Rc::new(UserContentManager::new(&servo));
         scripts.add_script(Rc::new(UserScript::new(FORM_ENTER.into(), None)));
-        scripts.add_script(Rc::new(UserScript::new(SVG_FIX.into(), None)));
-        scripts.add_script(Rc::new(UserScript::new(LOGO_MOTION.into(), None)));
+        if !profile::wants(std::env::var("SOUNDSCAPE_PLAIN_SVG").ok().as_deref()) {
+            scripts.add_script(Rc::new(UserScript::new(SVG_FIX.into(), None)));
+            scripts.add_script(Rc::new(UserScript::new(LOGO_MOTION.into(), None)));
+        }
         if let Ok(place) = Url::parse("soundscape://controls.css") {
             scripts.add_stylesheet(Rc::new(servo::user_contents::UserStyleSheet::new(
                 CONTROLS.into(),

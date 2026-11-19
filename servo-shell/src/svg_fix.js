@@ -8,6 +8,38 @@
   const GAP_MS = 16;
   const KEEP_MS = 80;
   const copies = new WeakMap();
+  const HOVER = ".recharts-tooltip-cursor, .recharts-active-dot, .recharts-active-bar";
+  const drawn = new WeakMap();
+
+  const SKIPPED = new Set([NUDGE, "style", "font-family"]);
+
+  const content = (svg) => {
+    const parts = [];
+    const walk = (node) => {
+      if (node.nodeType === 3) {
+        parts.push(node.data);
+        return;
+      }
+      if (node.nodeType !== 1 || (node !== svg && node.matches(HOVER))) return;
+      parts.push("<", node.localName);
+      for (const attribute of node.attributes) {
+        if (SKIPPED.has(attribute.name)) continue;
+        parts.push(" ", attribute.name, "=", attribute.value);
+      }
+      parts.push(">");
+      for (let child = node.firstChild; child; child = child.nextSibling) walk(child);
+      parts.push("/");
+    };
+    walk(svg);
+    return parts.join("");
+  };
+
+  const changed = (svg) => {
+    const now = content(svg);
+    if (drawn.get(svg) === now) return false;
+    drawn.set(svg, now);
+    return true;
+  };
   const originals = new WeakMap();
   const families = new WeakMap();
   let stamps = 0;
@@ -33,6 +65,9 @@
 
   const fix = (element) => {
     if (element.namespaceURI !== SVG) return;
+    if (element.matches?.(HOVER) && element.getAttribute("display") !== "none") {
+      element.setAttribute("display", "none");
+    }
     if (element.localName === "text" && !families.has(element)) {
       const given = element.getAttribute("font-family") || getComputedStyle(element).fontFamily;
       families.set(element, given ? `${given}, sans-serif` : "sans-serif");
@@ -174,6 +209,7 @@
     }
     last = now;
     for (const svg of pending) {
+      if (!changed(svg)) continue;
       if (layer(svg)) continue;
       restamp(svg);
       nudges += 1;

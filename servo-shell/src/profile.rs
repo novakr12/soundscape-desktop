@@ -18,6 +18,7 @@ fn yes() -> bool {
 pub struct Profile {
     pub server: Option<Url>,
     pub cpu_rendering: bool,
+    pub memory_limit: u32,
     pub smooth_scrolling: bool,
     pub storage: Option<PathBuf>,
     pub show_fps: bool,
@@ -82,6 +83,9 @@ pub fn load() -> Profile {
     let own = crate::bridge::load(storage.as_deref());
     Profile {
         cpu_rendering: own.cpu_rendering.unwrap_or(false),
+        memory_limit: crate::valve::allowed(
+            own.memory_limit.unwrap_or(crate::valve::DEFAULT_LIMIT_MB),
+        ),
         server: server_from(
             given.as_deref(),
             saved.as_ref().and_then(|saved| saved.server.as_deref()),

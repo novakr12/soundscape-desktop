@@ -6,6 +6,7 @@ mod pickers;
 mod profile;
 mod software;
 mod theme;
+mod valve;
 
 use euclid::Scale;
 use pickers::{Answer, Ask, Picked};
@@ -37,6 +38,7 @@ const FORM_ENTER: &str = include_str!("form_enter.js");
 const CONTROLS: &str = include_str!("controls.css");
 const SVG_FIX: &str = include_str!("svg_fix.js");
 const LOGO_MOTION: &str = include_str!("logo_motion.js");
+const VALVE: &str = include_str!("valve.js");
 const LINE_HEIGHT: f64 = 76.0;
 const APP_ID: &str = "soundscape-servo";
 
@@ -81,6 +83,9 @@ struct Shell {
     smooth: Cell<bool>,
     cpu: Cell<bool>,
     cpu_now: bool,
+    memory_limit: Cell<u32>,
+    armed: Cell<bool>,
+    loaded_at: Cell<std::time::Instant>,
     storage: Option<std::path::PathBuf>,
     glide: RefCell<glide::Glide>,
     server: Option<Url>,
@@ -190,9 +195,25 @@ impl Shell {
                     smooth_scrolling: self.smooth.get(),
                     cpu_rendering: self.cpu.get(),
                     cpu_rendering_now: self.cpu_now,
+                    memory_limit: self.memory_limit.get(),
                 }),
                 |_| {},
             );
+            webview.evaluate_javascript(valve::flag_script(self.armed.get()), |_| {});
+        }
+    }
+
+    fn check_memory(&self) {
+        let armed = valve::should_arm(
+            self.memory_limit.get(),
+            valve::own_resident_mb(),
+            self.loaded_at.get().elapsed(),
+        );
+        if armed == self.armed.replace(armed) {
+            return;
+        }
+        if let Some(webview) = self.webview() {
+            webview.evaluate_javascript(valve::flag_script(armed), |_| {});
         }
     }
 
@@ -213,6 +234,14 @@ impl Shell {
                         shell.cpu.set(on);
                         let mut own = bridge::load(shell.storage.as_deref());
                         own.cpu_rendering = Some(on);
+                        bridge::save(shell.storage.as_deref(), &own);
+                        let _ = shell.proxy.send_event(Wake::Push);
+                    }
+                    bridge::Command::MemoryLimit(mb) => {
+                        let mb = valve::allowed(mb);
+                        shell.memory_limit.set(mb);
+                        let mut own = bridge::load(shell.storage.as_deref());
+                        own.memory_limit = Some(mb);
                         bridge::save(shell.storage.as_deref(), &own);
                         let _ = shell.proxy.send_event(Wake::Push);
                     }
@@ -360,6 +389,8 @@ impl WebViewDelegate for Shell {
 
     fn notify_load_status_changed(&self, _: WebView, status: servo::LoadStatus) {
         if matches!(status, servo::LoadStatus::Complete) {
+            self.loaded_at.set(std::time::Instant::now());
+            self.armed.set(false);
             let _ = self.proxy.send_event(Wake::Push);
         }
     }
@@ -561,6 +592,7 @@ impl App {
             js_mem_gc_high_frequency_heap_growth_min: 120,
             js_mem_gc_low_frequency_heap_growth: 120,
             js_mem_gc_malloc_threshold_base_mb: 16,
+            session_history_max_length: 0,
             ..Default::default()
         };
         let servo = ServoBuilder::default()
@@ -571,6 +603,7 @@ impl App {
         servo.setup_logging();
         let scripts = Rc::new(UserContentManager::new(&servo));
         scripts.add_script(Rc::new(UserScript::new(FORM_ENTER.into(), None)));
+        scripts.add_script(Rc::new(UserScript::new(VALVE.into(), None)));
         if !profile::wants(std::env::var("SOUNDSCAPE_PLAIN_SVG").ok().as_deref()) {
             scripts.add_script(Rc::new(UserScript::new(SVG_FIX.into(), None)));
             scripts.add_script(Rc::new(UserScript::new(LOGO_MOTION.into(), None)));
@@ -602,6 +635,9 @@ impl App {
             composing: Cell::new(false),
             smooth: Cell::new(profile.smooth_scrolling),
             cpu: Cell::new(profile.cpu_rendering),
+            memory_limit: Cell::new(profile.memory_limit),
+            armed: Cell::new(false),
+            loaded_at: Cell::new(std::time::Instant::now()),
             cpu_now: profile.cpu_rendering,
             storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
@@ -651,7 +687,10 @@ impl ApplicationHandler<Wake> for App {
         };
         match wake {
             Wake::Servo => shell.servo.spin_event_loop(),
-            Wake::Poll => shell.take_commands(),
+            Wake::Poll => {
+                shell.take_commands();
+                shell.check_memory();
+            }
             Wake::Push => shell.push_settings(),
             Wake::Quit => {
                 shell.close();

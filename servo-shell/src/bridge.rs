@@ -15,6 +15,8 @@ pub struct Own {
     pub smooth_scrolling: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpu_rendering: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_limit: Option<u32>,
 }
 
 pub fn own_file(storage: &Path) -> PathBuf {
@@ -43,6 +45,7 @@ pub struct Shown<'a> {
     pub smooth_scrolling: bool,
     pub cpu_rendering: bool,
     pub cpu_rendering_now: bool,
+    pub memory_limit: u32,
 }
 
 pub fn settings_script(shown: &Shown) -> String {
@@ -53,6 +56,7 @@ pub fn settings_script(shown: &Shown) -> String {
             "smooth_scrolling": shown.smooth_scrolling,
             "cpu_rendering": shown.cpu_rendering,
             "cpu_rendering_now": shown.cpu_rendering_now,
+            "memory_limit": shown.memory_limit,
         },
         "error": null,
     });
@@ -69,6 +73,7 @@ pub fn settings_script(shown: &Shown) -> String {
 pub enum Command {
     SmoothScrolling(bool),
     CpuRendering(bool),
+    MemoryLimit(u32),
     Restart,
 }
 
@@ -78,6 +83,7 @@ struct Raw {
     action: String,
     name: Option<String>,
     value: Option<bool>,
+    mb: Option<u32>,
 }
 
 pub fn commands(json: &str) -> Vec<Command> {
@@ -85,8 +91,11 @@ pub fn commands(json: &str) -> Vec<Command> {
         .unwrap_or_default()
         .into_iter()
         .filter_map(|value| serde_json::from_value::<Raw>(value).ok())
-        .filter_map(
-            |raw| match (raw.action.as_str(), raw.name.as_deref(), raw.value) {
+        .filter_map(|raw| {
+            if raw.action == "memory-limit" {
+                return raw.mb.map(Command::MemoryLimit);
+            }
+            match (raw.action.as_str(), raw.name.as_deref(), raw.value) {
                 ("option", Some("smooth_scrolling"), Some(value)) => {
                     Some(Command::SmoothScrolling(value))
                 }
@@ -95,8 +104,8 @@ pub fn commands(json: &str) -> Vec<Command> {
                 }
                 ("restart", _, _) => Some(Command::Restart),
                 _ => None,
-            },
-        )
+            }
+        })
         .collect()
 }
 
@@ -111,7 +120,9 @@ mod tests {
             smooth_scrolling: false,
             cpu_rendering: true,
             cpu_rendering_now: false,
+            memory_limit: 500,
         });
+        assert!(script.contains(r#""memory_limit":500"#));
         assert!(script.contains(r#""cpu_rendering":true"#));
         assert!(script.contains(r#""cpu_rendering_now":false"#));
         assert!(script.contains(r#""app":"servo""#));
@@ -124,12 +135,13 @@ mod tests {
     fn reads_the_page_commands() {
         assert_eq!(
             commands(
-                r#"[{"do":"option","name":"smooth_scrolling","value":false},{"do":"send-now"},{"do":"option","name":"discord","value":true},5,{"do":"option","name":"cpu_rendering","value":true},{"do":"restart"}]"#
+                r#"[{"do":"option","name":"smooth_scrolling","value":false},{"do":"send-now"},{"do":"option","name":"discord","value":true},5,{"do":"option","name":"cpu_rendering","value":true},{"do":"restart"},{"do":"memory-limit","mb":700},{"do":"memory-limit"}]"#
             ),
             vec![
                 Command::SmoothScrolling(false),
                 Command::CpuRendering(true),
-                Command::Restart
+                Command::Restart,
+                Command::MemoryLimit(700)
             ]
         );
         assert!(commands("nonsense").is_empty());
@@ -146,10 +158,12 @@ mod tests {
             &Own {
                 smooth_scrolling: Some(false),
                 cpu_rendering: Some(true),
+                memory_limit: Some(0),
             },
         );
         assert_eq!(load(Some(&dir)).smooth_scrolling, Some(false));
         assert_eq!(load(Some(&dir)).cpu_rendering, Some(true));
+        assert_eq!(load(Some(&dir)).memory_limit, Some(0));
         let _ = std::fs::remove_file(own_file(&dir));
         let _ = std::fs::remove_dir(&dir);
         assert_eq!(load(None), Own::default());

@@ -1,1 +1,0 @@
-{"local-windows":{"identifier":"local-windows","description":"The app's own setup, settings and mini player windows may use its commands. Pages from your server may not.","local":true,"windows":["setup","settings","mini"],"permissions":["core:default"]}}

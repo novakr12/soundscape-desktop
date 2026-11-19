@@ -111,7 +111,10 @@ pub async fn check(app: &AppHandle) {
         menu_text(&version)
     );
     let title = format!("Soundscape Desktop {version} is out");
-    if crate::notify::show_notification(app, &title, &body).is_ok() {
+    if crate::notify::show(app, &title, &body, crate::notify::Click::Downloads)
+        .await
+        .is_ok()
+    {
         state.update(|config| config.told_update = Some(version));
     }
 }

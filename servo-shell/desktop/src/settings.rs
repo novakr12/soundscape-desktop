@@ -276,12 +276,14 @@ pub async fn send_now(app: AppHandle) -> Result<SettingsView, String> {
     }
 }
 
-pub fn test_notification(app: AppHandle) -> Result<(), String> {
-    crate::notify::show_notification(
+pub async fn test_notification(app: AppHandle) -> Result<(), String> {
+    crate::notify::show(
         &app,
         "Soundscape",
         "Notifications work. New followers and milestones show up like this.",
+        crate::notify::Click::Window,
     )
+    .await
     .map_err(|error| format!("Your desktop didn't show the notification: {error}"))
 }
 

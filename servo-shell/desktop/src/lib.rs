@@ -193,11 +193,13 @@ pub fn window_closed(app: &AppHandle) -> bool {
         state.update(|config| config.told_about_background = true);
         let app = app.clone();
         async_runtime::spawn(async move {
-            let _ = notify::show_notification(
+            let _ = notify::show(
                 &app,
                 "Soundscape is still running",
                 "It keeps sending what you play. Open it again from your apps, or quit from the tray.",
-            );
+                notify::Click::Window,
+            )
+            .await;
         });
     }
     true

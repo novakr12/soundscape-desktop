@@ -7859,6 +7859,7 @@ dependencies = [
 name = "soundscape-desktop"
 version = "0.10.0"
 dependencies = [
+ "futures-util",
  "gethostname",
  "gstreamer",
  "ksni",

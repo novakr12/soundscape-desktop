@@ -22,6 +22,8 @@ pub struct Ready {
     pub top_artist: Option<String>,
     #[serde(default)]
     pub new_artists: u64,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 fn thousands(number: u64) -> String {
@@ -39,6 +41,14 @@ fn thousands(number: u64) -> String {
 pub fn due(answer: &Ready, enabled: bool, last: Option<i32>) -> Option<i32> {
     let year = answer.year?;
     (enabled && answer.ready && answer.plays > 0 && last != Some(year)).then_some(year)
+}
+
+pub fn page(answer: &Ready, year: i32) -> String {
+    answer
+        .url
+        .clone()
+        .filter(|url| url.starts_with('/') && !url.starts_with("//"))
+        .unwrap_or_else(|| format!("/yearscape?year={year}"))
 }
 
 pub fn notification(answer: &Ready) -> (String, String) {
@@ -96,7 +106,15 @@ pub async fn check(app: &AppHandle) {
         return;
     };
     let (title, body) = notification(&answer);
-    if crate::notify::show_notification(app, &title, &body).is_ok() {
+    if crate::notify::show(
+        app,
+        &title,
+        &body,
+        crate::notify::Click::Page(page(&answer, year)),
+    )
+    .await
+    .is_ok()
+    {
         state.update(|config| config.last_yearscape = Some(year));
     }
 }
@@ -139,5 +157,14 @@ mod tests {
         assert_eq!(due(&answer(), false, None), None);
         let not_yet: Ready = serde_json::from_str(r#"{"ready":false}"#).unwrap();
         assert_eq!(due(&not_yet, true, None), None);
+    }
+
+    #[test]
+    fn opens_the_year_it_tells_you_about() {
+        assert_eq!(page(&answer(), 2026), "/yearscape?year=2026");
+        let far: Ready =
+            serde_json::from_str(r#"{"ready":true,"year":2025,"url":"https://evil.example.org/"}"#)
+                .unwrap();
+        assert_eq!(page(&far, 2025), "/yearscape?year=2025");
     }
 }

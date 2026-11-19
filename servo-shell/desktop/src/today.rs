@@ -98,7 +98,10 @@ pub async fn check(app: &AppHandle) {
             config.last_streak_reminder.as_deref(),
         ) {
             let (title, body) = reminder(&today);
-            if crate::notify::show_notification(app, &title, &body).is_ok() {
+            if crate::notify::show(app, &title, &body, crate::notify::Click::Page("/".into()))
+                .await
+                .is_ok()
+            {
                 state.update(|config| config.last_streak_reminder = Some(date));
             }
         }

@@ -324,38 +324,6 @@ impl WebviewWindowBuilder {
 
 pub const APP_ID: &str = "io.github.novakr12.SoundscapeDesktop";
 
-pub fn notify(title: &str, body: &str) -> std::result::Result<(), String> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(_) => tokio::task::block_in_place(|| send_notification(title, body)),
-        Err(_) => send_notification(title, body),
-    }
-}
-
-fn send_notification(title: &str, body: &str) -> std::result::Result<(), String> {
-    let connection = zbus::blocking::Connection::session().map_err(|error| error.to_string())?;
-    let hints: HashMap<&str, zbus::zvariant::Value<'_>> =
-        HashMap::from([("desktop-entry", zbus::zvariant::Value::from(APP_ID))]);
-    connection
-        .call_method(
-            Some("org.freedesktop.Notifications"),
-            "/org/freedesktop/Notifications",
-            Some("org.freedesktop.Notifications"),
-            "Notify",
-            &(
-                "Soundscape",
-                0u32,
-                APP_ID,
-                title,
-                body,
-                Vec::<&str>::new(),
-                hints,
-                -1i32,
-            ),
-        )
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
 pub fn open_url(url: &str) -> std::result::Result<(), String> {
     Command::new("xdg-open")
         .arg(url)

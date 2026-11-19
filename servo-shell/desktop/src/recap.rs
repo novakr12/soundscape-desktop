@@ -92,7 +92,15 @@ pub async fn check(app: &AppHandle) {
         return;
     }
     let Some(recap) = recap else { return };
-    if crate::notify::show_notification(app, "Your week in music", &body(&recap)).is_ok() {
+    if crate::notify::show(
+        app,
+        "Your week in music",
+        &body(&recap),
+        crate::notify::Click::Page("/".into()),
+    )
+    .await
+    .is_ok()
+    {
         state.update(|config| config.last_recap = Some(recap.from.clone()));
     }
 }

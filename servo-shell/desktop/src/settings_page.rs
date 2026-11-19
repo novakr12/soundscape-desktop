@@ -166,7 +166,7 @@ async fn perform(app: &AppHandle, command: Command) -> Result<(), String> {
             Ok(())
         }
         Command::SendNow => settings::send_now(app.clone()).await.map(|_| ()),
-        Command::TestNotification => settings::test_notification(app.clone()),
+        Command::TestNotification => settings::test_notification(app.clone()).await,
         Command::Download => {
             crate::updates::open_downloads(app);
             Ok(())

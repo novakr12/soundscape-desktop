@@ -65,7 +65,7 @@ pub fn album_label(page: Option<&str>, looked: Option<&str>) -> String {
 }
 
 pub const LOGO: &str =
-    "https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/src-tauri/icons/icon.png";
+    "https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/servo-shell/desktop/icons/icon.png";
 const DRIFT_MS: u64 = 2000;
 
 pub fn public_art(art: Option<&str>, server_host: Option<&str>) -> Option<String> {

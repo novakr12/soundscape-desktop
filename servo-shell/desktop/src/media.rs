@@ -13,32 +13,12 @@ pub const BUS_NAME: &str = "org.mpris.MediaPlayer2.SoundscapeDesktop";
 const PATH: &str = "/org/mpris/MediaPlayer2";
 const TRACK: &str = "/io/github/novakr12/SoundscapeDesktop/Preview";
 const EVERY: Duration = Duration::from_millis(1000);
-const UNLOAD_HIDDEN_AFTER: Duration = Duration::from_secs(5 * 60);
+const IDLE: Duration = Duration::from_secs(4);
 
-pub fn should_unload(hidden: bool, playing: bool, quiet_for: Duration) -> bool {
-    hidden && !playing && quiet_for >= UNLOAD_HIDDEN_AFTER
-}
+static POKED: Notify = Notify::const_new();
 
-fn unload_when_quiet(
-    app: &AppHandle,
-    preview: Option<&Preview>,
-    quiet_since: &mut Option<std::time::Instant>,
-) {
-    let Some(window) = app.get_webview_window(MAIN) else {
-        *quiet_since = None;
-        return;
-    };
-    let hidden = !window.is_visible().unwrap_or(true);
-    let playing = preview.is_some_and(|preview| preview.playing);
-    if !hidden || playing {
-        *quiet_since = None;
-        return;
-    }
-    let since = *quiet_since.get_or_insert_with(std::time::Instant::now);
-    if should_unload(hidden, playing, since.elapsed()) {
-        *quiet_since = None;
-        let _ = window.destroy();
-    }
+pub fn poke() {
+    POKED.notify_one();
 }
 
 const READ: &str = r#"(() => {
@@ -173,6 +153,14 @@ pub fn metadata(preview: Option<&Preview>) -> HashMap<String, OwnedValue> {
     map
 }
 
+pub fn next_wait(preview: Option<&Preview>) -> Duration {
+    if preview.is_some() {
+        EVERY
+    } else {
+        IDLE
+    }
+}
+
 pub fn script(action: &str, seconds: f64) -> Option<String> {
     let body = match action {
         "play" => "a.play()".to_string(),
@@ -205,11 +193,13 @@ impl Shared {
     }
 }
 
-struct Root;
+struct Root(AppHandle);
 
 #[interface(name = "org.mpris.MediaPlayer2")]
 impl Root {
-    fn raise(&self) {}
+    fn raise(&self) {
+        crate::show(&self.0);
+    }
     fn quit(&self) {}
     #[zbus(property)]
     fn can_quit(&self) -> bool {
@@ -217,7 +207,7 @@ impl Root {
     }
     #[zbus(property)]
     fn can_raise(&self) -> bool {
-        false
+        true
     }
     #[zbus(property)]
     fn has_track_list(&self) -> bool {
@@ -401,7 +391,7 @@ async fn announce(connection: &Connection, old: Option<&Preview>, new: Option<&P
 async fn connect(app: &AppHandle, shared: &Arc<Shared>) -> Option<Connection> {
     let connection = Connection::session().await.ok()?;
     let server = connection.object_server();
-    server.at(PATH, Root).await.ok()?;
+    server.at(PATH, Root(app.clone())).await.ok()?;
     server
         .at(
             PATH,
@@ -432,18 +422,17 @@ pub async fn run(app: AppHandle) {
     let shared = Arc::new(Shared::default());
     let mut connection: Option<Connection> = None;
     let mut named = false;
-    let mut quiet_since = None;
+    let mut wait = IDLE;
     loop {
-        let _ = tokio::time::timeout(EVERY, shared.wake.notified()).await;
-        tokio::time::sleep(Duration::from_millis(150)).await;
-        let mut preview = read(&app).await;
-        app.state::<crate::AppState>().set_preview(preview.clone());
-        unload_when_quiet(&app, preview.as_ref(), &mut quiet_since);
-        if let (Some(_), Some(bus)) = (&preview, &connection) {
-            if crate::mpris::webkit_shows_this_app(bus, BUS_NAME).await {
-                preview = None;
-            }
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = shared.wake.notified() => {}
+            _ = POKED.notified() => {}
         }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let preview = read(&app).await;
+        wait = next_wait(preview.as_ref());
+        app.state::<crate::AppState>().set_preview(preview.clone());
         let old = {
             let mut current = shared.preview.lock().expect("preview lock");
             std::mem::replace(&mut *current, preview.clone())
@@ -471,12 +460,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unloads_a_hidden_window_only_after_five_quiet_minutes() {
-        let five = Duration::from_secs(300);
-        assert!(should_unload(true, false, five));
-        assert!(!should_unload(true, false, five - Duration::from_secs(1)));
-        assert!(!should_unload(true, true, five * 2));
-        assert!(!should_unload(false, false, five * 2));
+    fn looks_often_only_while_something_is_loaded() {
+        let preview = parse(
+            r#"{"title":"Says","artist":"Nils Frahm","album":null,"cover":null,"playing":false,"position":3,"length":60}"#,
+        );
+        assert_eq!(next_wait(preview.as_ref()), EVERY);
+        assert_eq!(next_wait(None), IDLE);
     }
 
     #[test]

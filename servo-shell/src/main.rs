@@ -660,6 +660,10 @@ impl WebViewDelegate for Shell {
         select.submit();
     }
 
+    fn notify_media_session_event(&self, _: WebView, _: servo::MediaSessionEvent) {
+        soundscape_desktop::media::poke();
+    }
+
     fn notify_crashed(&self, _: WebView, reason: String, _: Option<String>) {
         eprintln!("The page crashed: {reason}");
     }

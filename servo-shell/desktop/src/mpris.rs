@@ -293,22 +293,6 @@ async fn from_this_app(bus: &zbus::fdo::DBusProxy<'_>, name: &str) -> bool {
         .is_ok_and(is_this_app)
 }
 
-pub async fn webkit_shows_this_app(connection: &Connection, own: &str) -> bool {
-    let Ok(bus) = zbus::fdo::DBusProxy::new(connection).await else {
-        return false;
-    };
-    let Ok(names) = bus.list_names().await else {
-        return false;
-    };
-    for name in names {
-        let name = name.as_str();
-        if name.starts_with(PREFIX) && name != own && from_this_app(&bus, name).await {
-            return true;
-        }
-    }
-    false
-}
-
 pub async fn players(connection: &Connection) -> zbus::Result<Vec<Player>> {
     list(connection, true).await
 }

@@ -85,6 +85,8 @@ struct Shell {
     smooth: Cell<bool>,
     cpu: Cell<bool>,
     cpu_now: bool,
+    faster: Cell<bool>,
+    faster_now: bool,
     memory_limit: Cell<u32>,
     armed: Cell<bool>,
     loaded_at: Cell<std::time::Instant>,
@@ -202,6 +204,8 @@ impl Shell {
                     cpu_rendering: self.cpu.get(),
                     cpu_rendering_now: self.cpu_now,
                     memory_limit: self.memory_limit.get(),
+                    faster_scripts: self.faster.get(),
+                    faster_scripts_now: self.faster_now,
                 }),
                 |_| {},
             );
@@ -291,6 +295,13 @@ impl Shell {
                         shell.cpu.set(on);
                         let mut own = bridge::load(shell.storage.as_deref());
                         own.cpu_rendering = Some(on);
+                        bridge::save(shell.storage.as_deref(), &own);
+                        let _ = shell.proxy.send_event(Wake::Push);
+                    }
+                    bridge::Command::FasterScripts(on) => {
+                        shell.faster.set(on);
+                        let mut own = bridge::load(shell.storage.as_deref());
+                        own.faster_scripts = Some(on);
                         bridge::save(shell.storage.as_deref(), &own);
                         let _ = shell.proxy.send_event(Wake::Push);
                     }
@@ -656,6 +667,8 @@ impl App {
             session_history_max_length: 0,
             expose_servointernals_globally: true,
             shell_background_color_rgba: theme::backdrop(profile.theme),
+            js_ion_enabled: profile.faster_scripts,
+            js_baseline_jit_enabled: profile.faster_scripts,
             ..Default::default()
         };
         let servo = ServoBuilder::default()
@@ -707,6 +720,8 @@ impl App {
             asking: Cell::new(false),
             park_after: valve::park_after(std::env::var("SOUNDSCAPE_PARK_SECONDS").ok().as_deref()),
             cpu_now: profile.cpu_rendering,
+            faster: Cell::new(profile.faster_scripts),
+            faster_now: profile.faster_scripts,
             storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
             server: profile.server.clone(),

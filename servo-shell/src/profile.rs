@@ -18,6 +18,7 @@ fn yes() -> bool {
 pub struct Profile {
     pub server: Option<Url>,
     pub cpu_rendering: bool,
+    pub faster_scripts: bool,
     pub memory_limit: u32,
     pub theme: servo::Theme,
     pub smooth_scrolling: bool,
@@ -84,6 +85,7 @@ pub fn load() -> Profile {
     let own = crate::bridge::load(storage.as_deref());
     Profile {
         cpu_rendering: own.cpu_rendering.unwrap_or(false),
+        faster_scripts: own.faster_scripts.unwrap_or(false),
         theme: crate::theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref())
             .or_else(crate::theme::current)
             .unwrap_or(servo::Theme::Light),

@@ -17,6 +17,8 @@ pub struct Own {
     pub cpu_rendering: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faster_scripts: Option<bool>,
 }
 
 pub fn own_file(storage: &Path) -> PathBuf {
@@ -46,6 +48,8 @@ pub struct Shown<'a> {
     pub cpu_rendering: bool,
     pub cpu_rendering_now: bool,
     pub memory_limit: u32,
+    pub faster_scripts: bool,
+    pub faster_scripts_now: bool,
 }
 
 pub fn settings_script(shown: &Shown) -> String {
@@ -57,6 +61,8 @@ pub fn settings_script(shown: &Shown) -> String {
             "cpu_rendering": shown.cpu_rendering,
             "cpu_rendering_now": shown.cpu_rendering_now,
             "memory_limit": shown.memory_limit,
+            "faster_scripts": shown.faster_scripts,
+            "faster_scripts_now": shown.faster_scripts_now,
         },
         "error": null,
     });
@@ -73,6 +79,7 @@ pub fn settings_script(shown: &Shown) -> String {
 pub enum Command {
     SmoothScrolling(bool),
     CpuRendering(bool),
+    FasterScripts(bool),
     MemoryLimit(u32),
     Restart,
 }
@@ -102,6 +109,9 @@ pub fn commands(json: &str) -> Vec<Command> {
                 ("option", Some("cpu_rendering"), Some(value)) => {
                     Some(Command::CpuRendering(value))
                 }
+                ("option", Some("faster_scripts"), Some(value)) => {
+                    Some(Command::FasterScripts(value))
+                }
                 ("restart", _, _) => Some(Command::Restart),
                 _ => None,
             }
@@ -121,8 +131,12 @@ mod tests {
             cpu_rendering: true,
             cpu_rendering_now: false,
             memory_limit: 500,
+            faster_scripts: true,
+            faster_scripts_now: false,
         });
         assert!(script.contains(r#""memory_limit":500"#));
+        assert!(script.contains(r#""faster_scripts":true"#));
+        assert!(script.contains(r#""faster_scripts_now":false"#));
         assert!(script.contains(r#""cpu_rendering":true"#));
         assert!(script.contains(r#""cpu_rendering_now":false"#));
         assert!(script.contains(r#""app":"servo""#));
@@ -135,13 +149,14 @@ mod tests {
     fn reads_the_page_commands() {
         assert_eq!(
             commands(
-                r#"[{"do":"option","name":"smooth_scrolling","value":false},{"do":"send-now"},{"do":"option","name":"discord","value":true},5,{"do":"option","name":"cpu_rendering","value":true},{"do":"restart"},{"do":"memory-limit","mb":700},{"do":"memory-limit"}]"#
+                r#"[{"do":"option","name":"smooth_scrolling","value":false},{"do":"send-now"},{"do":"option","name":"discord","value":true},5,{"do":"option","name":"cpu_rendering","value":true},{"do":"restart"},{"do":"memory-limit","mb":700},{"do":"memory-limit"},{"do":"option","name":"faster_scripts","value":true}]"#
             ),
             vec![
                 Command::SmoothScrolling(false),
                 Command::CpuRendering(true),
                 Command::Restart,
-                Command::MemoryLimit(700)
+                Command::MemoryLimit(700),
+                Command::FasterScripts(true)
             ]
         );
         assert!(commands("nonsense").is_empty());
@@ -159,11 +174,13 @@ mod tests {
                 smooth_scrolling: Some(false),
                 cpu_rendering: Some(true),
                 memory_limit: Some(0),
+                faster_scripts: Some(true),
             },
         );
         assert_eq!(load(Some(&dir)).smooth_scrolling, Some(false));
         assert_eq!(load(Some(&dir)).cpu_rendering, Some(true));
         assert_eq!(load(Some(&dir)).memory_limit, Some(0));
+        assert_eq!(load(Some(&dir)).faster_scripts, Some(true));
         let _ = std::fs::remove_file(own_file(&dir));
         let _ = std::fs::remove_dir(&dir);
         assert_eq!(load(None), Own::default());

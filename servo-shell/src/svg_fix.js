@@ -137,26 +137,6 @@
     }
   };
 
-  const backdrop = (element) => {
-    for (let at = element; at && at.nodeType === 1; at = at.parentElement) {
-      const color = getComputedStyle(at).backgroundColor;
-      if (color && color !== "transparent" && !/^rgba\(.*,\s*0\)$/.test(color)) return color;
-    }
-    return getComputedStyle(document.body).backgroundColor || "#111111";
-  };
-
-  const cover = (copy, color) => {
-    const box = copy.viewBox?.baseVal;
-    const fill = document.createElementNS(SVG, "rect");
-    const wide = box && box.width > 0 ? box : null;
-    fill.setAttribute("x", String(wide ? wide.x - wide.width : -10000));
-    fill.setAttribute("y", String(wide ? wide.y - wide.height : -10000));
-    fill.setAttribute("width", String(wide ? wide.width * 3 : 20000));
-    fill.setAttribute("height", String(wide ? wide.height * 3 : 20000));
-    fill.setAttribute("fill", color);
-    copy.prepend(fill);
-  };
-
   const layer = (svg) => {
     const parent = holder(svg);
     if (!parent) return false;
@@ -175,7 +155,6 @@
     copy.style.pointerEvents = "none";
     copy.style.opacity = "1";
     restamp(copy);
-    cover(copy, backdrop(svg.parentElement));
     const older = copies.get(svg) ?? [];
     if (older.length > 0) older.at(-1).after(copy);
     else parent.prepend(copy);

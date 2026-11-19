@@ -10,6 +10,7 @@ winit = "0.30.13"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
 url = "2"
 euclid = "0.22"
+servo-base = "=0.8.0"
 servo-allocator = { version = "=0.8.0", features = ["use-jemalloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

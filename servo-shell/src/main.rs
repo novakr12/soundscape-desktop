@@ -1,6 +1,7 @@
 mod bridge;
 mod glide;
 mod keys;
+mod memory;
 mod pickers;
 mod profile;
 mod software;
@@ -314,6 +315,17 @@ impl Shell {
         match key {
             WinitKey::Named(WinitNamed::F5) => webview.reload(),
             WinitKey::Character(letter)
+                if held.control_key() && held.shift_key() && letter.eq_ignore_ascii_case("m") =>
+            {
+                if let Ok(callback) = servo_base::generic_channel::GenericCallback::new(|result| {
+                    if let Ok(result) = result {
+                        eprintln!("{}", memory::summary(&result));
+                    }
+                }) {
+                    self.servo.create_memory_report(callback);
+                }
+            }
+            WinitKey::Character(letter)
                 if held.control_key() && letter.eq_ignore_ascii_case("r") =>
             {
                 webview.reload()
@@ -544,7 +556,15 @@ impl App {
             let _ = std::fs::create_dir_all(dir);
             opts.config_dir = Some(dir.clone());
         }
+        let preferences = servo::Preferences {
+            js_mem_gc_high_frequency_heap_growth_max: 150,
+            js_mem_gc_high_frequency_heap_growth_min: 120,
+            js_mem_gc_low_frequency_heap_growth: 120,
+            js_mem_gc_malloc_threshold_base_mb: 16,
+            ..Default::default()
+        };
         let servo = ServoBuilder::default()
+            .preferences(preferences)
             .opts(opts)
             .event_loop_waker(Box::new(Waker(proxy.clone())))
             .build();

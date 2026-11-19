@@ -7704,6 +7704,7 @@ dependencies = [
  "serde_json",
  "servo",
  "servo-allocator",
+ "servo-base",
  "signal-hook",
  "url",
  "winit",

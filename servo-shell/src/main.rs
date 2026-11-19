@@ -32,7 +32,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamed};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::{CursorIcon, Icon, Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Icon, Window, WindowAttributes, WindowId, WindowLevel};
 
 const FRAME_COUNTER: &str = include_str!("frame_counter.js");
 const FORM_ENTER: &str = include_str!("form_enter.js");
@@ -41,6 +41,7 @@ const SVG_FIX: &str = include_str!("svg_fix.js");
 const LOGO_MOTION: &str = include_str!("logo_motion.js");
 const VALVE: &str = include_str!("valve.js");
 const COVERS: &str = include_str!("covers.js");
+const MINI_PAGE: &str = include_str!("mini.html");
 const LINE_HEIGHT: f64 = 76.0;
 const APP_ID: &str = "soundscape-servo";
 
@@ -73,8 +74,69 @@ enum Waiting {
     Files(FilePicker),
 }
 
+struct Mini {
+    webview: WebView,
+    context: Rc<WindowRenderingContext>,
+    window: Window,
+    pointer: Cell<PhysicalPosition<f64>>,
+}
+
+impl Mini {
+    fn point(&self) -> WebViewPoint {
+        let at = self.pointer.get();
+        WebViewPoint::Device(DevicePoint::new(at.x as f32, at.y as f32))
+    }
+}
+
+struct MiniPage {
+    shell: Weak<Shell>,
+}
+
+impl WebViewDelegate for MiniPage {
+    fn notify_new_frame_ready(&self, _: WebView) {
+        if let Some(mini) = self.shell.upgrade().and_then(|shell| shell.mini()) {
+            mini.window.request_redraw();
+        }
+    }
+
+    fn request_navigation(&self, _: WebView, request: NavigationRequest) {
+        if request.url.scheme() == "data" {
+            request.allow();
+        } else {
+            request.deny();
+        }
+    }
+
+    fn notify_cursor_changed(&self, _: WebView, cursor: Cursor) {
+        if let Some(mini) = self.shell.upgrade().and_then(|shell| shell.mini()) {
+            mini.window.set_cursor(icon(cursor));
+        }
+    }
+
+    fn show_console_message(&self, _: WebView, _: servo::ConsoleLogLevel, message: String) {
+        if let (Some(shell), Some(asked)) = (
+            self.shell.upgrade(),
+            soundscape_desktop::mini::asked(&message),
+        ) {
+            soundscape_desktop::mini::act(&shell.app, asked);
+        }
+    }
+}
+
+fn mini_page() -> Url {
+    Url::parse(&format!(
+        "data:text/html;base64,{}",
+        soundscape_desktop::mini::base64(MINI_PAGE.as_bytes())
+    ))
+    .expect("mini player page")
+}
+
 struct Shell {
     window: RefCell<Option<Rc<Window>>>,
+    mini: RefCell<Option<Rc<Mini>>>,
+    scripts: Rc<UserContentManager>,
+    handback: RefCell<Option<Rc<UserScript>>>,
+    theme: Cell<Theme>,
     size: Cell<PhysicalSize<u32>>,
     servo: Servo,
     context: Rc<WindowRenderingContext>,
@@ -257,6 +319,15 @@ impl Shell {
                     webview.load(url);
                 }
             }
+            host::Call::Rest => self.rest(),
+            host::Call::Prepare(script) => self.prepare(script),
+            host::Call::OpenMini => self.open_mini(event_loop),
+            host::Call::MiniEval(script) => {
+                if let Some(mini) = self.mini() {
+                    mini.webview.evaluate_javascript(script, |_| {});
+                }
+            }
+            host::Call::CloseMini => self.close_mini(),
             host::Call::Setup => {
                 if let Some(webview) = self.webview() {
                     webview.load(notice());
@@ -322,6 +393,141 @@ impl Shell {
         webview.load(valve::resting_page());
     }
 
+    fn rest(&self) {
+        if self.window().is_some() || self.parked.borrow().is_some() {
+            return;
+        }
+        let Some(webview) = self.webview() else {
+            return;
+        };
+        let Some(url) = webview.url() else {
+            return;
+        };
+        *self.parked.borrow_mut() = Some(url);
+        webview.load(valve::resting_page());
+    }
+
+    fn prepare(&self, script: String) {
+        if self.parked.borrow().is_none() {
+            return;
+        }
+        let fresh = Rc::new(UserScript::new(script, None));
+        self.scripts.add_script(fresh.clone());
+        if let Some(old) = self.handback.borrow_mut().replace(fresh) {
+            self.scripts.remove_script(old);
+        }
+    }
+
+    fn mini(&self) -> Option<Rc<Mini>> {
+        self.mini.borrow().clone()
+    }
+
+    fn open_mini(&self, event_loop: &ActiveEventLoop) {
+        if let Some(mini) = self.mini() {
+            mini.window.focus_window();
+            return;
+        }
+        let Some(me) = self.me() else {
+            return;
+        };
+        let attributes = Window::default_attributes()
+            .with_title("Soundscape mini player")
+            .with_inner_size(LogicalSize::new(420.0, 178.0))
+            .with_resizable(false)
+            .with_window_level(WindowLevel::AlwaysOnTop)
+            .with_name(APP_ID, "mini")
+            .with_window_icon(window_icon());
+        let Ok(window) = event_loop.create_window(attributes) else {
+            return;
+        };
+        let (Ok(display), Ok(handle)) = (event_loop.display_handle(), window.window_handle())
+        else {
+            return;
+        };
+        let Ok(context) = WindowRenderingContext::new(display, handle, window.inner_size()) else {
+            return;
+        };
+        let context = Rc::new(context);
+        let webview = WebViewBuilder::new(&self.servo, context.clone())
+            .url(mini_page())
+            .hidpi_scale_factor(Scale::new(window.scale_factor() as f32))
+            .delegate(Rc::new(MiniPage {
+                shell: Rc::downgrade(&me),
+            }))
+            .build();
+        webview.notify_theme_change(self.theme.get());
+        webview.set_focused(true);
+        *self.mini.borrow_mut() = Some(Rc::new(Mini {
+            webview,
+            context,
+            window,
+            pointer: Cell::new(PhysicalPosition::new(0.0, 0.0)),
+        }));
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.mini = true;
+        }
+    }
+
+    fn close_mini(&self) {
+        let Some(mini) = self.mini.borrow_mut().take() else {
+            return;
+        };
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.mini = false;
+        }
+        let _ = mini.context.take_window();
+        drop(mini);
+    }
+
+    fn mini_event(&self, mini: &Mini, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => self.close_mini(),
+            WindowEvent::RedrawRequested => {
+                mini.webview.paint();
+                mini.context.present();
+            }
+            WindowEvent::Resized(size) => mini.webview.resize(size),
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                mini.webview
+                    .set_hidpi_scale_factor(Scale::new(scale_factor as f32));
+            }
+            WindowEvent::Focused(focused) => mini.webview.set_focused(focused),
+            WindowEvent::ModifiersChanged(modifiers) => self.held.set(modifiers.state()),
+            WindowEvent::KeyboardInput { event, .. } => {
+                mini.webview
+                    .notify_input_event(InputEvent::Keyboard(keys::event(&event, self.held.get())));
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                mini.pointer.set(position);
+                mini.webview
+                    .notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(mini.point())));
+            }
+            WindowEvent::CursorLeft { .. } => {
+                mini.webview
+                    .notify_input_event(InputEvent::MouseLeftViewport(
+                        MouseLeftViewportEvent::default(),
+                    ));
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: pressed,
+                ..
+            } => {
+                mini.webview
+                    .notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
+                        if state == ElementState::Pressed {
+                            MouseButtonAction::Down
+                        } else {
+                            MouseButtonAction::Up
+                        },
+                        button(pressed),
+                        mini.point(),
+                    )));
+            }
+            _ => {}
+        }
+    }
+
     fn shown(&self) {
         self.hidden_since.set(None);
         let parked = self.parked.borrow_mut().take();
@@ -348,6 +554,7 @@ impl Shell {
     }
 
     fn close(&self) {
+        self.close_mini();
         self.select.borrow_mut().take();
         self.waiting.borrow_mut().clear();
         self.openers.borrow_mut().clear();
@@ -532,6 +739,11 @@ impl WebViewDelegate for Shell {
 
     fn notify_load_status_changed(&self, _: WebView, status: servo::LoadStatus) {
         if matches!(status, servo::LoadStatus::Complete) {
+            if self.parked.borrow().is_none()
+                && let Some(done) = self.handback.borrow_mut().take()
+            {
+                self.scripts.remove_script(done);
+            }
             self.loaded_at.set(std::time::Instant::now());
             self.armed.set(false);
             let _ = self.proxy.send_event(Wake::Push);
@@ -794,6 +1006,10 @@ impl App {
         let size = window.inner_size();
         let shell = Rc::new(Shell {
             window: RefCell::new(Some(Rc::new(window))),
+            mini: RefCell::new(None),
+            scripts: scripts.clone(),
+            handback: RefCell::new(None),
+            theme: Cell::new(profile.theme),
             size: Cell::new(size),
             servo,
             context,
@@ -890,11 +1106,15 @@ impl ApplicationHandler<Wake> for App {
                 event_loop.exit();
             }
             Wake::Theme(theme) => {
+                shell.theme.set(theme);
                 shell
                     .servo
                     .set_preference("shell_background_color_rgba", theme::backdrop(theme).into());
                 if let Some(webview) = shell.webview() {
                     webview.notify_theme_change(theme);
+                }
+                if let Some(mini) = shell.mini() {
+                    mini.webview.notify_theme_change(theme);
                 }
             }
             Wake::Answer(id, answer) => shell.answer(id, answer),
@@ -906,6 +1126,10 @@ impl ApplicationHandler<Wake> for App {
             return;
         };
         shell.servo.spin_event_loop();
+        if let Some(mini) = shell.mini().filter(|mini| mini.window.id() == id) {
+            shell.mini_event(&mini, event);
+            return;
+        }
         let Some(window) = shell.window().filter(|window| window.id() == id) else {
             return;
         };
@@ -1050,9 +1274,12 @@ fn attributes(size: Option<PhysicalSize<u32>>) -> WindowAttributes {
         Some(size) => attributes.with_inner_size(size),
         None => attributes.with_inner_size(LogicalSize::new(1200.0, 820.0)),
     };
-    let picture = soundscape_desktop::tray::window_picture()
-        .and_then(|shown| Icon::from_rgba(shown.rgba, shown.width, shown.height).ok());
-    attributes.with_window_icon(picture)
+    attributes.with_window_icon(window_icon())
+}
+
+fn window_icon() -> Option<Icon> {
+    soundscape_desktop::tray::window_picture()
+        .and_then(|shown| Icon::from_rgba(shown.rgba, shown.width, shown.height).ok())
 }
 
 struct Launched {
@@ -1068,11 +1295,12 @@ fn main() {
     let background = args
         .iter()
         .any(|arg| arg == soundscape_desktop::autostart::BACKGROUND_FLAG);
-    let waiting: std::sync::Arc<std::sync::OnceLock<EventLoopProxy<Wake>>> = Default::default();
+    let waiting: std::sync::Arc<std::sync::OnceLock<soundscape_desktop::host::AppHandle>> =
+        Default::default();
     let caller = waiting.clone();
     let instance = match async_runtime::block_on(instance::claim(Box::new(move || {
-        if let Some(proxy) = caller.get() {
-            let _ = proxy.send_event(Wake::Call(host::Call::Show));
+        if let Some(app) = caller.get() {
+            soundscape_desktop::show(app);
         }
     }))) {
         Claim::Running(connection) => {
@@ -1110,7 +1338,6 @@ fn main() {
         .build()
         .expect("event loop");
     let proxy = event_loop.create_proxy();
-    let _ = waiting.set(proxy.clone());
     let quitter = proxy.clone();
     if let Ok(mut signals) = signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGTERM,
@@ -1153,6 +1380,7 @@ fn main() {
         &args,
         &app.state::<soundscape_desktop::AppState>().config(),
     );
+    let _ = waiting.set(app.clone());
     let launched = Launched { hidden, app, seen };
     let mut app = App::Starting(proxy, profile, launched);
     if let Err(error) = event_loop.run_app(&mut app) {

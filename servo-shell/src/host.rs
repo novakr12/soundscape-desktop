@@ -1,4 +1,5 @@
 use soundscape_desktop::host::{Host, Reply, Result, Running, WindowOptions};
+use soundscape_desktop::mini::MINI;
 use soundscape_desktop::{MAIN, SETUP};
 use std::sync::{Arc, Mutex};
 use url::Url;
@@ -12,6 +13,11 @@ pub enum Call {
     Focus,
     Navigate(Url),
     Setup,
+    Rest,
+    Prepare(String),
+    OpenMini,
+    MiniEval(String),
+    CloseMini,
     Main(Box<dyn FnOnce() + Send>),
     Smooth(bool),
     Memory(u32),
@@ -22,6 +28,7 @@ pub enum Call {
 #[derive(Default)]
 pub struct Seen {
     pub hidden: bool,
+    pub mini: bool,
     pub url: Option<Url>,
 }
 
@@ -35,16 +42,22 @@ impl ServoHost {
     fn call(&self, call: Call) {
         let _ = self.proxy.send_event(crate::Wake::Call(call));
     }
+
+    fn mini_open(&self) -> bool {
+        self.seen.lock().map(|seen| seen.mini).unwrap_or(false)
+    }
 }
 
 impl Host for ServoHost {
     fn exists(&self, label: &str) -> bool {
-        label == MAIN
+        label == MAIN || (label == MINI && self.mini_open())
     }
 
     fn eval(&self, label: &str, script: String) {
-        if label == MAIN {
-            self.call(Call::Eval(script));
+        match label {
+            MAIN => self.call(Call::Eval(script)),
+            MINI => self.call(Call::MiniEval(script)),
+            _ => {}
         }
     }
 
@@ -57,20 +70,26 @@ impl Host for ServoHost {
     }
 
     fn show(&self, label: &str) {
-        if label == MAIN {
-            self.call(Call::Show);
+        match label {
+            MAIN => self.call(Call::Show),
+            MINI => self.call(Call::OpenMini),
+            _ => {}
         }
     }
 
     fn hide(&self, label: &str) {
-        if label == MAIN {
-            self.call(Call::Hide);
+        match label {
+            MAIN => self.call(Call::Hide),
+            MINI => self.call(Call::CloseMini),
+            _ => {}
         }
     }
 
     fn focus(&self, label: &str) {
-        if label == MAIN {
-            self.call(Call::Focus);
+        match label {
+            MAIN => self.call(Call::Focus),
+            MINI => self.call(Call::OpenMini),
+            _ => {}
         }
     }
 
@@ -79,7 +98,11 @@ impl Host for ServoHost {
     }
 
     fn is_visible(&self, label: &str) -> bool {
-        label == MAIN && !self.seen.lock().map(|seen| seen.hidden).unwrap_or(false)
+        match label {
+            MAIN => !self.seen.lock().map(|seen| seen.hidden).unwrap_or(false),
+            MINI => self.mini_open(),
+            _ => false,
+        }
     }
 
     fn url(&self, label: &str) -> Option<Url> {
@@ -95,14 +118,29 @@ impl Host for ServoHost {
         }
     }
 
-    fn open_window(&self, label: &str, _page: &str, _options: &WindowOptions) -> Result<()> {
-        if label == SETUP {
-            self.call(Call::Setup);
-            return Ok(());
+    fn rest(&self, label: &str) {
+        if label == MAIN {
+            self.call(Call::Rest);
         }
-        Err(soundscape_desktop::host::Error(format!(
-            "The {label} window isn't available yet"
-        )))
+    }
+
+    fn prepare(&self, label: &str, script: String) {
+        if label == MAIN {
+            self.call(Call::Prepare(script));
+        }
+    }
+
+    fn open_window(&self, label: &str, _page: &str, _options: &WindowOptions) -> Result<()> {
+        match label {
+            SETUP => self.call(Call::Setup),
+            MINI => self.call(Call::OpenMini),
+            _ => {
+                return Err(soundscape_desktop::host::Error(format!(
+                    "There is no {label} window"
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn run_on_main(&self, work: Box<dyn FnOnce() + Send>) {

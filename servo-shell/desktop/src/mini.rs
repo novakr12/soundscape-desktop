@@ -1,11 +1,69 @@
-use crate::host::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use crate::host::{async_runtime, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::scrobble::Track;
 use crate::AppState;
 use serde::Serialize;
 use std::sync::Mutex;
+use std::time::Duration;
 
 pub const MINI: &str = "mini";
 const LARGEST_COVER: u64 = 3 * 1024 * 1024;
+const EVERY: Duration = Duration::from_secs(1);
+pub const ASKED: &str = "soundscape-mini ";
+
+#[derive(Debug, serde::Deserialize, PartialEq)]
+pub struct Asked {
+    pub action: String,
+    #[serde(default)]
+    pub seconds: Option<f64>,
+}
+
+pub fn asked(message: &str) -> Option<Asked> {
+    serde_json::from_str(message.strip_prefix(ASKED)?).ok()
+}
+
+pub fn render_script(view: &MiniView) -> String {
+    format!(
+        "window.soundscapeMini && window.soundscapeMini.render({})",
+        serde_json::to_string(view).unwrap_or_else(|_| "null".into())
+    )
+}
+
+pub fn failed_script(problem: &str) -> String {
+    format!(
+        "window.soundscapeMini && window.soundscapeMini.failed({})",
+        serde_json::Value::from(problem)
+    )
+}
+
+fn shown(app: &AppHandle) -> bool {
+    app.host().exists(MINI)
+}
+
+pub async fn refresh(app: &AppHandle) {
+    if shown(app) {
+        let view = get_mini(app.clone()).await;
+        app.host().eval(MINI, render_script(&view));
+    }
+}
+
+pub fn act(app: &AppHandle, asked: Asked) {
+    let app = app.clone();
+    async_runtime::spawn(async move {
+        match mini_action(app.clone(), asked.action, asked.seconds).await {
+            Ok(view) => app.host().eval(MINI, render_script(&view)),
+            Err(problem) => app.host().eval(MINI, failed_script(&problem)),
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        refresh(&app).await;
+    });
+}
+
+pub async fn run(app: AppHandle) {
+    loop {
+        tokio::time::sleep(EVERY).await;
+        refresh(&app).await;
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
@@ -254,6 +312,28 @@ mod tests {
         assert!(shows_preview(Some(&preview), false));
         assert!(!shows_preview(Some(&preview), true));
         assert!(!shows_preview(None, false));
+    }
+
+    #[test]
+    fn reads_what_the_mini_player_asks_for() {
+        assert_eq!(
+            asked(r#"soundscape-mini {"action":"seek","seconds":12.5}"#),
+            Some(Asked {
+                action: "seek".into(),
+                seconds: Some(12.5)
+            })
+        );
+        assert_eq!(
+            asked(r#"soundscape-mini {"action":"toggle"}"#).map(|asked| asked.action),
+            Some("toggle".into())
+        );
+        assert_eq!(asked("something else"), None);
+        assert_eq!(asked("soundscape-mini nonsense"), None);
+        assert!(render_script(&MiniView::default()).contains(r#""kind":"""#));
+        assert_eq!(
+            failed_script("Strawberry didn't \"respond\""),
+            r#"window.soundscapeMini && window.soundscapeMini.failed("Strawberry didn't \"respond\"")"#
+        );
     }
 
     #[test]

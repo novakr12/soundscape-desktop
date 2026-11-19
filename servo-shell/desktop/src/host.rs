@@ -39,6 +39,8 @@ pub trait Host: Send + Sync {
     fn is_visible(&self, label: &str) -> bool;
     fn url(&self, label: &str) -> Option<Url>;
     fn navigate(&self, label: &str, url: Url);
+    fn rest(&self, label: &str);
+    fn prepare(&self, label: &str, script: String);
     fn open_window(&self, label: &str, page: &str, options: &WindowOptions) -> Result<()>;
     fn run_on_main(&self, work: Box<dyn FnOnce() + Send>);
     fn smooth_scrolling(&self, on: bool);

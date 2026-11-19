@@ -86,6 +86,7 @@ pub fn launch(host: Box<dyn Host>, dir: PathBuf, running: Running) -> AppHandle 
     async_runtime::spawn(recap::run(app.clone()));
     async_runtime::spawn(media::run(app.clone()));
     async_runtime::spawn(search::run(app.clone()));
+    async_runtime::spawn(mini::run(app.clone()));
     tray::create(&app);
     app
 }
@@ -102,11 +103,14 @@ pub fn first_page(app: &AppHandle) -> Option<Url> {
 }
 
 pub fn open_main(app: &AppHandle, start: Url) -> host::Result<()> {
-    handover::hand_back(app);
+    let back = handover::bring_back(app);
     let host = app.host();
     host.navigate(MAIN, start);
     host.show(MAIN);
     host.focus(MAIN);
+    if back {
+        async_runtime::spawn(handover::take_back(app.clone()));
+    }
     tray::refresh(app);
     Ok(())
 }
@@ -127,9 +131,13 @@ pub fn open_setup(app: &AppHandle) -> host::Result<()> {
 }
 
 pub fn show(app: &AppHandle) {
+    let back = !app.host().is_visible(MAIN) && handover::bring_back(app);
     let host = app.host();
     host.show(MAIN);
     host.focus(MAIN);
+    if back {
+        async_runtime::spawn(handover::take_back(app.clone()));
+    }
 }
 
 pub fn toggle_pause(app: &AppHandle) {

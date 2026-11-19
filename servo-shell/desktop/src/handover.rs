@@ -198,7 +198,17 @@ pub async fn hand_over(app: AppHandle) {
         crate::host::async_runtime::spawn(take_back(app.clone()));
         return;
     }
-    let _ = window.destroy();
+    app.host().rest(MAIN);
+}
+
+pub fn bring_back(app: &AppHandle) -> bool {
+    if !active(app) {
+        return false;
+    }
+    if let Some(script) = handback_script(app) {
+        app.host().prepare(MAIN, script);
+    }
+    true
 }
 
 pub fn handback_script(app: &AppHandle) -> Option<String> {

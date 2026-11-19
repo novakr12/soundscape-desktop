@@ -39,6 +39,7 @@ const CONTROLS: &str = include_str!("controls.css");
 const SVG_FIX: &str = include_str!("svg_fix.js");
 const LOGO_MOTION: &str = include_str!("logo_motion.js");
 const VALVE: &str = include_str!("valve.js");
+const COVERS: &str = include_str!("covers.js");
 const LINE_HEIGHT: f64 = 76.0;
 const APP_ID: &str = "soundscape-servo";
 
@@ -653,6 +654,7 @@ impl App {
             js_mem_gc_low_frequency_heap_growth: 120,
             js_mem_gc_malloc_threshold_base_mb: 16,
             session_history_max_length: 0,
+            expose_servointernals_globally: true,
             shell_background_color_rgba: theme::backdrop(profile.theme),
             ..Default::default()
         };
@@ -664,6 +666,7 @@ impl App {
         servo.setup_logging();
         let scripts = Rc::new(UserContentManager::new(&servo));
         scripts.add_script(Rc::new(UserScript::new(FORM_ENTER.into(), None)));
+        scripts.add_script(Rc::new(UserScript::new(COVERS.into(), None)));
         scripts.add_script(Rc::new(UserScript::new(VALVE.into(), None)));
         if !profile::wants(std::env::var("SOUNDSCAPE_PLAIN_SVG").ok().as_deref()) {
             scripts.add_script(Rc::new(UserScript::new(SVG_FIX.into(), None)));

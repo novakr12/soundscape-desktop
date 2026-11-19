@@ -761,6 +761,7 @@ impl ApplicationHandler<Wake> for App {
             Wake::Push => shell.push_settings(),
             Wake::Park(playing) => shell.park(playing),
             Wake::Quit => {
+                software::settled(shell.storage.as_deref());
                 shell.close();
                 event_loop.exit();
             }
@@ -786,6 +787,7 @@ impl ApplicationHandler<Wake> for App {
         };
         match event {
             WindowEvent::CloseRequested => {
+                software::settled(shell.storage.as_deref());
                 shell.close();
                 event_loop.exit();
             }

@@ -5,6 +5,7 @@ pub mod fixes;
 pub mod friends;
 pub mod handover;
 pub mod host;
+pub mod instance;
 pub mod links;
 pub mod love;
 pub mod media;
@@ -85,6 +86,7 @@ pub fn launch(host: Box<dyn Host>, dir: PathBuf, running: Running) -> AppHandle 
     async_runtime::spawn(recap::run(app.clone()));
     async_runtime::spawn(media::run(app.clone()));
     async_runtime::spawn(search::run(app.clone()));
+    tray::create(&app);
     app
 }
 
@@ -178,6 +180,33 @@ pub fn stays_running(config: &Config) -> bool {
     config.connected() && config.keep_running
 }
 
+pub fn window_closed(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let config = state.config();
+    if !stays_running(&config) {
+        return false;
+    }
+    if state.preview().is_some_and(|preview| preview.playing) && handover::wanted(app) {
+        async_runtime::spawn(handover::hand_over(app.clone()));
+    }
+    if !config.told_about_background {
+        state.update(|config| config.told_about_background = true);
+        let app = app.clone();
+        async_runtime::spawn(async move {
+            let _ = notify::show_notification(
+                &app,
+                "Soundscape is still running",
+                "It keeps sending what you play. Open it again from your apps, or quit from the tray.",
+            );
+        });
+    }
+    true
+}
+
+pub fn starts_hidden(args: &[String], config: &Config) -> bool {
+    args.iter().any(|arg| arg == autostart::BACKGROUND_FLAG) && config.connected()
+}
+
 pub fn connected_through(app: &AppHandle, target: &Url) -> bool {
     let state = app.state::<AppState>();
     let server::Navigation::Connected { token, user } =
@@ -218,6 +247,19 @@ mod tests {
             ..connected.clone()
         }));
         assert!(!stays_running(&Config::default()));
+    }
+
+    #[test]
+    fn starts_hidden_at_login_only_once_connected() {
+        let connected = Config {
+            server: Some("https://music.example.com/".into()),
+            token: Some("t".into()),
+            ..Config::default()
+        };
+        let login = vec!["soundscape-desktop".to_string(), "--background".to_string()];
+        assert!(starts_hidden(&login, &connected));
+        assert!(!starts_hidden(&login, &Config::default()));
+        assert!(!starts_hidden(&login[..1], &connected));
     }
 
     #[test]

@@ -32,7 +32,7 @@ use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamed};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::{CursorIcon, Window, WindowId};
+use winit::window::{CursorIcon, Icon, Window, WindowAttributes, WindowId};
 
 const FRAME_COUNTER: &str = include_str!("frame_counter.js");
 const FORM_ENTER: &str = include_str!("form_enter.js");
@@ -74,7 +74,8 @@ enum Waiting {
 }
 
 struct Shell {
-    window: Window,
+    window: RefCell<Option<Rc<Window>>>,
+    size: Cell<PhysicalSize<u32>>,
     servo: Servo,
     context: Rc<WindowRenderingContext>,
     webview: RefCell<Option<WebView>>,
@@ -243,19 +244,13 @@ impl Shell {
                 }),
                 None => reply(None),
             },
-            host::Call::Show => {
-                self.set_hidden(false);
-                self.window.set_visible(true);
-                self.shown();
-            }
-            host::Call::Hide => {
-                self.set_hidden(true);
-                self.window.set_visible(false);
-                if self.hidden_since.get().is_none() {
-                    self.hidden_since.set(Some(std::time::Instant::now()));
+            host::Call::Show => self.show_window(event_loop),
+            host::Call::Hide => self.hide_window(),
+            host::Call::Focus => {
+                if let Some(window) = self.window() {
+                    window.focus_window();
                 }
             }
-            host::Call::Focus => self.window.focus_window(),
             host::Call::Navigate(url) => {
                 self.parked.borrow_mut().take();
                 if let Some(webview) = self.webview() {
@@ -361,6 +356,65 @@ impl Shell {
 
     fn webview(&self) -> Option<WebView> {
         self.webview.borrow().clone()
+    }
+
+    fn window(&self) -> Option<Rc<Window>> {
+        self.window.borrow().clone()
+    }
+
+    fn redraw(&self) {
+        if let Some(window) = self.window() {
+            window.request_redraw();
+        }
+    }
+
+    fn hide_window(&self) {
+        self.set_hidden(true);
+        if self.hidden_since.get().is_none() {
+            self.hidden_since.set(Some(std::time::Instant::now()));
+        }
+        let Some(window) = self.window.borrow_mut().take() else {
+            return;
+        };
+        self.size.set(window.inner_size());
+        if let Some(webview) = self.webview() {
+            webview.hide();
+        }
+        let _ = self.context.take_window();
+        drop(window);
+    }
+
+    fn show_window(&self, event_loop: &ActiveEventLoop) {
+        self.set_hidden(false);
+        if self.window().is_none() {
+            let Ok(window) = event_loop.create_window(attributes(Some(self.size.get()))) else {
+                return;
+            };
+            let Ok(handle) = window.window_handle() else {
+                return;
+            };
+            let size = window.inner_size();
+            if self.context.set_window(handle, size).is_err() {
+                return;
+            }
+            if let Some(webview) = self.webview() {
+                webview.resize(size);
+                webview.set_hidpi_scale_factor(Scale::new(window.scale_factor() as f32));
+                webview.show();
+                if let Some(title) = webview
+                    .page_title()
+                    .filter(|title| !title.trim().is_empty())
+                {
+                    window.set_title(&title);
+                }
+            }
+            *self.window.borrow_mut() = Some(Rc::new(window));
+        }
+        if let Some(window) = self.window() {
+            window.focus_window();
+            window.request_redraw();
+        }
+        self.shown();
     }
 
     fn point(&self) -> WebViewPoint {
@@ -473,7 +527,7 @@ impl Shell {
 
 impl WebViewDelegate for Shell {
     fn notify_new_frame_ready(&self, _: WebView) {
-        self.window.request_redraw();
+        self.redraw();
     }
 
     fn notify_load_status_changed(&self, _: WebView, status: servo::LoadStatus) {
@@ -488,13 +542,16 @@ impl WebViewDelegate for Shell {
         let title = title
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| "Soundscape".into());
-        self.window.set_title(&title);
+        if let Some(window) = self.window() {
+            window.set_title(&title);
+        }
     }
 
     fn notify_cursor_changed(&self, _: WebView, cursor: Cursor) {
-        self.window
-            .set_cursor_visible(!matches!(cursor, Cursor::None));
-        self.window.set_cursor(icon(cursor));
+        if let Some(window) = self.window() {
+            window.set_cursor_visible(!matches!(cursor, Cursor::None));
+            window.set_cursor(icon(cursor));
+        }
     }
 
     fn request_navigation(&self, _: WebView, request: NavigationRequest) {
@@ -552,11 +609,16 @@ impl WebViewDelegate for Shell {
             EmbedderControl::InputMethod(control) => {
                 *self.typing.borrow_mut() = Some(control.id());
                 let place = control.position();
-                self.window.set_ime_allowed(true);
-                self.window.set_ime_cursor_area(
-                    PhysicalPosition::new(place.min.x, place.min.y),
-                    PhysicalSize::new(place.width().max(1) as u32, place.height().max(1) as u32),
-                );
+                if let Some(window) = self.window() {
+                    window.set_ime_allowed(true);
+                    window.set_ime_cursor_area(
+                        PhysicalPosition::new(place.min.x, place.min.y),
+                        PhysicalSize::new(
+                            place.width().max(1) as u32,
+                            place.height().max(1) as u32,
+                        ),
+                    );
+                }
             }
             _ => {}
         }
@@ -576,7 +638,9 @@ impl WebViewDelegate for Shell {
         if closing_typing {
             self.typing.borrow_mut().take();
             self.composing.set(false);
-            self.window.set_ime_allowed(false);
+            if let Some(window) = self.window() {
+                window.set_ime_allowed(false);
+            }
         }
     }
 
@@ -669,12 +733,9 @@ impl App {
         profile: Profile,
         launched: Launched,
     ) -> Rc<Shell> {
-        let attributes = Window::default_attributes()
-            .with_title("Soundscape")
-            .with_inner_size(LogicalSize::new(1200.0, 820.0))
-            .with_min_inner_size(LogicalSize::new(380.0, 480.0))
-            .with_name(APP_ID, "");
-        let window = event_loop.create_window(attributes).expect("window");
+        let window = event_loop
+            .create_window(attributes(None).with_visible(!launched.hidden))
+            .expect("window");
         let display = event_loop.display_handle().expect("display");
         let handle = window.window_handle().expect("window handle");
         let context = Rc::new(
@@ -726,8 +787,10 @@ impl App {
         if profile.show_fps {
             scripts.add_script(Rc::new(UserScript::new(FRAME_COUNTER.into(), None)));
         }
+        let size = window.inner_size();
         let shell = Rc::new(Shell {
-            window,
+            window: RefCell::new(Some(Rc::new(window))),
+            size: Cell::new(size),
             servo,
             context,
             webview: RefCell::new(None),
@@ -767,13 +830,18 @@ impl App {
         }
         let webview = WebViewBuilder::new(&shell.servo, shell.context.clone())
             .url(start)
-            .hidpi_scale_factor(Scale::new(shell.window.scale_factor() as f32))
+            .hidpi_scale_factor(Scale::new(
+                shell.window().map_or(1.0, |window| window.scale_factor()) as f32,
+            ))
             .user_content_manager(scripts)
             .delegate(shell.clone())
             .build();
         webview.set_focused(true);
         *shell.webview.borrow_mut() = Some(webview.clone());
         webview.notify_theme_change(profile.theme);
+        if launched.hidden {
+            shell.hide_window();
+        }
         match theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref()) {
             Some(_) => {}
             None => {
@@ -829,15 +897,21 @@ impl ApplicationHandler<Wake> for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let App::Running(shell) = self else {
             return;
         };
         shell.servo.spin_event_loop();
+        let Some(window) = shell.window().filter(|window| window.id() == id) else {
+            return;
+        };
         let Some(webview) = shell.webview() else {
             return;
         };
         match event {
+            WindowEvent::CloseRequested if soundscape_desktop::window_closed(&shell.app) => {
+                shell.hide_window();
+            }
             WindowEvent::CloseRequested => {
                 software::settled(shell.storage.as_deref());
                 shell.close();
@@ -857,7 +931,7 @@ impl ApplicationHandler<Wake> for App {
                 webview.paint();
                 shell.context.present();
                 if shell.glide.borrow().active() {
-                    shell.window.request_redraw();
+                    window.request_redraw();
                 }
             }
             WindowEvent::Resized(size) => webview.resize(size),
@@ -936,7 +1010,7 @@ impl ApplicationHandler<Wake> for App {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                let (x, y) = wheel(delta, shell.window.scale_factor());
+                let (x, y) = wheel(delta, window.scale_factor());
                 if shell.debug {
                     eprintln!("wheel {delta:?}");
                 }
@@ -949,7 +1023,7 @@ impl ApplicationHandler<Wake> for App {
                         .glide
                         .borrow_mut()
                         .add(-x, -y, (at.x, at.y), std::time::Instant::now());
-                    shell.window.request_redraw();
+                    window.request_redraw();
                     return;
                 }
                 let mode = WheelMode::DeltaPixel;
@@ -963,12 +1037,48 @@ impl ApplicationHandler<Wake> for App {
     }
 }
 
+fn attributes(size: Option<PhysicalSize<u32>>) -> WindowAttributes {
+    let attributes = Window::default_attributes()
+        .with_title("Soundscape")
+        .with_min_inner_size(LogicalSize::new(380.0, 480.0))
+        .with_name(APP_ID, "");
+    let attributes = match size {
+        Some(size) => attributes.with_inner_size(size),
+        None => attributes.with_inner_size(LogicalSize::new(1200.0, 820.0)),
+    };
+    let picture = soundscape_desktop::tray::window_picture()
+        .and_then(|shown| Icon::from_rgba(shown.rgba, shown.width, shown.height).ok());
+    attributes.with_window_icon(picture)
+}
+
 struct Launched {
+    hidden: bool,
     app: soundscape_desktop::host::AppHandle,
     seen: std::sync::Arc<std::sync::Mutex<host::Seen>>,
 }
 
 fn main() {
+    use soundscape_desktop::host::async_runtime;
+    use soundscape_desktop::instance::{self, Claim};
+    let args: Vec<String> = std::env::args().collect();
+    let background = args
+        .iter()
+        .any(|arg| arg == soundscape_desktop::autostart::BACKGROUND_FLAG);
+    let waiting: std::sync::Arc<std::sync::OnceLock<EventLoopProxy<Wake>>> = Default::default();
+    let caller = waiting.clone();
+    let instance = match async_runtime::block_on(instance::claim(Box::new(move || {
+        if let Some(proxy) = caller.get() {
+            let _ = proxy.send_event(Wake::Call(host::Call::Show));
+        }
+    }))) {
+        Claim::Running(connection) => {
+            if !background {
+                async_runtime::block_on(instance::wake(&connection));
+            }
+            return;
+        }
+        Claim::First(connection) => connection,
+    };
     let mut profile = profile::load();
     let config_dir = profile.config.clone();
     profile.cpu_rendering =
@@ -996,6 +1106,7 @@ fn main() {
         .build()
         .expect("event loop");
     let proxy = event_loop.create_proxy();
+    let _ = waiting.set(proxy.clone());
     let quitter = proxy.clone();
     if let Ok(mut signals) = signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGTERM,
@@ -1019,30 +1130,35 @@ fn main() {
         .config
         .clone()
         .unwrap_or_else(|| std::env::temp_dir().join(soundscape_desktop::IDENTIFIER));
-    let launched = Launched {
-        app: soundscape_desktop::launch(
-            Box::new(host::ServoHost {
-                proxy: proxy.clone(),
-                seen: seen.clone(),
-                running: soundscape_desktop::host::Running {
-                    cpu_rendering: profile.cpu_rendering,
-                    faster_scripts: profile.faster_scripts,
-                },
-            }),
-            dir,
-            soundscape_desktop::host::Running {
+    let app = soundscape_desktop::launch(
+        Box::new(host::ServoHost {
+            proxy: proxy.clone(),
+            seen: seen.clone(),
+            running: soundscape_desktop::host::Running {
                 cpu_rendering: profile.cpu_rendering,
                 faster_scripts: profile.faster_scripts,
             },
-        ),
-        seen,
-    };
+        }),
+        dir,
+        soundscape_desktop::host::Running {
+            cpu_rendering: profile.cpu_rendering,
+            faster_scripts: profile.faster_scripts,
+        },
+    );
+    let hidden = soundscape_desktop::starts_hidden(
+        &args,
+        &app.state::<soundscape_desktop::AppState>().config(),
+    );
+    let launched = Launched { hidden, app, seen };
     let mut app = App::Starting(proxy, profile, launched);
     if let Err(error) = event_loop.run_app(&mut app) {
         eprintln!("Soundscape stopped: {error}");
     }
     drop(app);
     software::settled(storage.as_deref());
+    if let Some(connection) = instance {
+        let _ = async_runtime::block_on(connection.release_name(soundscape_desktop::IDENTIFIER));
+    }
     if RESTART.load(std::sync::atomic::Ordering::Relaxed)
         && let Ok(me) = std::env::current_exe()
     {

@@ -50,6 +50,7 @@ const VALVE: &str = include_str!("valve.js");
 const COVERS: &str = include_str!("covers.js");
 const MINI_PAGE: &str = include_str!("mini.html");
 const LINE_HEIGHT: f64 = 76.0;
+const SHUTDOWN_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
 const APP_ID: &str = soundscape_core::IDENTIFIER;
 
 pub enum Wake {
@@ -301,6 +302,14 @@ impl Shell {
     }
 
     fn quit(&self, event_loop: &ActiveEventLoop) {
+        self.remember_window();
+        self.drop_window();
+        self.close_mini();
+        self.link.send(FromWindow::Done);
+        std::thread::spawn(|| {
+            std::thread::sleep(SHUTDOWN_LIMIT);
+            std::process::exit(0);
+        });
         software::settled(self.storage.as_deref());
         self.close();
         event_loop.exit();
@@ -567,7 +576,6 @@ impl Shell {
     }
 
     fn close(&self) {
-        self.remember_window();
         self.close_mini();
         self.select.borrow_mut().take();
         self.waiting.borrow_mut().clear();

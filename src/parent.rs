@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use url::Url;
 
-const STOP_WAIT: Duration = Duration::from_secs(3);
+const STOP_WAIT: Duration = Duration::from_secs(1);
 
 struct Window {
     input: ChildStdin,
@@ -29,6 +29,7 @@ struct Inner {
     hidden: bool,
     mini: bool,
     respawn: bool,
+    done: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -152,24 +153,32 @@ impl WindowHost {
     }
 
     pub fn stop_window(&self) {
-        let window = {
+        let sent = {
             let mut inner = self.inner.lock().expect("window lock");
             inner.respawn = false;
-            inner.window.take()
-        };
-        let Some(mut window) = window else {
-            return;
-        };
-        let _ = ipc::send(&mut window.input, &ToWindow::Exit);
-        let began = Instant::now();
-        while began.elapsed() < STOP_WAIT {
-            if matches!(window.process.try_wait(), Ok(Some(_))) {
-                return;
+            inner.done = false;
+            match inner.window.as_mut() {
+                Some(window) => ipc::send(&mut window.input, &ToWindow::Exit),
+                None => return,
             }
-            std::thread::sleep(Duration::from_millis(50));
+        };
+        let began = Instant::now();
+        while sent && began.elapsed() < STOP_WAIT {
+            {
+                let mut inner = self.inner.lock().expect("window lock");
+                let exited = inner
+                    .window
+                    .as_mut()
+                    .is_none_or(|window| matches!(window.process.try_wait(), Ok(Some(_))));
+                if inner.done || exited {
+                    return;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
-        let _ = window.process.kill();
-        let _ = window.process.wait();
+        if let Some(window) = self.inner.lock().expect("window lock").window.as_mut() {
+            let _ = window.process.kill();
+        }
     }
 }
 
@@ -264,6 +273,7 @@ fn heard(app: &AppHandle, inner: &Arc<Mutex<Inner>>, message: FromWindow) {
                 config.maximized = maximized;
             });
         }
+        FromWindow::Done => inner.lock().expect("window lock").done = true,
         FromWindow::CpuRendering { on } => {
             app.state::<AppState>()
                 .update(|config| config.cpu_rendering = on);

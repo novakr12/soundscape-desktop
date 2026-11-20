@@ -70,6 +70,7 @@ pub enum FromWindow {
     CpuRendering {
         on: bool,
     },
+    Done,
 }
 
 pub fn send<T: Serialize>(out: &mut impl Write, message: &T) -> bool {

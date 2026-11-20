@@ -106,6 +106,7 @@
           <li>Music, scrobbling, the tray and notifications keep going while the window is closed, and it opens again where you left off</li>
           <li>The player bar no longer slides in again every time you start a song</li>
           <li>Seeking while a song is still loading no longer flashes 0:00 first</li>
+          <li>Quitting from the tray closes the app right away</li>
         </ul>
       </description>
     </release>

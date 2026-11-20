@@ -5652,8 +5652,23 @@ dependencies = [
  "rgb",
  "svgtypes",
  "tiny-skia 0.12.0",
- "usvg",
+ "usvg 0.48.1",
  "zune-jpeg",
+]
+
+[[package]]
+name = "resvg"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77bb4b284cf8a5c8ae721594af53387fb755d2196fddb32b2acfb4fa9251fa0c"
+dependencies = [
+ "bytemuck",
+ "log",
+ "pico-args",
+ "rgb",
+ "svgtypes",
+ "tiny-skia 0.12.0",
+ "usvg 0.50.0",
 ]
 
 [[package]]
@@ -6773,7 +6788,7 @@ dependencies = [
  "mime",
  "once_cell",
  "parking_lot",
- "resvg",
+ "resvg 0.48.1",
  "serde_core",
  "servo-allocator",
  "servo-hyper-serde",
@@ -7087,7 +7102,7 @@ dependencies = [
  "quick_cache",
  "rand 0.10.4",
  "regex",
- "resvg",
+ "resvg 0.48.1",
  "rusqlite",
  "rustc-hash",
  "rustls",
@@ -7146,7 +7161,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "rand 0.10.4",
- "resvg",
+ "resvg 0.48.1",
  "rustc-hash",
  "rustls",
  "rustls-pki-types",
@@ -7345,7 +7360,7 @@ dependencies = [
  "postcard",
  "rand 0.10.4",
  "regex",
- "resvg",
+ "resvg 0.48.1",
  "rustc-hash",
  "selectors",
  "serde",
@@ -7915,7 +7930,7 @@ dependencies = [
  "image",
  "libc",
  "memmap2",
- "resvg",
+ "resvg 0.50.0",
  "rustls",
  "serde",
  "serde_json",
@@ -9085,6 +9100,25 @@ dependencies = [
  "unicode-script",
  "unicode-vo",
  "xmlwriter",
+]
+
+[[package]]
+name = "usvg"
+version = "0.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdb896f04730b97805bbc3191fc57e4bf03face0f14577dd42e783c4d8c98802"
+dependencies = [
+ "data-url",
+ "imagesize",
+ "kurbo",
+ "log",
+ "pico-args",
+ "roxmltree 0.21.2",
+ "simplecss",
+ "siphasher",
+ "strict-num",
+ "svgtypes",
+ "tiny-skia-path 0.12.0",
 ]
 
 [[package]]

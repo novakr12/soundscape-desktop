@@ -1,35 +1,27 @@
 [package]
 name = "soundscape-desktop"
-version = "0.10.5"
+version = "0.10.6"
 edition = "2024"
 publish = false
 
 [dependencies]
-servo = { version = "=0.8.0", default-features = false, features = [
-    "bundled",
-    "clipboard",
-    "js_jit",
-    "media-gstreamer",
-] }
+servo = { version = "=0.8.0", default-features = false, features = ["bundled", "clipboard", "js_jit", "media-gstreamer"] }
 winit = "0.30.13"
-rustls = { version = "0.23", default-features = false, features = [
-    "aws_lc_rs",
-    "std",
-    "tls12",
-    "logging",
-] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
 url = "2"
 euclid = "0.22"
 servo-base = "=0.8.0"
 servo-allocator = { version = "=0.8.0", features = ["use-jemalloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-signal-hook = "0.4"
+signal-hook = "0.3"
 libc = "0.2"
-zbus = { version = "5", default-features = false, features = [
-    "blocking-api",
-    "async-io",
-] }
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "wayland"] }
+resvg = { version = "0.48", default-features = false }
+ab_glyph = "0.2"
+fontdb = "0.24"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 soundscape-core = { path = "core" }
 
 [workspace]

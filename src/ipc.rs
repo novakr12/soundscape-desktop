@@ -8,7 +8,6 @@ pub struct Start {
     pub url: String,
     pub server: Option<String>,
     pub native: Option<String>,
-    pub mini_only: bool,
     pub size: Option<(u32, u32)>,
     pub maximized: bool,
     pub smooth: bool,
@@ -27,9 +26,6 @@ pub enum ToWindow {
     Navigate { url: String },
     Server { url: Option<String> },
     Setup,
-    OpenMini,
-    MiniEval { script: String },
-    CloseMini,
     Smooth { on: bool },
     Memory { mb: u32 },
     Exit,
@@ -47,9 +43,6 @@ pub enum FromWindow {
     },
     Hidden {
         hidden: bool,
-    },
-    Mini {
-        open: bool,
     },
     Page {
         message: String,
@@ -146,7 +139,6 @@ mod tests {
             url: "https://music.example.com/".into(),
             server: Some("https://music.example.com/".into()),
             native: None,
-            mini_only: true,
             size: Some((900, 700)),
             maximized: false,
             smooth: true,

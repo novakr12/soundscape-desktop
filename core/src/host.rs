@@ -46,6 +46,12 @@ pub trait Host: Send + Sync {
     fn running(&self) -> Running;
     fn restart(&self);
     fn exit(&self, code: i32);
+    fn mini_view(&self, view: &crate::mini::MiniView) {
+        self.eval(crate::mini::MINI, crate::mini::render_script(view));
+    }
+    fn mini_problem(&self, problem: &str) {
+        self.eval(crate::mini::MINI, crate::mini::failed_script(problem));
+    }
 }
 
 pub mod async_runtime {

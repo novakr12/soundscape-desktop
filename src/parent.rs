@@ -27,15 +27,8 @@ struct Inner {
     url: Option<Url>,
     next_url: Option<Url>,
     hidden: bool,
-    mini: bool,
     respawn: bool,
     done: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Opening {
-    Main,
-    MiniOnly,
 }
 
 #[derive(Clone)]
@@ -82,7 +75,7 @@ impl WindowHost {
             .map(String::from)
     }
 
-    fn open(&self, opening: Opening, url: Option<Url>) {
+    fn open(&self, url: Option<Url>) {
         let Some(app) = self.app().cloned() else {
             return;
         };
@@ -95,7 +88,6 @@ impl WindowHost {
             url: url.to_string(),
             server: self.server_text(),
             native: soundscape_core::native_link::script_for(&app),
-            mini_only: opening == Opening::MiniOnly,
             size: config.window_size,
             maximized: config.maximized,
             smooth: config.smooth_scrolling,
@@ -142,14 +134,21 @@ impl WindowHost {
                 generation: inner.generation,
             });
             inner.url = Some(url);
-            inner.hidden = opening == Opening::MiniOnly;
-            inner.mini = false;
+            inner.hidden = false;
             inner.respawn = false;
             inner.generation
         };
         let inner = self.inner.clone();
         let host_app = app.clone();
         std::thread::spawn(move || listen(host_app, inner, output, generation));
+    }
+
+    fn open_mini_window(&self) -> bool {
+        self.app().is_some_and(crate::mini_window::open)
+    }
+
+    fn open_mini(&self) {
+        self.open_mini_window();
     }
 
     pub fn stop_window(&self) {
@@ -205,7 +204,6 @@ fn listen(
         }
         let window = guard.window.take();
         guard.hidden = true;
-        guard.mini = false;
         let respawn = std::mem::take(&mut guard.respawn);
         let waiting: Vec<Reply> = guard.waiting.drain().map(|(_, reply)| reply).collect();
         (respawn, waiting, window.map(|window| window.process))
@@ -236,7 +234,6 @@ fn heard(app: &AppHandle, inner: &Arc<Mutex<Inner>>, message: FromWindow) {
             }
         }
         FromWindow::Hidden { hidden } => inner.lock().expect("window lock").hidden = hidden,
-        FromWindow::Mini { open } => inner.lock().expect("window lock").mini = open,
         FromWindow::Page { message } => {
             if !soundscape_core::native_link::heard(app, &message)
                 && let Some(asked) = soundscape_core::mini::asked(&message)
@@ -285,20 +282,14 @@ impl Host for WindowHost {
     fn exists(&self, label: &str) -> bool {
         match label {
             MAIN => true,
-            MINI => self.inner.lock().expect("window lock").mini,
+            MINI => crate::mini_window::is_open(),
             _ => false,
         }
     }
 
     fn eval(&self, label: &str, script: String) {
-        match label {
-            MAIN => {
-                self.tell(&ToWindow::Eval { script });
-            }
-            MINI => {
-                self.tell(&ToWindow::MiniEval { script });
-            }
-            _ => {}
+        if label == MAIN {
+            self.tell(&ToWindow::Eval { script });
         }
     }
 
@@ -330,12 +321,10 @@ impl Host for WindowHost {
         match label {
             MAIN => {
                 if !self.tell(&ToWindow::Show) {
-                    self.open(Opening::Main, None);
+                    self.open(None);
                 }
             }
-            MINI => self
-                .open_window(MINI, "", &WindowOptions::default())
-                .unwrap_or(()),
+            MINI => self.open_mini(),
             _ => {}
         }
     }
@@ -345,9 +334,7 @@ impl Host for WindowHost {
             MAIN => {
                 self.tell(&ToWindow::Hide);
             }
-            MINI => {
-                self.tell(&ToWindow::CloseMini);
-            }
+            MINI => crate::mini_window::close(),
             _ => {}
         }
     }
@@ -356,12 +343,10 @@ impl Host for WindowHost {
         match label {
             MAIN => {
                 if !self.tell(&ToWindow::Focus) {
-                    self.open(Opening::Main, None);
+                    self.open(None);
                 }
             }
-            MINI => {
-                self.tell(&ToWindow::OpenMini);
-            }
+            MINI => self.open_mini(),
             _ => {}
         }
     }
@@ -371,10 +356,12 @@ impl Host for WindowHost {
     }
 
     fn is_visible(&self, label: &str) -> bool {
-        let inner = self.inner.lock().expect("window lock");
         match label {
-            MAIN => inner.window.is_some() && !inner.hidden,
-            MINI => inner.mini,
+            MAIN => {
+                let inner = self.inner.lock().expect("window lock");
+                inner.window.is_some() && !inner.hidden
+            }
+            MINI => crate::mini_window::is_open(),
             _ => false,
         }
     }
@@ -407,12 +394,14 @@ impl Host for WindowHost {
             SETUP => {
                 if !self.tell(&ToWindow::Setup) {
                     let page = soundscape_core::setup::page("", None);
-                    self.open(Opening::Main, Some(page));
+                    self.open(Some(page));
                 }
             }
             MINI => {
-                if !self.tell(&ToWindow::OpenMini) {
-                    self.open(Opening::MiniOnly, None);
+                if !self.open_mini_window() {
+                    return Err(soundscape_core::host::Error(
+                        "The mini player couldn't open".into(),
+                    ));
                 }
             }
             _ => {
@@ -452,5 +441,13 @@ impl Host for WindowHost {
 
     fn exit(&self, _code: i32) {
         let _ = self.stop.send(());
+    }
+
+    fn mini_view(&self, view: &soundscape_core::mini::MiniView) {
+        crate::mini_window::show(view);
+    }
+
+    fn mini_problem(&self, problem: &str) {
+        crate::mini_window::problem(problem);
     }
 }

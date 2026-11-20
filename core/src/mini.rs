@@ -42,7 +42,7 @@ fn shown(app: &AppHandle) -> bool {
 pub async fn refresh(app: &AppHandle) {
     if shown(app) {
         let view = get_mini(app.clone()).await;
-        app.host().eval(MINI, render_script(&view));
+        app.host().mini_view(&view);
     }
 }
 
@@ -50,8 +50,8 @@ pub fn act(app: &AppHandle, asked: Asked) {
     let app = app.clone();
     async_runtime::spawn(async move {
         match mini_action(app.clone(), asked.action, asked.seconds).await {
-            Ok(view) => app.host().eval(MINI, render_script(&view)),
-            Err(problem) => app.host().eval(MINI, failed_script(&problem)),
+            Ok(view) => app.host().mini_view(&view),
+            Err(problem) => app.host().mini_problem(&problem),
         }
         tokio::time::sleep(Duration::from_millis(400)).await;
         refresh(&app).await;
@@ -75,7 +75,7 @@ pub struct Source {
     pub position_ms: Option<u64>,
 }
 
-#[derive(Debug, Default, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct MiniView {
     pub kind: &'static str,
     pub title: String,
@@ -115,6 +115,60 @@ pub fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+pub fn unbase64(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let mut bits = 0u32;
+    let mut count = 0;
+    for byte in text.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' | b'\n' | b'\r' | b' ' => continue,
+            _ => return None,
+        };
+        bits = (bits << 6) | u32::from(value);
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+        }
+    }
+    Some(out)
+}
+
+pub async fn picture(app: &AppHandle, art: &str) -> Option<Vec<u8>> {
+    if let Some(data) = art.strip_prefix("data:") {
+        let (kind, encoded) = data.split_once(',')?;
+        return kind
+            .ends_with(";base64")
+            .then(|| unbase64(encoded))
+            .flatten();
+    }
+    let address = url::Url::parse(art).ok()?;
+    if !matches!(address.scheme(), "http" | "https") || address.as_str().len() > 4096 {
+        return None;
+    }
+    let request = crate::server::client().get(address.clone());
+    let response = match crate::server::credentials(app) {
+        Some((server, token)) if server.origin() == address.origin() => {
+            crate::server::answer(request, &token).await.ok()?
+        }
+        _ => request.send().await.ok()?,
+    };
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|size| size > LARGEST_COVER)
+    {
+        return None;
+    }
+    let bytes = response.bytes().await.ok()?;
+    (bytes.len() as u64 <= LARGEST_COVER).then(|| bytes.to_vec())
 }
 
 fn image_type(bytes: &[u8]) -> Option<&'static str> {
@@ -352,6 +406,17 @@ mod tests {
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
         assert_eq!(base64(&[0xFF, 0xD8, 0x00]), "/9gA");
+        for sample in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foobar",
+            &[0xFF, 0xD8, 0x00, 0x10],
+        ] {
+            assert_eq!(unbase64(&base64(sample)).as_deref(), Some(sample));
+        }
+        assert_eq!(unbase64("not*base64"), None);
     }
 
     #[test]

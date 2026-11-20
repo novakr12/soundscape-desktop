@@ -14,7 +14,7 @@ servo-base = "=0.8.0"
 servo-allocator = { version = "=0.8.0", features = ["use-jemalloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-signal-hook = "0.3"
+signal-hook = "0.4"
 libc = "0.2"
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 soundscape-core = { path = "core" }

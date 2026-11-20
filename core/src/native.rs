@@ -193,6 +193,7 @@ pub enum Command {
     SetRepeat(String),
     Volume(f64),
     Enqueue(Box<Track>, bool),
+    Album(String, String),
     Jump(usize),
     Settings {
         volume: f64,
@@ -652,6 +653,7 @@ impl Engine {
                 | Command::Settings { .. }
                 | Command::FadeTo(..)
                 | Command::SetRepeat(_)
+                | Command::Album(..)
         ) {
             self.drop_outgoing();
             if self.fade.is_some() {
@@ -682,6 +684,14 @@ impl Engine {
                 self.volume = volume.clamp(0.0, 1.0);
                 self.muted = false;
                 self.apply_volume();
+            }
+            Command::Album(track_id, album) => {
+                let mut queue = self.queue.lock().expect("queue lock");
+                for track in queue.tracks.iter_mut() {
+                    if track.track_id == track_id && track.album.is_none() {
+                        track.album = Some(album.clone());
+                    }
+                }
             }
             Command::Enqueue(track, next) => {
                 let mut queue = self.queue.lock().expect("queue lock");

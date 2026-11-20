@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.10.10" date="2026-11-20">
+      <description>
+        <p>The mini player shows which album is playing.</p>
+        <ul>
+          <li>The mini player shows the artist and album, or "Unknown album" when the album isn't known</li>
+          <li>Songs started from anywhere in Soundscape now show their album in the mini player, the media controls and the player in the app</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.9" date="2026-11-20">
       <description>
         <p>The mini player responds right away and is easier to read.</p>

@@ -686,10 +686,59 @@ pub fn change_key(snapshot: Option<&Snapshot>) -> Option<(String, bool, String, 
     })
 }
 
+#[derive(Deserialize)]
+struct AlbumInfo {
+    #[serde(default)]
+    album: Option<String>,
+}
+
+pub fn track_path(track_id: &str) -> String {
+    let mut path = String::from("/api/listen/");
+    for byte in track_id.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            path.push(byte as char);
+        } else {
+            path.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    path
+}
+
+async fn find_album(app: AppHandle, track_id: String) {
+    let Some((server, token)) = crate::server::credentials(&app) else {
+        return;
+    };
+    let Ok(info) = crate::server::get_json::<AlbumInfo>(
+        &server,
+        &token,
+        &track_path(&track_id),
+        &[("info", "")],
+    )
+    .await
+    else {
+        return;
+    };
+    if let Some(album) = info
+        .album
+        .map(|album| album.trim().to_string())
+        .filter(|album| !album.is_empty())
+    {
+        with_player(&app, |player| player.send(Command::Album(track_id, album)));
+    }
+}
+
 pub async fn run(app: AppHandle) {
     let mut since_heartbeat = HEARTBEAT;
     let mut told = None;
+    let mut asked: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
+        let missing = settled(&app)
+            .flatten()
+            .filter(|now| now.track.album.is_none())
+            .map(|now| now.track.track_id);
+        if let Some(track_id) = missing.filter(|track_id| asked.insert(track_id.clone())) {
+            async_runtime::spawn(find_album(app.clone(), track_id));
+        }
         let now = settled(&app).map(|snapshot| change_key(snapshot.as_ref()));
         let due = now
             .as_ref()
@@ -722,6 +771,15 @@ mod tests {
             gain: None,
             duration: Some(200.0),
         }
+    }
+
+    #[test]
+    fn asks_the_server_about_a_song_by_its_id() {
+        assert_eq!(
+            track_path("massive-attack-teardrop"),
+            "/api/listen/massive-attack-teardrop"
+        );
+        assert_eq!(track_path("a b/c?"), "/api/listen/a%20b%2Fc%3F");
     }
 
     #[test]

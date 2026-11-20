@@ -9,6 +9,7 @@ pub const MINI: &str = "mini";
 const LARGEST_COVER: u64 = 3 * 1024 * 1024;
 const EVERY: Duration = Duration::from_secs(1);
 pub const ASKED: &str = "soundscape-mini ";
+pub const UNKNOWN_ALBUM: &str = "Unknown album";
 
 #[derive(Debug, serde::Deserialize, PartialEq)]
 pub struct Asked {
@@ -228,7 +229,10 @@ pub fn view(app: &AppHandle) -> MiniView {
             kind: "preview",
             title: preview.title,
             artist: preview.artist,
-            source: preview.album.unwrap_or_else(|| "Soundscape".into()),
+            source: preview
+                .album
+                .filter(|album| !album.trim().is_empty())
+                .unwrap_or_else(|| UNKNOWN_ALBUM.into()),
             art: preview
                 .cover
                 .filter(|cover| cover.starts_with("https://") || cover.starts_with("http://")),
@@ -262,7 +266,12 @@ pub fn view(app: &AppHandle) -> MiniView {
         kind: "player",
         title: source.track.title.clone(),
         artist: source.track.artist.clone(),
-        source: source.name.clone(),
+        source: source
+            .track
+            .album
+            .clone()
+            .filter(|album| !album.trim().is_empty())
+            .unwrap_or_else(|| UNKNOWN_ALBUM.into()),
         art: source.art.as_deref().and_then(cover),
         playing: source.playing,
         position_ms: source.position_ms,

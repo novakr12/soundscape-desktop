@@ -88,6 +88,7 @@ pub fn launch(host: Box<dyn Host>, dir: PathBuf, running: Running) -> AppHandle 
     async_runtime::spawn(search::run(app.clone()));
     async_runtime::spawn(mini::run(app.clone()));
     async_runtime::spawn(native_link::run(app.clone()));
+    async_runtime::spawn(native_link::link(app.clone()));
     tray::create(&app);
     app
 }

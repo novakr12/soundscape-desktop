@@ -17,7 +17,76 @@ const MOST_TRACKS: usize = 500;
 const MOST_UP_NEXT: usize = 10;
 const REPEAT_MODES: [&str; 3] = ["off", "all", "one"];
 
-static VOLUME: Mutex<f64> = Mutex::new(DEFAULT_VOLUME);
+const HEARTBEAT: Duration = Duration::from_secs(30);
+const RETRY_AFTER: Duration = Duration::from_secs(5);
+const CROSSFADE_CHOICES: [f64; 6] = [0.0, 2.0, 4.0, 6.0, 8.0, 12.0];
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+pub struct PageSettings {
+    #[serde(default)]
+    pub volume: Option<f64>,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default = "yes")]
+    pub levelling: bool,
+    #[serde(default)]
+    pub crossfade: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Settings {
+    pub volume: f64,
+    pub muted: bool,
+    pub levelling: bool,
+    pub crossfade: f64,
+}
+
+impl Settings {
+    pub const DEFAULT: Settings = Settings {
+        volume: DEFAULT_VOLUME,
+        muted: false,
+        levelling: true,
+        crossfade: 0.0,
+    };
+
+    pub fn with(self, page: PageSettings) -> Settings {
+        Settings {
+            volume: page
+                .volume
+                .filter(|volume| (0.0..=1.0).contains(volume))
+                .unwrap_or(self.volume),
+            muted: page.muted,
+            levelling: page.levelling,
+            crossfade: if CROSSFADE_CHOICES.contains(&page.crossfade) {
+                page.crossfade
+            } else {
+                0.0
+            },
+        }
+    }
+
+    fn command(self) -> Command {
+        Command::Settings {
+            volume: self.volume,
+            muted: self.muted,
+            levelling: self.levelling,
+            crossfade: self.crossfade,
+        }
+    }
+}
+
+static SETTINGS: Mutex<Settings> = Mutex::new(Settings::DEFAULT);
+
+#[derive(Deserialize)]
+struct Carried {
+    settings: Option<PageSettings>,
+}
+
+pub fn carried(message: &str) -> Option<PageSettings> {
+    serde_json::from_str::<Carried>(message.strip_prefix(ASKED)?)
+        .ok()?
+        .settings
+}
 
 fn yes() -> bool {
     true
@@ -153,7 +222,33 @@ pub fn page_script(id: &str, name: &str) -> String {
   if (window.top !== window) return;
   window.soundscapeDeviceId = {};
   window.soundscapeDeviceName = {};
-  window.soundscapeNative = {{ postMessage: (message) => console.log({} + String(message)) }};
+  window.soundscapeDeviceHeld = true;
+  const prefix = {};
+  const settings = () => {{
+    try {{
+      const volume = JSON.parse(localStorage.getItem("soundscape-volume") ?? "null");
+      const options = JSON.parse(localStorage.getItem("soundscape:player-options") ?? "null");
+      return {{
+        volume: typeof volume?.volume === "number" ? volume.volume : null,
+        muted: volume?.muted === true,
+        levelling: options?.levelling !== false,
+        crossfade: typeof options?.crossfade === "number" ? options.crossfade : 0,
+      }};
+    }} catch {{
+      return null;
+    }}
+  }};
+  const post = (message) => {{
+    let sent = String(message);
+    try {{
+      const parsed = JSON.parse(sent);
+      parsed.settings = settings();
+      sent = JSON.stringify(parsed);
+    }} catch {{}}
+    console.log(prefix + sent);
+  }};
+  window.soundscapeNative = {{ postMessage: post }};
+  window.addEventListener("soundscape:player-options", () => post(JSON.stringify({{ do: "hello" }})));
 }})();"#,
         Value::from(id),
         Value::from(name),
@@ -213,8 +308,25 @@ pub fn report_script(json: &str) -> String {
     )
 }
 
+fn settings() -> Settings {
+    *SETTINGS.lock().expect("settings lock")
+}
+
 fn volume() -> f64 {
-    *VOLUME.lock().expect("volume lock")
+    settings().volume
+}
+
+fn apply(app: &AppHandle, page: PageSettings) {
+    let fresh = {
+        let mut stored = SETTINGS.lock().expect("settings lock");
+        let fresh = stored.with(page);
+        if *stored == fresh {
+            return;
+        }
+        *stored = fresh;
+        fresh
+    };
+    with_player(app, |player| player.send(fresh.command()));
 }
 
 pub fn report(app: &AppHandle) {
@@ -231,7 +343,156 @@ pub fn report_soon(app: &AppHandle) {
     async_runtime::spawn(async move {
         tokio::time::sleep(REPORT_AFTER).await;
         report(&app);
+        report_to_server(&app).await;
     });
+}
+
+pub async fn report_to_server(app: &AppHandle) {
+    if !wanted(app) {
+        return;
+    }
+    let Some((server, token)) = crate::server::credentials(app) else {
+        return;
+    };
+    let snapshot = with_player(app, Player::snapshot).flatten();
+    let json = report_json(&device_id(app), &device_name(), snapshot.as_ref(), volume());
+    let Ok(body) = serde_json::from_str::<Value>(&json) else {
+        return;
+    };
+    let Ok(address) = crate::server::address(&server, "/api/devices") else {
+        return;
+    };
+    let _ = crate::server::answer(crate::server::client().post(address).json(&body), &token).await;
+}
+
+#[derive(Deserialize)]
+struct Taken {
+    #[serde(default)]
+    commands: Vec<Value>,
+}
+
+async fn take_commands(app: &AppHandle) {
+    let Some((server, token)) = crate::server::credentials(app) else {
+        return;
+    };
+    let Ok(address) = crate::server::address(&server, "/api/devices/take") else {
+        return;
+    };
+    let request = crate::server::client()
+        .post(address)
+        .json(&json!({ "id": device_id(app) }));
+    let Ok(response) = crate::server::answer(request, &token).await else {
+        return;
+    };
+    let Ok(taken) = response.json::<Taken>().await else {
+        return;
+    };
+    for command in taken.commands {
+        if let Ok(asked) = serde_json::from_value::<Asked>(command) {
+            from_page(app, asked);
+        }
+    }
+}
+
+pub fn command_for_me(event: &str, data: &str, id: &str) -> bool {
+    event == "command"
+        && serde_json::from_str::<Value>(data)
+            .ok()
+            .and_then(|value| value.get("to").and_then(Value::as_str).map(str::to_string))
+            .is_some_and(|to| to == id)
+}
+
+#[derive(Default)]
+pub struct EventReader {
+    event: String,
+    data: String,
+    buffer: String,
+}
+
+impl EventReader {
+    pub fn feed(&mut self, chunk: &str) -> Vec<(String, String)> {
+        self.buffer.push_str(chunk);
+        let mut found = Vec::new();
+        while let Some(end) = self.buffer.find('\n') {
+            let line = self.buffer[..end].trim_end_matches('\r').to_string();
+            self.buffer.drain(..=end);
+            if line.is_empty() {
+                if !self.data.is_empty() {
+                    let event = if self.event.is_empty() {
+                        "message".to_string()
+                    } else {
+                        std::mem::take(&mut self.event)
+                    };
+                    found.push((event, std::mem::take(&mut self.data)));
+                }
+                self.event.clear();
+            } else if let Some(name) = line.strip_prefix("event:") {
+                self.event = name.trim().to_string();
+            } else if let Some(text) = line.strip_prefix("data:") {
+                if !self.data.is_empty() {
+                    self.data.push('\n');
+                }
+                self.data.push_str(text.trim_start());
+            }
+        }
+        found
+    }
+}
+
+fn live_client() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(15))
+                .user_agent(concat!("SoundscapeDesktop/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("HTTP client")
+        })
+        .clone()
+}
+
+async fn listen_once(app: &AppHandle) {
+    let Some((server, token)) = crate::server::credentials(app) else {
+        return;
+    };
+    let Ok(address) = crate::server::address(&server, "/api/devices/live") else {
+        return;
+    };
+    let Ok(mut response) = live_client()
+        .get(address)
+        .header("authorization", format!("Token {token}"))
+        .header("accept", "text/event-stream")
+        .send()
+        .await
+    else {
+        return;
+    };
+    if !response.status().is_success() {
+        return;
+    }
+    take_commands(app).await;
+    let id = device_id(app);
+    let mut reader = EventReader::default();
+    while let Ok(Some(chunk)) = response.chunk().await {
+        if !wanted(app) {
+            return;
+        }
+        for (event, data) in reader.feed(&String::from_utf8_lossy(&chunk)) {
+            if command_for_me(&event, &data, &id) {
+                take_commands(app).await;
+            }
+        }
+    }
+}
+
+pub async fn link(app: AppHandle) {
+    loop {
+        if wanted(&app) {
+            listen_once(&app).await;
+        }
+        tokio::time::sleep(RETRY_AFTER).await;
+    }
 }
 
 fn scrobbles(server: Url, token: String) -> native::Report {
@@ -284,10 +545,11 @@ fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playin
         position,
         time: time.max(0.0),
         playing,
-        volume: volume(),
-        muted: false,
-        levelling: true,
+        volume: settings().volume,
+        muted: settings().muted,
+        levelling: settings().levelling,
         repeat,
+        crossfade: settings().crossfade,
     };
     let state = app.state::<AppState>();
     let mut current = state.native.lock().expect("native lock");
@@ -344,6 +606,17 @@ fn send_elsewhere(app: &AppHandle, to: String) {
     });
 }
 
+pub fn heard(app: &AppHandle, message: &str) -> bool {
+    let Some(asked) = asked(message) else {
+        return false;
+    };
+    if let Some(page) = carried(message) {
+        apply(app, page);
+    }
+    from_page(app, asked);
+    true
+}
+
 pub fn from_page(app: &AppHandle, asked: Asked) {
     if !wanted(app) {
         return;
@@ -360,7 +633,11 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
         Asked::Previous => send(Command::Previous),
         Asked::Seek { time } if time.is_finite() && time >= 0.0 => send(Command::SeekTo(time)),
         Asked::Volume { volume } if (0.0..=1.0).contains(&volume) => {
-            *VOLUME.lock().expect("volume lock") = volume;
+            {
+                let mut stored = SETTINGS.lock().expect("settings lock");
+                stored.volume = volume;
+                stored.muted = false;
+            }
             send(Command::Volume(volume));
         }
         Asked::Take {
@@ -387,9 +664,29 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
     report_soon(app);
 }
 
+pub fn change_key(snapshot: Option<&Snapshot>) -> Option<(String, bool, String, i64)> {
+    snapshot.map(|now| {
+        (
+            now.track.track_id.clone(),
+            now.playing,
+            now.repeat.clone(),
+            (now.volume * 100.0).round() as i64,
+        )
+    })
+}
+
 pub async fn run(app: AppHandle) {
+    let mut since_heartbeat = HEARTBEAT;
+    let mut told = None;
     loop {
+        let now = change_key(with_player(&app, Player::snapshot).flatten().as_ref());
+        if since_heartbeat >= HEARTBEAT || now != told {
+            since_heartbeat = Duration::ZERO;
+            told = now;
+            report_to_server(&app).await;
+        }
         tokio::time::sleep(EVERY).await;
+        since_heartbeat += EVERY;
         if active(&app) {
             report(&app);
         }
@@ -443,6 +740,14 @@ mod tests {
             Some(true)
         );
         assert_eq!(asked(r#"soundscape-native {"do":"dance"}"#), None);
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"hello","settings":{"volume":0.5}}"#),
+            Some(Asked::Hello)
+        );
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"seek","time":3,"settings":null}"#),
+            Some(Asked::Seek { time: 3.0 })
+        );
         assert_eq!(asked(r#"something else {"do":"play"}"#), None);
     }
 
@@ -473,6 +778,65 @@ mod tests {
     }
 
     #[test]
+    fn follows_the_page_player_settings() {
+        let page: PageSettings = serde_json::from_str(
+            r#"{"volume":0.35,"muted":false,"levelling":false,"crossfade":6}"#,
+        )
+        .unwrap();
+        let now = Settings::DEFAULT.with(page);
+        assert_eq!(now.volume, 0.35);
+        assert!(!now.levelling);
+        assert_eq!(now.crossfade, 6.0);
+        let odd: PageSettings = serde_json::from_str(r#"{"volume":null,"crossfade":5}"#).unwrap();
+        let kept = now.with(odd);
+        assert_eq!(kept.volume, 0.35);
+        assert_eq!(kept.crossfade, 0.0);
+        assert!(kept.levelling);
+        assert_eq!(
+            carried(r#"soundscape-native {"do":"hello","settings":{"volume":0.5,"muted":true,"levelling":true,"crossfade":0}}"#)
+                .map(|page| (page.volume, page.muted)),
+            Some((Some(0.5), true))
+        );
+        assert_eq!(carried(r#"soundscape-native {"do":"hello"}"#), None);
+    }
+
+    #[test]
+    fn reads_the_server_event_stream() {
+        let mut reader = EventReader::default();
+        assert!(reader.feed("event: comm").is_empty());
+        let found =
+            reader.feed("and\ndata: {\"to\":\"abcdefgh12\"}\n\nevent: device\ndata: {}\n\n");
+        assert_eq!(found.len(), 2);
+        assert!(command_for_me(&found[0].0, &found[0].1, "abcdefgh12"));
+        assert!(!command_for_me(&found[0].0, &found[0].1, "someone-else"));
+        assert!(!command_for_me(&found[1].0, &found[1].1, "abcdefgh12"));
+    }
+
+    #[test]
+    fn tells_the_server_when_something_changes() {
+        let now = Snapshot {
+            track: track("a"),
+            playing: true,
+            time: 12.0,
+            duration: Some(200.0),
+            volume: 0.6,
+            repeat: "off".into(),
+            up_next: Vec::new(),
+        };
+        let later = Snapshot {
+            time: 15.0,
+            ..now.clone()
+        };
+        assert_eq!(change_key(Some(&now)), change_key(Some(&later)));
+        let paused = Snapshot {
+            playing: false,
+            ..now.clone()
+        };
+        assert_ne!(change_key(Some(&now)), change_key(Some(&paused)));
+        assert_ne!(change_key(Some(&now)), change_key(None));
+    }
+
+    #[test]
     fn makes_ids_the_server_accepts() {
         let id = new_device_id(123_456_789_012_345_678_901_234_567_890);
         assert_eq!(id.len(), 20);
@@ -488,6 +852,8 @@ mod tests {
         assert!(script.contains(r#"window.soundscapeDeviceId = "abcdefgh12";"#));
         assert!(script.contains(r#"Desktop app on \"box\""#));
         assert!(script.contains("soundscape-native "));
+        assert!(script.contains("window.soundscapeDeviceHeld = true;"));
+        assert!(script.contains("soundscape:player-options"));
     }
 
     #[test]

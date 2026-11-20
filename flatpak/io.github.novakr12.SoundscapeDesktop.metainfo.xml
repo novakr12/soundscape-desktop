@@ -98,6 +98,16 @@
   </supports>
 
   <releases>
+    <release version="0.10.2" date="2026-11-20">
+      <description>
+        <p>The app's own player follows your player settings, and your other devices see and control it.</p>
+        <ul>
+          <li>Music starts at the volume you set in Soundscape instead of a fixed level</li>
+          <li>Volume levelling and crossfade from Soundscape's player settings now apply, and change as soon as you change them</li>
+          <li>Your phone and other browsers see what the computer is playing under Devices, and can pause, skip or send music to it</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.1" date="2026-11-20">
       <description>
         <p>Music plays smoothly when you close or open the window.</p>

@@ -3,6 +3,7 @@ use crate::relay::Relay;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -55,6 +56,12 @@ pub struct Handover {
     pub muted: bool,
     pub levelling: bool,
     pub repeat: String,
+    #[serde(default)]
+    pub crossfade: f64,
+}
+
+pub fn crossfade_due(crossfade: f64, length: f64, position: f64) -> bool {
+    crossfade > 0.0 && length >= crossfade * 3.0 && length - position <= crossfade
 }
 
 pub fn gain_level(gain: Option<&Gain>, by_album: bool) -> f64 {
@@ -166,6 +173,12 @@ pub enum Command {
     Volume(f64),
     Enqueue(Box<Track>, bool),
     Jump(usize),
+    Settings {
+        volume: f64,
+        muted: bool,
+        levelling: bool,
+        crossfade: f64,
+    },
     FadeTo(f64, Duration),
     Stop,
 }
@@ -276,8 +289,58 @@ impl Drop for Player {
 
 pub type Report = Box<dyn Fn(&'static str, Track) + Send>;
 
+struct Outgoing {
+    playbin: gst::Element,
+    from: f64,
+    began: Instant,
+    length: Duration,
+}
+
+fn make_playbin(
+    queue: &Arc<Mutex<Queue>>,
+    relay: &Relay,
+) -> Result<(gst::Element, Arc<AtomicBool>), String> {
+    let playbin = gst::ElementFactory::make("playbin")
+        .build()
+        .map_err(|_| "GStreamer's playbin is missing".to_string())?;
+    if let Some(sink) = audio_sink() {
+        playbin.set_property("audio-sink", &sink);
+    }
+    if let Ok(fake) = gst::ElementFactory::make("fakesink").build() {
+        playbin.set_property("video-sink", &fake);
+    }
+    let active = Arc::new(AtomicBool::new(true));
+    let still = active.clone();
+    let next_queue = queue.clone();
+    let next_relay = relay.clone();
+    playbin.connect("about-to-finish", false, move |values| {
+        if !still.load(Ordering::Relaxed) {
+            return None;
+        }
+        let Ok(playbin) = values[0].get::<gst::Element>() else {
+            return None;
+        };
+        let mut queue = next_queue.lock().expect("queue lock");
+        if let Some(next) = next_index(queue.at, queue.tracks.len(), &queue.repeat) {
+            if let Some(uri) = queue
+                .tracks
+                .get(next)
+                .and_then(|track| source_for(&next_relay, track))
+            {
+                playbin.set_property("uri", uri.as_str());
+                queue.coming = Some(next);
+            }
+        }
+        None
+    });
+    Ok((playbin, active))
+}
+
 struct Engine {
     playbin: gst::Element,
+    active: Arc<AtomicBool>,
+    outgoing: Option<Outgoing>,
+    crossfade: f64,
     queue: Arc<Mutex<Queue>>,
     shown: Arc<Mutex<Shown>>,
     server: Url,
@@ -301,6 +364,74 @@ struct Engine {
 }
 
 impl Engine {
+    fn crossfade_soon(&mut self) {
+        if self.crossfade <= 0.0
+            || !self.want_playing
+            || self.released
+            || self.outgoing.is_some()
+            || self.seek_when_ready.is_some()
+        {
+            return;
+        }
+        let Some(length) = self.stream_length() else {
+            return;
+        };
+        if !crossfade_due(self.crossfade, length, self.position()) {
+            return;
+        }
+        let next = {
+            let queue = self.queue.lock().expect("queue lock");
+            if queue.coming.is_some() || queue.repeat == "one" {
+                return;
+            }
+            let Some(next) = next_index(queue.at, queue.tracks.len(), &queue.repeat) else {
+                return;
+            };
+            if next == queue.at || same_album(queue.tracks.get(queue.at), queue.tracks.get(next)) {
+                return;
+            }
+            next
+        };
+        let Ok((fresh, active)) = make_playbin(&self.queue, &self.relay) else {
+            return;
+        };
+        self.active.store(false, Ordering::Relaxed);
+        let old = std::mem::replace(&mut self.playbin, fresh);
+        self.active = active;
+        let from = old.property::<f64>("volume");
+        let length = Duration::from_secs_f64(self.crossfade);
+        self.outgoing = Some(Outgoing {
+            playbin: old,
+            from,
+            began: Instant::now(),
+            length,
+        });
+        self.fade_gain = 0.0;
+        self.fade = Some((0.0, 1.0, Instant::now(), length));
+        self.load(next, 0.0);
+    }
+
+    fn step_outgoing(&mut self) {
+        let Some(outgoing) = &self.outgoing else {
+            return;
+        };
+        let done = (outgoing.began.elapsed().as_secs_f64()
+            / outgoing.length.as_secs_f64().max(0.001))
+        .min(1.0);
+        outgoing
+            .playbin
+            .set_property("volume", (outgoing.from * (1.0 - done)).clamp(0.0, 1.0));
+        if done >= 1.0 {
+            self.drop_outgoing();
+        }
+    }
+
+    fn drop_outgoing(&mut self) {
+        if let Some(outgoing) = self.outgoing.take() {
+            let _ = outgoing.playbin.set_state(gst::State::Null);
+        }
+    }
+
     fn step_fade(&mut self) {
         let Some((from, to, began, length)) = self.fade else {
             return;
@@ -476,6 +607,20 @@ impl Engine {
     }
 
     fn handle(&mut self, command: Command) -> bool {
+        if !matches!(
+            command,
+            Command::Volume(_)
+                | Command::Settings { .. }
+                | Command::FadeTo(..)
+                | Command::SetRepeat(_)
+        ) {
+            self.drop_outgoing();
+            if self.fade.is_some() {
+                self.fade = None;
+                self.fade_gain = 1.0;
+                self.apply_volume();
+            }
+        }
         match command {
             Command::Play => self.set_playing(true),
             Command::Pause => self.set_playing(false),
@@ -504,6 +649,18 @@ impl Engine {
                 let at = insert_at(queue.at, queue.tracks.len(), next);
                 queue.tracks.insert(at, *track);
                 queue.coming = shifted(queue.coming, at);
+            }
+            Command::Settings {
+                volume,
+                muted,
+                levelling,
+                crossfade,
+            } => {
+                self.volume = volume.clamp(0.0, 1.0);
+                self.muted = muted;
+                self.levelling = levelling;
+                self.crossfade = crossfade.max(0.0);
+                self.apply_volume();
             }
             Command::Jump(ahead) => {
                 let (at, length) = {
@@ -708,15 +865,6 @@ pub fn start(
     silent: bool,
 ) -> Result<Player, String> {
     gst::init().map_err(|error| error.to_string())?;
-    let playbin = gst::ElementFactory::make("playbin")
-        .build()
-        .map_err(|_| "GStreamer's playbin is missing".to_string())?;
-    if let Some(sink) = audio_sink() {
-        playbin.set_property("audio-sink", &sink);
-    }
-    if let Ok(fake) = gst::ElementFactory::make("fakesink").build() {
-        playbin.set_property("video-sink", &fake);
-    }
     let relay = Relay::start(server.clone(), token)?;
 
     let queue = Arc::new(Mutex::new(Queue {
@@ -725,25 +873,7 @@ pub fn start(
         repeat: handover.repeat.clone(),
         coming: None,
     }));
-    let next_queue = queue.clone();
-    let next_relay = relay.clone();
-    playbin.connect("about-to-finish", false, move |values| {
-        let Ok(playbin) = values[0].get::<gst::Element>() else {
-            return None;
-        };
-        let mut queue = next_queue.lock().expect("queue lock");
-        if let Some(next) = next_index(queue.at, queue.tracks.len(), &queue.repeat) {
-            if let Some(uri) = queue
-                .tracks
-                .get(next)
-                .and_then(|track| source_for(&next_relay, track))
-            {
-                playbin.set_property("uri", uri.as_str());
-                queue.coming = Some(next);
-            }
-        }
-        None
-    });
+    let (playbin, active) = make_playbin(&queue, &relay)?;
 
     let shown = Arc::new(Mutex::new(Shown {
         preview: None,
@@ -758,6 +888,9 @@ pub fn start(
     let (commands, receive) = channel::<Command>();
     let mut engine = Engine {
         playbin,
+        active,
+        outgoing: None,
+        crossfade: handover.crossfade.max(0.0),
         queue,
         shown: shown.clone(),
         server,
@@ -784,7 +917,7 @@ pub fn start(
         .spawn(move || {
             engine.load(handover.position, handover.time);
             loop {
-                let wait = if engine.fade.is_some() {
+                let wait = if engine.fade.is_some() || engine.outgoing.is_some() {
                     FADE_TICK
                 } else {
                     TICK
@@ -797,11 +930,14 @@ pub fn start(
                     }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => {
+                        engine.drop_outgoing();
                         let _ = engine.playbin.set_state(gst::State::Null);
                         break;
                     }
                 }
                 engine.step_fade();
+                engine.step_outgoing();
+                engine.crossfade_soon();
                 engine.messages();
                 engine.seek_when_ready();
                 engine.measure();
@@ -936,5 +1072,14 @@ mod tests {
         assert_eq!(shifted(Some(3), 3), Some(4));
         assert_eq!(shifted(Some(2), 3), Some(2));
         assert_eq!(shifted(None, 0), None);
+    }
+
+    #[test]
+    fn crossfades_only_near_the_end_of_long_enough_songs() {
+        assert!(crossfade_due(6.0, 200.0, 195.0));
+        assert!(!crossfade_due(6.0, 200.0, 190.0));
+        assert!(!crossfade_due(0.0, 200.0, 199.0));
+        assert!(!crossfade_due(6.0, 15.0, 14.0));
+        assert!(crossfade_due(2.0, 6.0, 4.5));
     }
 }

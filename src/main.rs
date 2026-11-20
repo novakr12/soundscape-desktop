@@ -898,8 +898,7 @@ impl WebViewDelegate for Shell {
     }
 
     fn show_console_message(&self, _: WebView, level: servo::ConsoleLogLevel, message: String) {
-        if let Some(asked) = soundscape_core::native_link::asked(&message) {
-            soundscape_core::native_link::from_page(&self.app, asked);
+        if soundscape_core::native_link::heard(&self.app, &message) {
             return;
         }
         let Some(picked) = pickers::picked(&self.nonce, &message) else {

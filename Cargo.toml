@@ -14,7 +14,7 @@ servo-base = "=0.8.0"
 servo-allocator = { version = "=0.8.0", features = ["use-jemalloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-signal-hook = "0.3"
+signal-hook = "0.4"
 libc = "0.2"
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "wayland"] }
 resvg = { version = "0.48", default-features = false }

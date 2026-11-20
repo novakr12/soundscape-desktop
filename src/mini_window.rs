@@ -29,6 +29,7 @@ const MODE_STEP: f32 = 92.0;
 const TIME_WIDTH: f32 = 44.0;
 const SEEK_ARRIVED_MS: u64 = 1500;
 const SEEK_GIVE_UP: Duration = Duration::from_secs(4);
+const TOGGLE_GIVE_UP: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(250);
 
 const SHUFFLE: &str = r#"<path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H20" /><path d="M3 17h3.5c1.3 0 2.3-.4 3.1-1.2M13.4 8.2c.8-.8 1.8-1.2 3.1-1.2H20" /><path d="M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" />"#;
@@ -145,6 +146,7 @@ fn run(app: AppHandle, sender: mpsc::Sender<Option<EventLoopProxy<Event>>>) {
         pointer: PhysicalPosition::new(0.0, 0.0),
         dragging: None,
         seek_hold: None,
+        toggle_hold: None,
         hover: None,
         spots: Vec::new(),
     };
@@ -176,6 +178,7 @@ struct Player {
     pointer: PhysicalPosition<f64>,
     dragging: Option<u64>,
     seek_hold: Option<(u64, Instant)>,
+    toggle_hold: Option<(bool, Instant)>,
     hover: Option<Spot>,
     spots: Vec<(Spot, Rect, bool)>,
 }
@@ -235,6 +238,13 @@ impl Player {
             self.seek_hold = None;
         }
         let mut since = Instant::now();
+        if let Some((wanted, asked)) = self.toggle_hold {
+            if view.playing == wanted || asked.elapsed() >= TOGGLE_GIVE_UP {
+                self.toggle_hold = None;
+            } else {
+                view.playing = wanted;
+            }
+        }
         if let Some((target, asked)) = self.seek_hold {
             let waited = asked.elapsed();
             let expected = target
@@ -458,6 +468,14 @@ impl ApplicationHandler<Event> for Player {
                     }
                     Some((Spot::Button(action), _)) => {
                         self.problem = None;
+                        if action == "toggle" {
+                            let at = self.position();
+                            self.view.position_ms = Some(at);
+                            self.received = Instant::now();
+                            self.view.playing = !self.view.playing;
+                            self.toggle_hold = Some((self.view.playing, self.received));
+                            self.redraw();
+                        }
                         self.ask(action, None);
                     }
                     None => {}
@@ -714,6 +732,11 @@ struct Glyph<'a> {
     x: f32,
 }
 
+fn em(font: &Face, size: f32) -> PxScale {
+    let units = font.units_per_em().unwrap_or(1000.0);
+    PxScale::from(size * font.height_unscaled() / units)
+}
+
 fn lay_out<'a>(fonts: &'a [Face], text: &str, size: f32) -> (Vec<Glyph<'a>>, f32) {
     let mut glyphs = Vec::new();
     let mut x = 0.0;
@@ -726,7 +749,7 @@ fn lay_out<'a>(fonts: &'a [Face], text: &str, size: f32) -> (Vec<Glyph<'a>>, f32
         let Some(font) = fonts.get(chosen) else {
             break;
         };
-        let scaled = font.as_scaled(PxScale::from(size));
+        let scaled = font.as_scaled(em(font, size));
         let id = font.glyph_id(letter);
         if let Some((before, before_id)) = previous
             && before == chosen
@@ -782,7 +805,7 @@ fn text(canvas: &mut Pixmap, fonts: &[Face], words: &str, size: f32, at: (f32, f
     for glyph in glyphs {
         let placed = glyph
             .id
-            .with_scale_and_position(PxScale::from(size), ab_glyph::point(at.0 + glyph.x, at.1));
+            .with_scale_and_position(em(glyph.font, size), ab_glyph::point(at.0 + glyph.x, at.1));
         if let Some(outline) = glyph.font.outline_glyph(placed) {
             let bounds = outline.px_bounds();
             outline.draw(|x, y, coverage| {
@@ -802,7 +825,7 @@ fn baseline(fonts: &[Face], size: f32, top: f32, line: f32) -> f32 {
     let Some(font) = fonts.first() else {
         return top + line * 0.75;
     };
-    let scaled = font.as_scaled(PxScale::from(size));
+    let scaled = font.as_scaled(em(font, size));
     let height = scaled.ascent() - scaled.descent();
     top + (line - height) / 2.0 + scaled.ascent()
 }
@@ -928,19 +951,19 @@ fn draw(canvas: &mut Pixmap, player: &Player, scale: f32) -> Vec<(Spot, Rect, bo
     };
     let left = PAD + COVER + 12.0;
     let room = WIDTH - left - PAD - if shown_love { BUTTON + 8.0 } else { 0.0 };
-    let top = PAD + (COVER - 40.0) / 2.0;
+    let top = PAD + (COVER - 44.0) / 2.0;
     let title = if active {
         view.title.as_str()
     } else {
         "Nothing playing"
     };
-    let title = fitted(&fonts.bold, title, k(14.0), k(room));
+    let title = fitted(&fonts.bold, title, k(16.0), k(room));
     text(
         canvas,
         &fonts.bold,
         &title,
-        k(14.0),
-        (k(left), k(baseline(&fonts.bold, 14.0, top, 20.0))),
+        k(16.0),
+        (k(left), k(baseline(&fonts.bold, 16.0, top, 22.0))),
         palette.text,
     );
     let (second, tint) = match &player.problem {
@@ -948,13 +971,13 @@ fn draw(canvas: &mut Pixmap, player: &Player, scale: f32) -> Vec<(Spot, Rect, bo
         None if active => (format!("{} · {}", view.artist, view.source), palette.muted),
         None => ("Start a song in any player.".into(), palette.muted),
     };
-    let second = fitted(&fonts.regular, &second, k(13.0), k(room));
+    let second = fitted(&fonts.regular, &second, k(15.0), k(room));
     text(
         canvas,
         &fonts.regular,
         &second,
-        k(13.0),
-        (k(left), k(baseline(&fonts.regular, 13.0, top + 20.0, 20.0))),
+        k(15.0),
+        (k(left), k(baseline(&fonts.regular, 15.0, top + 22.0, 22.0))),
         tint,
     );
 

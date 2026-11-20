@@ -144,6 +144,14 @@ fn with_player<T>(app: &AppHandle, read: impl FnOnce(&Player) -> T) -> Option<T>
     player.as_ref().map(read)
 }
 
+fn settled(app: &AppHandle) -> Option<Option<Snapshot>> {
+    match with_player(app, Player::snapshot) {
+        Some(None) => None,
+        Some(snapshot) => Some(snapshot),
+        None => Some(None),
+    }
+}
+
 pub fn active(app: &AppHandle) -> bool {
     with_player(app, |_| ()).is_some()
 }
@@ -333,7 +341,9 @@ pub fn report(app: &AppHandle) {
     if !wanted(app) {
         return;
     }
-    let snapshot = with_player(app, Player::snapshot).flatten();
+    let Some(snapshot) = settled(app) else {
+        return;
+    };
     let json = report_json(&device_id(app), &device_name(), snapshot.as_ref(), volume());
     app.host().eval(MAIN, report_script(&json));
 }
@@ -354,7 +364,9 @@ pub async fn report_to_server(app: &AppHandle) {
     let Some((server, token)) = crate::server::credentials(app) else {
         return;
     };
-    let snapshot = with_player(app, Player::snapshot).flatten();
+    let Some(snapshot) = settled(app) else {
+        return;
+    };
     let json = report_json(&device_id(app), &device_name(), snapshot.as_ref(), volume());
     let Ok(body) = serde_json::from_str::<Value>(&json) else {
         return;
@@ -660,7 +672,6 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
         Asked::Jump { ahead } if (1..=MOST_UP_NEXT).contains(&ahead) => send(Command::Jump(ahead)),
         _ => {}
     }
-    report(app);
     report_soon(app);
 }
 
@@ -679,8 +690,11 @@ pub async fn run(app: AppHandle) {
     let mut since_heartbeat = HEARTBEAT;
     let mut told = None;
     loop {
-        let now = change_key(with_player(&app, Player::snapshot).flatten().as_ref());
-        if since_heartbeat >= HEARTBEAT || now != told {
+        let now = settled(&app).map(|snapshot| change_key(snapshot.as_ref()));
+        let due = now
+            .as_ref()
+            .is_some_and(|now| since_heartbeat >= HEARTBEAT || *now != told);
+        if let (true, Some(now)) = (due, now) {
             since_heartbeat = Duration::ZERO;
             told = now;
             report_to_server(&app).await;

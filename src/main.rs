@@ -1,8 +1,10 @@
 mod font;
 mod glide;
 mod host;
+mod ipc;
 mod keys;
 mod memory;
+mod parent;
 mod pickers;
 mod profile;
 mod software;
@@ -10,6 +12,7 @@ mod theme;
 mod valve;
 
 use euclid::Scale;
+use ipc::{FromWindow, Start, ToWindow};
 use pickers::{Answer, Ask, Picked};
 use profile::Profile;
 use servo::{
@@ -119,10 +122,10 @@ impl WebViewDelegate for MiniPage {
     }
 
     fn show_console_message(&self, _: WebView, _: servo::ConsoleLogLevel, message: String) {
-        if let (Some(shell), Some(asked)) =
-            (self.shell.upgrade(), soundscape_core::mini::asked(&message))
+        if let Some(shell) = self.shell.upgrade()
+            && soundscape_core::mini::asked(&message).is_some()
         {
-            soundscape_core::mini::act(&shell.app, asked);
+            shell.link.send(FromWindow::Page { message });
         }
     }
 }
@@ -170,9 +173,7 @@ struct Shell {
     storage: Option<std::path::PathBuf>,
     glide: RefCell<glide::Glide>,
     fling: RefCell<glide::Fling>,
-    server: Option<Url>,
-    app: soundscape_core::host::AppHandle,
-    seen: std::sync::Arc<std::sync::Mutex<host::Seen>>,
+    link: Rc<host::Link>,
     nonce: String,
     debug: bool,
     proxy: EventLoopProxy<Wake>,
@@ -260,50 +261,49 @@ impl Shell {
     }
 
     fn server(&self) -> Option<Url> {
-        self.app
-            .state::<soundscape_core::AppState>()
-            .server()
-            .or_else(|| self.server.clone())
+        self.link.server.borrow().clone()
     }
 
     fn allowed(&self, url: &Url) -> bool {
         use soundscape_core::server::Navigation;
-        if soundscape_core::setup::follow(&self.app, url) {
+        if soundscape_core::setup::asked(url).is_some() {
+            self.hand_over(url);
             return false;
         }
         match soundscape_core::server::classify(self.server().as_ref(), url) {
             Navigation::Allow => true,
             Navigation::Block => false,
-            Navigation::AppSettings => {
-                let _ = soundscape_core::open_settings(&self.app);
-                false
-            }
-            Navigation::External => {
-                soundscape_core::links::open(&self.app, url);
-                false
-            }
-            Navigation::Connected { .. } => {
-                soundscape_core::connected_through(&self.app, url);
+            _ => {
+                self.hand_over(url);
                 false
             }
         }
     }
 
+    fn hand_over(&self, url: &Url) {
+        self.link.send(FromWindow::Follow {
+            url: url.to_string(),
+        });
+    }
+
     fn note_url(&self) {
-        let Some(url) = self.webview().and_then(|webview| webview.url()) else {
-            return;
-        };
-        if let Ok(mut seen) = self.seen.lock()
-            && seen.url.as_ref() != Some(&url)
-        {
-            seen.url = Some(url);
+        if let Some(url) = self.webview().and_then(|webview| webview.url()) {
+            self.link.url(&url);
         }
     }
 
     fn set_hidden(&self, hidden: bool) {
-        if let Ok(mut seen) = self.seen.lock() {
-            seen.hidden = hidden;
-        }
+        self.link.hidden(hidden);
+    }
+
+    fn finished(&self) -> bool {
+        self.window().is_none() && self.mini().is_none()
+    }
+
+    fn quit(&self, event_loop: &ActiveEventLoop) {
+        software::settled(self.storage.as_deref());
+        self.close();
+        event_loop.exit();
     }
 
     fn obey(&self, call: host::Call, event_loop: &ActiveEventLoop) {
@@ -343,24 +343,15 @@ impl Shell {
                 if let Some(webview) = self.webview() {
                     webview.load(notice());
                 }
+                self.show_window(event_loop);
             }
-            host::Call::Main(work) => work(),
+            host::Call::Server(server) => *self.link.server.borrow_mut() = server,
             host::Call::Smooth(on) => self.smooth.set(on),
             host::Call::Memory(mb) => {
                 self.memory_limit.set(mb);
                 self.check_memory();
             }
-            host::Call::Restart => {
-                RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
-                software::settled(self.storage.as_deref());
-                self.close();
-                event_loop.exit();
-            }
-            host::Call::Exit => {
-                software::settled(self.storage.as_deref());
-                self.close();
-                event_loop.exit();
-            }
+            host::Call::Exit => self.quit(event_loop),
         }
     }
 
@@ -469,18 +460,14 @@ impl Shell {
             window,
             pointer: Cell::new(PhysicalPosition::new(0.0, 0.0)),
         }));
-        if let Ok(mut seen) = self.seen.lock() {
-            seen.mini = true;
-        }
+        self.link.send(FromWindow::Mini { open: true });
     }
 
     fn close_mini(&self) {
         let Some(mini) = self.mini.borrow_mut().take() else {
             return;
         };
-        if let Ok(mut seen) = self.seen.lock() {
-            seen.mini = false;
-        }
+        self.link.send(FromWindow::Mini { open: false });
         let _ = mini.context.take_window();
         drop(mini);
     }
@@ -564,13 +551,11 @@ impl Shell {
             self.note_size(&window);
         }
         let size = self.size.get();
-        let maximized = self.maximized.get();
-        self.app
-            .state::<soundscape_core::AppState>()
-            .update(|config| {
-                config.window_size = Some((size.width, size.height));
-                config.maximized = maximized;
-            });
+        self.link.send(FromWindow::WindowState {
+            width: size.width,
+            height: size.height,
+            maximized: self.maximized.get(),
+        });
     }
 
     fn note_size(&self, window: &Window) {
@@ -612,6 +597,11 @@ impl Shell {
         if self.window().is_some() {
             self.remember_window();
         }
+        self.drop_window();
+    }
+
+    fn drop_window(&self) {
+        self.set_hidden(true);
         let Some(window) = self.window.borrow_mut().take() else {
             return;
         };
@@ -745,10 +735,14 @@ impl Shell {
             WinitKey::Character(letter)
                 if held.control_key() && letter.eq_ignore_ascii_case("m") =>
             {
-                let _ = soundscape_core::mini::open(&self.app);
+                self.link.send(FromWindow::Shortcut {
+                    name: "mini".into(),
+                });
             }
             WinitKey::Character(letter) if held.control_key() && letter.as_str() == "," => {
-                soundscape_core::settings_page::open(&self.app)
+                self.link.send(FromWindow::Shortcut {
+                    name: "settings".into(),
+                })
             }
             WinitKey::Named(WinitNamed::Home) if held.alt_key() => {
                 if let Some(server) = self.server() {
@@ -816,9 +810,7 @@ impl WebViewDelegate for Shell {
     }
 
     fn notify_url_changed(&self, _: WebView, url: Url) {
-        if let Ok(mut seen) = self.seen.lock() {
-            seen.url = Some(url);
-        }
+        self.link.url(&url);
     }
 
     fn request_create_new(&self, _: WebView, request: CreateNewWebViewRequest) {
@@ -898,7 +890,10 @@ impl WebViewDelegate for Shell {
     }
 
     fn show_console_message(&self, _: WebView, level: servo::ConsoleLogLevel, message: String) {
-        if soundscape_core::native_link::heard(&self.app, &message) {
+        if message.starts_with(soundscape_core::native_link::ASKED)
+            || message.starts_with(soundscape_core::mini::ASKED)
+        {
+            self.link.send(FromWindow::Page { message });
             return;
         }
         let Some(picked) = pickers::picked(&self.nonce, &message) else {
@@ -917,7 +912,7 @@ impl WebViewDelegate for Shell {
     }
 
     fn notify_media_session_event(&self, _: WebView, _: servo::MediaSessionEvent) {
-        soundscape_core::media::poke();
+        self.link.send(FromWindow::Poke);
     }
 
     fn notify_crashed(&self, _: WebView, reason: String, _: Option<String>) {
@@ -928,8 +923,6 @@ impl WebViewDelegate for Shell {
 #[unsafe(export_name = "_rjem_malloc_conf")]
 pub static MALLOC_CONF: &[u8; 60] =
     b"background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:0\0";
-
-static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
     static ME: RefCell<Weak<Shell>> = const { RefCell::new(Weak::new()) };
@@ -993,13 +986,13 @@ impl App {
         profile: Profile,
         launched: Launched,
     ) -> Rc<Shell> {
-        let saved = launched.app.state::<soundscape_core::AppState>().config();
-        let saved_size = saved
-            .window_size
+        let start = &launched.start;
+        let saved_size = start
+            .size
             .filter(|(width, height)| *width >= 200 && *height >= 200)
             .map(|(width, height)| PhysicalSize::new(width, height));
         let window = event_loop
-            .create_window(attributes(saved_size, saved.maximized))
+            .create_window(attributes(saved_size, start.maximized).with_visible(!start.mini_only))
             .expect("window");
         let display = event_loop.display_handle().expect("display");
         let handle = window.window_handle().expect("window handle");
@@ -1048,7 +1041,7 @@ impl App {
             soundscape_core::links::SAME_WINDOW.into(),
             None,
         )));
-        if let Some(native) = soundscape_core::native_link::script_for(&launched.app) {
+        if let Some(native) = start.native.clone() {
             scripts.add_script(Rc::new(UserScript::new(native, None)));
         }
         let desktop_font = font::desktop();
@@ -1070,7 +1063,7 @@ impl App {
             desktop_font: RefCell::new(desktop_font),
             font_script: RefCell::new(font_script),
             size: Cell::new(size),
-            maximized: Cell::new(saved.maximized),
+            maximized: Cell::new(start.maximized),
             servo,
             context,
             webview: RefCell::new(None),
@@ -1080,8 +1073,8 @@ impl App {
             asked: Cell::new(0),
             typing: RefCell::new(None),
             composing: Cell::new(false),
-            smooth: Cell::new(profile.smooth_scrolling),
-            memory_limit: Cell::new(profile.memory_limit),
+            smooth: Cell::new(start.smooth),
+            memory_limit: Cell::new(start.memory_limit),
             armed: Cell::new(false),
             loaded_at: Cell::new(std::time::Instant::now()),
             hidden_since: Cell::new(None),
@@ -1091,9 +1084,7 @@ impl App {
             storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
             fling: RefCell::new(glide::Fling::default()),
-            server: profile.server.clone(),
-            app: launched.app.clone(),
-            seen: launched.seen.clone(),
+            link: launched.link.clone(),
             nonce: nonce(),
             debug: profile::wants(std::env::var("SOUNDSCAPE_DEBUG").ok().as_deref()),
             proxy: proxy.clone(),
@@ -1101,16 +1092,10 @@ impl App {
             pointer: Cell::new(PhysicalPosition::new(0.0, 0.0)),
         });
         ME.with(|me| *me.borrow_mut() = Rc::downgrade(&shell));
-        let start = profile::given_server()
-            .and(profile.server.clone())
-            .or_else(|| soundscape_core::first_page(&launched.app))
-            .or_else(|| profile.server.clone())
-            .unwrap_or_else(notice);
-        if let Ok(mut seen) = launched.seen.lock() {
-            seen.url = Some(start.clone());
-        }
+        let first = Url::parse(&start.url).unwrap_or_else(|_| notice());
+        shell.link.url(&first);
         let webview = WebViewBuilder::new(&shell.servo, shell.context.clone())
-            .url(start)
+            .url(first)
             .hidpi_scale_factor(Scale::new(
                 shell.window().map_or(1.0, |window| window.scale_factor()) as f32,
             ))
@@ -1135,6 +1120,12 @@ impl App {
                 let _ = sender.send_event(Wake::Font(family));
             });
         }
+        if start.mini_only {
+            shell.drop_window();
+            shell.open_mini(event_loop);
+        } else {
+            shell.set_hidden(false);
+        }
         shell
     }
 }
@@ -1144,52 +1135,48 @@ impl App {
         let App::Starting(proxy, profile, launched) = std::mem::replace(self, App::Stopped) else {
             return;
         };
-        if let Ok(mut seen) = launched.seen.lock() {
-            seen.hidden = false;
-        }
         *self = App::Running(App::start(event_loop, proxy, profile, launched));
+    }
+
+    fn end_if_finished(&self, event_loop: &ActiveEventLoop) {
+        if let App::Running(shell) = self
+            && shell.finished()
+        {
+            shell.quit(event_loop);
+        }
     }
 }
 
 impl ApplicationHandler<Wake> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if let App::Starting(_, _, launched) = self
-            && !launched.hidden
-        {
-            self.begin(event_loop);
-        }
+        self.begin(event_loop);
+        self.end_if_finished(event_loop);
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, wake: Wake) {
         if let App::Starting(..) = self {
-            let wanted = match &wake {
-                Wake::Quit | Wake::Call(host::Call::Exit) => {
-                    event_loop.exit();
-                    return;
-                }
-                Wake::Call(host::Call::Restart) => {
-                    RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
-                    event_loop.exit();
-                    return;
-                }
-                Wake::Call(
-                    host::Call::Show
-                    | host::Call::Focus
-                    | host::Call::Navigate(_)
-                    | host::Call::Setup
-                    | host::Call::OpenMini,
-                ) => true,
-                _ => false,
-            };
-            if !wanted {
-                if let Wake::Call(host::Call::Evaluate(_, reply)) = wake {
-                    reply(None);
-                }
+            if matches!(wake, Wake::Quit | Wake::Call(host::Call::Exit)) {
+                event_loop.exit();
                 return;
             }
             self.begin(event_loop);
         }
+        self.wake(event_loop, wake);
+        self.end_if_finished(event_loop);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        self.window_changed(event_loop, id, event);
+        self.end_if_finished(event_loop);
+    }
+}
+
+impl App {
+    fn wake(&mut self, event_loop: &ActiveEventLoop, wake: Wake) {
         let App::Running(shell) = self else {
+            if let Wake::Call(host::Call::Evaluate(_, reply)) = wake {
+                reply(None);
+            }
             return;
         };
         match wake {
@@ -1202,11 +1189,7 @@ impl ApplicationHandler<Wake> for App {
             Wake::Push => shell.push_valve(),
             Wake::Call(call) => shell.obey(call, event_loop),
             Wake::Park(playing) => shell.park(playing),
-            Wake::Quit => {
-                software::settled(shell.storage.as_deref());
-                shell.close();
-                event_loop.exit();
-            }
+            Wake::Quit => shell.quit(event_loop),
             Wake::Theme(theme) => {
                 shell.theme.set(theme);
                 shell
@@ -1224,7 +1207,7 @@ impl ApplicationHandler<Wake> for App {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+    fn window_changed(&mut self, _event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         let App::Running(shell) = self else {
             return;
         };
@@ -1240,13 +1223,9 @@ impl ApplicationHandler<Wake> for App {
             return;
         };
         match event {
-            WindowEvent::CloseRequested if soundscape_core::window_closed(&shell.app) => {
-                shell.hide_window();
-            }
             WindowEvent::CloseRequested => {
-                software::settled(shell.storage.as_deref());
-                shell.close();
-                event_loop.exit();
+                shell.hide_window();
+                shell.link.send(FromWindow::Close);
             }
             WindowEvent::RedrawRequested => {
                 let now = std::time::Instant::now();
@@ -1440,12 +1419,19 @@ fn window_icon() -> Option<Icon> {
 }
 
 struct Launched {
-    hidden: bool,
-    app: soundscape_core::host::AppHandle,
-    seen: std::sync::Arc<std::sync::Mutex<host::Seen>>,
+    start: Start,
+    link: Rc<host::Link>,
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == ipc::WINDOW_FLAG) {
+        window_main();
+    } else {
+        app_main();
+    }
+}
+
+fn app_main() {
     use soundscape_core::host::async_runtime;
     use soundscape_core::instance::{self, Claim};
     let args: Vec<String> = std::env::args().collect();
@@ -1468,16 +1454,76 @@ fn main() {
         }
         Claim::First(connection) => connection,
     };
-    let mut profile = profile::load();
-    let config_dir = profile.config.clone();
-    profile.cpu_rendering =
-        software::guard(profile.storage.as_deref(), profile.cpu_rendering, |now| {
-            if let Some(dir) = &config_dir {
-                let mut config = soundscape_core::config::Config::load(dir);
-                config.cpu_rendering = now;
-                let _ = config.save(dir);
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = soundscape_core::config_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join(soundscape_core::IDENTIFIER));
+    let saved = soundscape_core::config::Config::load(&dir);
+    let running = soundscape_core::host::Running {
+        cpu_rendering: saved.cpu_rendering,
+        faster_scripts: saved.faster_scripts,
+    };
+    let (stop, stopped) = std::sync::mpsc::channel();
+    let quitter = stop.clone();
+    if let Ok(mut signals) = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGHUP,
+    ]) {
+        std::thread::spawn(move || {
+            if signals.forever().next().is_some() {
+                let _ = quitter.send(());
             }
         });
+    }
+    let host = parent::WindowHost::new(waiting.clone(), stop, running);
+    let app = soundscape_core::launch(Box::new(host.clone()), dir, running);
+    let _ = waiting.set(app.clone());
+    if !soundscape_core::starts_hidden(&args, &app.state::<soundscape_core::AppState>().config()) {
+        soundscape_core::show(&app);
+    }
+    let _ = stopped.recv();
+    host.stop_window();
+    if let Some(connection) = instance {
+        let _ = async_runtime::block_on(connection.release_name(soundscape_core::IDENTIFIER));
+    }
+}
+
+fn protocol_out() -> host::Out {
+    use std::os::fd::FromRawFd;
+    let copy = unsafe { libc::dup(1) };
+    let out: Box<dyn std::io::Write + Send> = if copy >= 0 {
+        unsafe { libc::dup2(2, 1) };
+        Box::new(unsafe { std::fs::File::from_raw_fd(copy) })
+    } else {
+        Box::new(std::io::stdout())
+    };
+    std::sync::Arc::new(std::sync::Mutex::new(out))
+}
+
+fn window_main() {
+    let out = protocol_out();
+    let mut input = std::io::BufReader::new(std::io::stdin());
+    let start = loop {
+        match ipc::read::<ToWindow>(&mut input) {
+            None => return,
+            Some(Some(ToWindow::Start(start))) => break start,
+            Some(_) => {}
+        }
+    };
+    let server = start
+        .server
+        .as_deref()
+        .and_then(|text| Url::parse(text).ok());
+    let link = Rc::new(host::Link::new(out.clone(), server));
+    let mut profile = profile::load();
+    let crashed = out.clone();
+    profile.cpu_rendering = software::guard(
+        profile.storage.as_deref(),
+        profile.cpu_rendering,
+        move |on| {
+            host::tell(&crashed, &FromWindow::CpuRendering { on });
+        },
+    );
     let ours = software::prepare(profile.cpu_rendering);
     let settling = profile.storage.clone();
     std::thread::spawn(move || {
@@ -1513,52 +1559,25 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(400));
         }
     });
-    let seen = std::sync::Arc::new(std::sync::Mutex::new(host::Seen::default()));
-    let dir = profile
-        .config
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir().join(soundscape_core::IDENTIFIER));
-    let app = soundscape_core::launch(
-        Box::new(host::ServoHost {
-            proxy: proxy.clone(),
-            seen: seen.clone(),
-            running: soundscape_core::host::Running {
-                cpu_rendering: profile.cpu_rendering,
-                faster_scripts: profile.faster_scripts,
-            },
-        }),
-        dir,
-        soundscape_core::host::Running {
-            cpu_rendering: profile.cpu_rendering,
-            faster_scripts: profile.faster_scripts,
-        },
-    );
-    let hidden =
-        soundscape_core::starts_hidden(&args, &app.state::<soundscape_core::AppState>().config());
-    let _ = waiting.set(app.clone());
-    if hidden && let Ok(mut held) = seen.lock() {
-        held.hidden = true;
-    }
-    let launched = Launched { hidden, app, seen };
-    let mut app = App::Starting(proxy, profile, launched);
+    let listener = proxy.clone();
+    let answers = out.clone();
+    std::thread::spawn(move || {
+        while let Some(message) = ipc::read::<ToWindow>(&mut input) {
+            let Some(call) = message.and_then(|message| host::call_for(message, &answers)) else {
+                continue;
+            };
+            if listener.send_event(Wake::Call(call)).is_err() {
+                return;
+            }
+        }
+        let _ = listener.send_event(Wake::Quit);
+    });
+    let mut app = App::Starting(proxy, profile, Launched { start, link });
     if let Err(error) = event_loop.run_app(&mut app) {
-        eprintln!("Soundscape stopped: {error}");
+        eprintln!("The Soundscape window stopped: {error}");
     }
     drop(app);
     software::settled(storage.as_deref());
-    if let Some(connection) = instance {
-        let _ = async_runtime::block_on(connection.release_name(soundscape_core::IDENTIFIER));
-    }
-    if RESTART.load(std::sync::atomic::Ordering::Relaxed)
-        && let Ok(me) = std::env::current_exe()
-    {
-        let mut again = std::process::Command::new(me);
-        again.args(std::env::args().skip(1));
-        for name in ours {
-            again.env_remove(name);
-        }
-        let _ = again.spawn();
-    }
 }
 
 #[cfg(test)]

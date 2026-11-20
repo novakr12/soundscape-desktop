@@ -3,14 +3,10 @@ use std::path::PathBuf;
 use url::Url;
 
 pub struct Profile {
-    pub server: Option<Url>,
     pub cpu_rendering: bool,
     pub faster_scripts: bool,
-    pub memory_limit: u32,
     pub theme: servo::Theme,
-    pub smooth_scrolling: bool,
     pub storage: Option<PathBuf>,
-    pub config: Option<PathBuf>,
     pub show_fps: bool,
 }
 
@@ -57,6 +53,10 @@ pub fn wants(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some("1" | "true" | "yes"))
 }
 
+pub fn given() -> Option<Url> {
+    server_from(given_server().as_deref(), None)
+}
+
 pub fn given_server() -> Option<String> {
     std::env::args()
         .skip(1)
@@ -71,20 +71,12 @@ pub fn load() -> Profile {
     move_old_storage(data_home.clone(), home());
     let storage = storage_dir(data_home, home());
     Profile {
-        server: server_from(given_server().as_deref(), saved.server.as_deref()),
         cpu_rendering: saved.cpu_rendering,
         faster_scripts: saved.faster_scripts,
-        memory_limit: soundscape_core::allowed_memory_limit(
-            saved
-                .memory_limit
-                .unwrap_or(soundscape_core::MEMORY_LIMIT_MB),
-        ),
         theme: crate::theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref())
             .or_else(crate::theme::current)
             .unwrap_or(servo::Theme::Light),
-        smooth_scrolling: saved.smooth_scrolling,
         storage,
-        config: config_dir,
         show_fps: wants(std::env::var("SOUNDSCAPE_SHOW_FPS").ok().as_deref()),
     }
 }

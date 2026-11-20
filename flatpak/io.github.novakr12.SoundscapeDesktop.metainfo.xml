@@ -98,6 +98,16 @@
   </supports>
 
   <releases>
+    <release version="0.10.4" date="2026-11-20">
+      <description>
+        <p>The app uses far less memory while its window is closed.</p>
+        <ul>
+          <li>The window runs separately and is shut down completely when you close it, so the app left running in the background takes a few dozen megabytes instead of several hundred</li>
+          <li>Music, scrobbling, the tray and notifications keep going while the window is closed, and it opens again where you left off</li>
+          <li>The player bar no longer slides in again every time you start a song</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.3" date="2026-11-20">
       <description>
         <p>Seeking is smooth again.</p>

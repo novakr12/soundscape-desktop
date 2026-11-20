@@ -1,6 +1,6 @@
 [package]
 name = "soundscape-desktop"
-version = "0.10.3"
+version = "0.10.4"
 edition = "2024"
 publish = false
 
@@ -15,6 +15,7 @@ servo-allocator = { version = "=0.8.0", features = ["use-jemalloc"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.3"
+libc = "0.2"
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 soundscape-core = { path = "core" }
 

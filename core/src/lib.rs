@@ -104,6 +104,27 @@ pub fn first_page(app: &AppHandle) -> Option<Url> {
     })
 }
 
+pub fn start_page(app: &AppHandle) -> Url {
+    first_page(app).unwrap_or_else(|| setup::page("", None))
+}
+
+pub fn follow_from_window(app: &AppHandle, target: &Url) {
+    if setup::follow(app, target) {
+        return;
+    }
+    let server = app.state::<AppState>().server();
+    match server::classify(server.as_ref(), target) {
+        server::Navigation::AppSettings => {
+            let _ = open_settings(app);
+        }
+        server::Navigation::External => links::open(app, target),
+        server::Navigation::Connected { .. } => {
+            connected_through(app, target);
+        }
+        server::Navigation::Allow | server::Navigation::Block => {}
+    }
+}
+
 pub fn open_main(app: &AppHandle, start: Url) -> host::Result<()> {
     let host = app.host();
     host.navigate(MAIN, start);

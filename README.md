@@ -36,7 +36,7 @@ Everything is set in Soundscape's Settings page, under **This app**.
 | Alt+← / Alt+→ | Back / forward |
 | Alt+Home | Home |
 
-The window uses your desktop's interface font and remembers its size. Settings are stored in `~/.config/io.github.novakr12.SoundscapeDesktop/`. GNOME needs the AppIndicator extension to show the tray icon.
+The window uses your desktop's interface font and remembers its size. Settings are stored in `~/.config/io.github.novakr12.SoundscapeDesktop/`; your login goes in the desktop keyring when there is one, and in that folder (readable only by you) when there isn't. GNOME needs the AppIndicator extension to show the tray icon.
 
 ## Build from source
 

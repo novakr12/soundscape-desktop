@@ -1087,16 +1087,19 @@ mod tests {
         let full = track("One", None);
         let address = source_for(&relay, &full).unwrap();
         assert_eq!(address.host_str(), Some("127.0.0.1"));
-        assert_eq!(address.path(), "/s/full-song/nd-One");
+        let parts: Vec<&str> = address.path().split('/').collect();
+        assert_eq!(parts.len(), 5);
+        assert_eq!((parts[1], parts[3], parts[4]), ("s", "full-song", "nd-One"));
+        assert_eq!(parts[2].len(), 32);
         let preview = Track {
             song_id: None,
             track_id: "band-a b".into(),
             ..full.clone()
         };
-        assert_eq!(
-            source_for(&relay, &preview).unwrap().path(),
-            "/s/listen/band-a%20b"
-        );
+        assert!(source_for(&relay, &preview)
+            .unwrap()
+            .path()
+            .ends_with("/listen/band-a%20b"));
         assert_eq!(
             cover_for(&server, &full).as_deref(),
             Some("https://music.example/api/navidrome/cover/al-1")

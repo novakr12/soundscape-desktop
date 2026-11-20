@@ -9,6 +9,16 @@ const LONGEST_HEAD: usize = 16 * 1024;
 #[derive(Clone, Debug)]
 pub struct Relay {
     port: u16,
+    secret: String,
+}
+
+fn new_secret() -> Result<String, String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|error| error.to_string())?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -18,15 +28,15 @@ pub struct Asked {
     pub range: Option<String>,
 }
 
-pub fn parse_head(head: &str) -> Option<Asked> {
+pub fn parse_head(head: &str, secret: &str) -> Option<Asked> {
     let mut lines = head.split("\r\n");
     let mut first = lines.next()?.split(' ');
     if first.next()? != "GET" {
         return None;
     }
     let path = first.next()?;
-    let mut parts = path.trim_start_matches('/').splitn(3, '/');
-    if parts.next()? != "s" {
+    let mut parts = path.trim_start_matches('/').splitn(4, '/');
+    if parts.next()? != "s" || parts.next()? != secret {
         return None;
     }
     let kind = parts.next()?;
@@ -112,9 +122,12 @@ fn fail(stream: &mut TcpStream, status: u16) {
     let _ = stream.write_all(response_head(status, "text/plain", None, Some(0)).as_bytes());
 }
 
-fn serve(mut stream: TcpStream, server: Url, token: String) {
+fn serve(mut stream: TcpStream, server: Url, token: String, secret: String) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let Some(asked) = read_head(&mut stream).as_deref().and_then(parse_head) else {
+    let Some(asked) = read_head(&mut stream)
+        .as_deref()
+        .and_then(|head| parse_head(head, &secret))
+    else {
         return fail(&mut stream, 404);
     };
     let Ok(mut target) = server.join("/") else {
@@ -170,6 +183,8 @@ fn serve(mut stream: TcpStream, server: Url, token: String) {
 impl Relay {
     pub fn start(server: Url, token: String) -> Result<Relay, String> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
+        let secret = new_secret()?;
+        let expected = secret.clone();
         let port = listener
             .local_addr()
             .map_err(|error| error.to_string())?
@@ -180,13 +195,14 @@ impl Relay {
                 for stream in listener.incoming().flatten() {
                     let server = server.clone();
                     let token = token.clone();
+                    let secret = expected.clone();
                     let _ = std::thread::Builder::new()
                         .name("soundscape-stream".into())
-                        .spawn(move || serve(stream, server, token));
+                        .spawn(move || serve(stream, server, token, secret));
                 }
             })
             .map_err(|error| error.to_string())?;
-        Ok(Relay { port })
+        Ok(Relay { port, secret })
     }
 
     pub fn address(&self, kind: &str, id: &str) -> Option<Url> {
@@ -195,6 +211,7 @@ impl Relay {
             .ok()?
             .clear()
             .push("s")
+            .push(&self.secret)
             .push(kind)
             .push(id);
         Some(url)
@@ -207,9 +224,10 @@ mod tests {
 
     #[test]
     fn reads_what_the_player_asks_for() {
-        let head = "GET /s/full-song/nd-1 HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=100-\r\n\r\n";
+        let head =
+            "GET /s/k3y/full-song/nd-1 HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=100-\r\n\r\n";
         assert_eq!(
-            parse_head(head),
+            parse_head(head, "k3y"),
             Some(Asked {
                 kind: "full-song".into(),
                 id: "nd-1".into(),
@@ -217,13 +235,33 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_head("GET /s/listen/band-song HTTP/1.1\r\n\r\n").map(|asked| asked.range),
+            parse_head("GET /s/k3y/listen/band-song HTTP/1.1\r\n\r\n", "k3y")
+                .map(|asked| asked.range),
             Some(None)
         );
-        assert_eq!(parse_head("GET /s/admin/x HTTP/1.1\r\n\r\n"), None);
-        assert_eq!(parse_head("POST /s/full-song/x HTTP/1.1\r\n\r\n"), None);
-        assert_eq!(parse_head("GET /s/full-song/a/b HTTP/1.1\r\n\r\n"), None);
-        assert_eq!(parse_head("GET /other HTTP/1.1\r\n\r\n"), None);
+        assert_eq!(
+            parse_head("GET /s/full-song/nd-1 HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/wrong/full-song/nd-1 HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/admin/x HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("POST /s/k3y/full-song/x HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/full-song/a/b HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(parse_head("GET /other HTTP/1.1\r\n\r\n", "k3y"), None);
+        assert_eq!(new_secret().unwrap().len(), 32);
+        assert_ne!(new_secret().unwrap(), new_secret().unwrap());
     }
 
     #[test]

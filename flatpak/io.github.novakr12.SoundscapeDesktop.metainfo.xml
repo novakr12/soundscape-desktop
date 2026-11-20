@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.10.11" date="2026-11-20">
+      <description>
+        <p>Your Soundscape login is better protected.</p>
+        <ul>
+          <li>The app keeps your login in your desktop's keyring when one is available, instead of in its settings file</li>
+          <li>The built-in player's local stream can only be used by the app itself</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.10" date="2026-11-20">
       <description>
         <p>The mini player shows which album is playing.</p>

@@ -5,6 +5,7 @@ pub mod fixes;
 pub mod friends;
 pub mod host;
 pub mod instance;
+pub mod keyring;
 pub mod links;
 pub mod love;
 pub mod media;
@@ -72,7 +73,10 @@ pub fn config_dir() -> Option<PathBuf> {
 pub fn launch(host: Box<dyn Host>, dir: PathBuf, running: Running) -> AppHandle {
     let app = AppHandle::new(host);
     rendering::remember(running);
-    app.manage(AppState::new(dir.clone(), Config::load(&dir)));
+    let (config, in_keyring) = async_runtime::block_on(keyring::settle(&dir, Config::load(&dir)));
+    let state = AppState::new(dir.clone(), config);
+    state.use_keyring(in_keyring);
+    app.manage(state);
     async_runtime::spawn(scrobbler::run(app.clone()));
     async_runtime::spawn(notify::run(app.clone()));
     async_runtime::spawn(friends::run(app.clone()));

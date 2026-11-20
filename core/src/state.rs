@@ -9,6 +9,7 @@ pub struct AppState {
     pub(crate) dir: PathBuf,
     pub(crate) config: Mutex<Config>,
     pub(crate) signed_out: AtomicBool,
+    pub(crate) in_keyring: std::sync::Arc<AtomicBool>,
     pub(crate) status: Mutex<scrobbler::Status>,
     pub(crate) friends: Mutex<Vec<friends::Friend>>,
     pub(crate) playlists: Mutex<Vec<music::Playlist>>,
@@ -28,6 +29,7 @@ impl AppState {
             dir,
             config: Mutex::new(config),
             signed_out: AtomicBool::new(false),
+            in_keyring: std::sync::Arc::new(AtomicBool::new(false)),
             status: Mutex::new(scrobbler::Status::default()),
             friends: Mutex::new(Vec::new()),
             playlists: Mutex::new(Vec::new()),
@@ -46,11 +48,29 @@ impl AppState {
         self.config.lock().expect("config lock").clone()
     }
 
+    pub fn use_keyring(&self, on: bool) {
+        self.in_keyring.store(on, Ordering::Relaxed);
+    }
+
     pub fn update(&self, change: impl FnOnce(&mut Config)) -> Config {
         let mut config = self.config.lock().expect("config lock");
+        let before = config.token.clone();
         change(&mut config);
-        if let Err(error) = config.save(&self.dir) {
-            eprintln!("Couldn't save settings: {error}");
+        let in_keyring = self.in_keyring.load(Ordering::Relaxed);
+        crate::keyring::save(&config, &self.dir, in_keyring);
+        if in_keyring && before != config.token {
+            let token = config.token.clone();
+            let dir = self.dir.clone();
+            let flag = self.in_keyring.clone();
+            crate::host::async_runtime::spawn(async move {
+                if let Err(error) = crate::keyring::write(token.clone()).await {
+                    eprintln!("Keeping the login in the settings file: {error}");
+                    flag.store(false, Ordering::Relaxed);
+                    let mut on_disk = Config::load(&dir);
+                    on_disk.token = token;
+                    crate::keyring::save(&on_disk, &dir, false);
+                }
+            });
         }
         config.clone()
     }

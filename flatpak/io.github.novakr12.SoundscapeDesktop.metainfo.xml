@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.10.8" date="2026-11-20">
+      <description>
+        <p>The mini player looks like the rest of Soundscape.</p>
+        <ul>
+          <li>The mini player uses the same play button, icons, colours and progress bar as the player in the app</li>
+          <li>Seeking in the mini player no longer jumps back before moving to the new spot</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.7" date="2026-11-20">
       <description>
         <p>The mini player uses much less memory.</p>

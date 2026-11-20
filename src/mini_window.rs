@@ -19,24 +19,23 @@ use winit::platform::wayland::EventLoopBuilderExtWayland;
 use winit::window::{CursorIcon, Window, WindowId, WindowLevel};
 
 const WIDTH: f32 = 420.0;
-const HEIGHT: f32 = 178.0;
-const PAD: f32 = 14.0;
-const COVER: f32 = 96.0;
-const GAP: f32 = 4.0;
-const LINE: f32 = 20.0;
-const SMALL_LINE: f32 = 17.0;
-const SEEK_ROW: f32 = 18.0;
-const BUTTON_HEIGHT: f32 = 30.0;
-const BUTTON_WIDTH: f32 = 38.0;
-const MODE_WIDTH: f32 = 32.0;
-const BUTTON_GAP: f32 = 6.0;
+const HEIGHT: f32 = 172.0;
+const PAD: f32 = 16.0;
+const COVER: f32 = 56.0;
+const PLAY_SIZE: f32 = 38.0;
+const BUTTON: f32 = 32.0;
+const SKIP_STEP: f32 = 46.0;
+const MODE_STEP: f32 = 92.0;
+const TIME_WIDTH: f32 = 44.0;
+const SEEK_ARRIVED_MS: u64 = 1500;
+const SEEK_GIVE_UP: Duration = Duration::from_secs(4);
 const TICK: Duration = Duration::from_millis(250);
 
 const SHUFFLE: &str = r#"<path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H20" /><path d="M3 17h3.5c1.3 0 2.3-.4 3.1-1.2M13.4 8.2c.8-.8 1.8-1.2 3.1-1.2H20" /><path d="M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" />"#;
-const PREVIOUS: &str = r#"<path d="M6 5h2v14H6zM20 5v14L9 12z" />"#;
-const PLAY: &str = r#"<path d="M7 4v16l13-8z" />"#;
-const PAUSE: &str = r#"<path d="M6 4h4v16H6zM14 4h4v16h-4z" />"#;
-const NEXT: &str = r#"<path d="M16 5h2v14h-2zM4 5v14l11-7z" />"#;
+const PREVIOUS: &str = r#"<rect x="5" y="5" width="2.5" height="14" rx="1" /><path d="M19 6.2v11.6a1 1 0 0 1-1.55.83L9.2 13.1a1.3 1.3 0 0 1 0-2.2l8.25-5.53A1 1 0 0 1 19 6.2z" />"#;
+const PLAY: &str = r#"<path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" />"#;
+const PAUSE: &str = r#"<rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" />"#;
+const NEXT: &str = r#"<rect x="16.5" y="5" width="2.5" height="14" rx="1" /><path d="M5 6.2v11.6a1 1 0 0 0 1.55.83l8.25-5.53a1.3 1.3 0 0 0 0-2.2L6.55 5.37A1 1 0 0 0 5 6.2z" />"#;
 const REPEAT: &str = r#"<path d="M4 11V9.5A2.5 2.5 0 0 1 6.5 7H19M16.5 4.5 19 7l-2.5 2.5" /><path d="M20 13v1.5a2.5 2.5 0 0 1-2.5 2.5H5M7.5 19.5 5 17l2.5-2.5" />"#;
 const REPEAT_ONE: &str = r#"<path d="M11.3 10.8 12.5 10v4" stroke-width="1.6" />"#;
 const HEART: &str =
@@ -145,6 +144,8 @@ fn run(app: AppHandle, sender: mpsc::Sender<Option<EventLoopProxy<Event>>>) {
         dark,
         pointer: PhysicalPosition::new(0.0, 0.0),
         dragging: None,
+        seek_hold: None,
+        hover: None,
         spots: Vec::new(),
     };
     let _ = event_loop.run_app(&mut player);
@@ -174,6 +175,8 @@ struct Player {
     dark: bool,
     pointer: PhysicalPosition<f64>,
     dragging: Option<u64>,
+    seek_hold: Option<(u64, Instant)>,
+    hover: Option<Spot>,
     spots: Vec<(Spot, Rect, bool)>,
 }
 
@@ -226,9 +229,43 @@ impl Player {
     }
 
     fn take_view(&mut self, view: MiniView) {
+        let mut view = view;
         let art = view.art.clone();
+        if view.title != self.view.title || view.kind != self.view.kind {
+            self.seek_hold = None;
+        }
+        let mut since = Instant::now();
+        if let Some((target, asked)) = self.seek_hold {
+            let waited = asked.elapsed();
+            let expected = target
+                + if view.playing {
+                    waited.as_millis() as u64
+                } else {
+                    0
+                };
+            let arrived = view
+                .position_ms
+                .is_some_and(|at| at.abs_diff(expected) < SEEK_ARRIVED_MS);
+            if arrived || waited >= SEEK_GIVE_UP {
+                self.seek_hold = None;
+            } else {
+                view.position_ms = Some(target);
+                since = asked;
+            }
+        }
+        let same_song = view.title == self.view.title && view.kind == self.view.kind;
+        if self.seek_hold.is_none() && same_song && view.playing && self.view.playing {
+            let shown = self.position();
+            if let Some(at) = view.position_ms
+                && at < shown
+                && shown - at < SEEK_ARRIVED_MS
+            {
+                view.position_ms = Some(shown);
+                since = Instant::now();
+            }
+        }
         self.view = view;
-        self.received = Instant::now();
+        self.received = since;
         self.problem = None;
         match art {
             Some(art) if self.cover.as_ref().map(|(known, _)| known) != Some(&art) => {
@@ -296,7 +333,9 @@ impl Player {
     }
 
     fn seek_point(&self, rect: Rect) -> u64 {
-        let share = ((self.pointer.x as f32 - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        let inset = 7.0 * self.scale();
+        let share = ((self.pointer.x as f32 - rect.left() - inset) / (rect.width() - 2.0 * inset))
+            .clamp(0.0, 1.0);
         (share as f64 * self.length() as f64) as u64
     }
 
@@ -372,6 +411,11 @@ impl ApplicationHandler<Event> for Player {
     fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => self.close(),
+            WindowEvent::CursorLeft { .. } => {
+                if self.hover.take().is_some() {
+                    self.redraw();
+                }
+            }
             WindowEvent::RedrawRequested => self.paint(),
             WindowEvent::ScaleFactorChanged { .. } => {
                 self.cover = None;
@@ -388,7 +432,12 @@ impl ApplicationHandler<Event> for Player {
                     self.dragging = Some(self.seek_point(*rect));
                     self.redraw();
                 }
-                let pointing = self.dragging.is_some() || self.spot_at(position).is_some();
+                let over = self.spot_at(position).map(|(spot, _)| spot);
+                if over != self.hover {
+                    self.hover = over;
+                    self.redraw();
+                }
+                let pointing = self.dragging.is_some() || over.is_some();
                 if let Some(shown) = &self.shown {
                     shown.window.set_cursor(if pointing {
                         CursorIcon::Pointer
@@ -417,6 +466,7 @@ impl ApplicationHandler<Event> for Player {
                     if let Some(at) = self.dragging.take() {
                         self.view.position_ms = Some(at);
                         self.received = Instant::now();
+                        self.seek_hold = Some((at, self.received));
                         self.ask("seek", Some(at as f64 / 1000.0));
                         self.redraw();
                     }
@@ -463,8 +513,6 @@ struct Colors {
     muted: Color,
     accent: Color,
     error: Color,
-    field: Color,
-    border: Color,
 }
 
 fn colors(dark: bool) -> Colors {
@@ -472,23 +520,19 @@ fn colors(dark: bool) -> Colors {
         |value: u32| Color::from_rgba8((value >> 16) as u8, (value >> 8) as u8, value as u8, 255);
     if dark {
         Colors {
-            background: rgb(0x0a0e14),
+            background: rgb(0x111111),
             text: rgb(0xeeeeee),
-            muted: rgb(0x9aa3ae),
-            accent: rgb(0x1db151),
-            error: rgb(0xff8a80),
-            field: rgb(0x151b23),
-            border: rgb(0x2c333d),
+            muted: rgb(0x999999),
+            accent: rgb(0x1db954),
+            error: rgb(0xff7b6b),
         }
     } else {
         Colors {
             background: rgb(0xffffff),
             text: rgb(0x111111),
             muted: rgb(0x666666),
-            accent: rgb(0x18a34a),
-            error: rgb(0xc62828),
-            field: rgb(0xf4f4f2),
-            border: rgb(0xd6d5ce),
+            accent: rgb(0x1db954),
+            error: rgb(0xc0392b),
         }
     }
 }
@@ -763,21 +807,69 @@ fn baseline(fonts: &[Face], size: f32, top: f32, line: f32) -> f32 {
     top + (line - height) / 2.0 + scaled.ascent()
 }
 
+fn circle(canvas: &mut Pixmap, center: (f32, f32), radius: f32, color: Color) {
+    if let Some(rect) = Rect::from_xywh(
+        center.0 - radius,
+        center.1 - radius,
+        radius * 2.0,
+        radius * 2.0,
+    ) {
+        fill(canvas, rect, radius, color);
+    }
+}
+
+fn centered(
+    canvas: &mut Pixmap,
+    fonts: &[Face],
+    words: &str,
+    size: f32,
+    center: (f32, f32),
+    color: Color,
+) {
+    let width = lay_out(fonts, words, size).1;
+    let line = baseline(fonts, size, center.1 - size, size * 2.0);
+    text(
+        canvas,
+        fonts,
+        words,
+        size,
+        (center.0 - width / 2.0, line),
+        color,
+    );
+}
+
 fn draw(canvas: &mut Pixmap, player: &Player, scale: f32) -> Vec<(Spot, Rect, bool)> {
     let palette = colors(player.dark);
     canvas.fill(palette.background);
     let mut spots = Vec::new();
     let k = |value: f32| value * scale;
-    let height = canvas.height() as f32 / scale;
-    let cover_top = (height - COVER) / 2.0;
-    if let Some(rect) = Rect::from_xywh(k(PAD), k(cover_top), k(COVER), k(COVER)) {
+    let view = &player.view;
+    let active = player.active();
+    let hovered = |spot: Spot| player.hover == Some(spot);
+    let mut button =
+        |canvas: &mut Pixmap, spot: Spot, center: (f32, f32), size: f32, enabled: bool| {
+            let rect = Rect::from_xywh(
+                k(center.0 - size / 2.0),
+                k(center.1 - size / 2.0),
+                k(size),
+                k(size),
+            );
+            if let Some(rect) = rect {
+                if enabled && hovered(spot) {
+                    fill(canvas, rect, k(size / 2.0), faded(palette.muted, 0.15));
+                }
+                spots.push((spot, rect, enabled));
+            }
+        };
+
+    if let Some(rect) = Rect::from_xywh(k(PAD), k(PAD), k(COVER), k(COVER)) {
         match player
             .cover
             .as_ref()
             .and_then(|(_, picture)| picture.as_ref())
         {
             Some(picture) => {
-                if let Some(path) = rounded(rect, k(8.0)) {
+                if let Some(path) = rounded(rect, k(4.0)) {
                     let paint = Paint {
                         anti_alias: true,
                         shader: Pattern::new(
@@ -802,25 +894,41 @@ fn draw(canvas: &mut Pixmap, player: &Player, scale: f32) -> Vec<(Spot, Rect, bo
                     );
                 }
             }
-            None => fill(canvas, rect, k(8.0), palette.field),
+            None => fill(canvas, rect, k(4.0), faded(palette.muted, 0.15)),
         }
     }
+
+    let love_center = (WIDTH - PAD - BUTTON / 2.0, PAD + COVER / 2.0);
+    let shown_love = active && (view.can_love || view.loved);
+    if shown_love {
+        button(
+            canvas,
+            Spot::Button("love"),
+            love_center,
+            BUTTON,
+            view.can_love,
+        );
+        let tint = if view.loved {
+            palette.accent
+        } else {
+            palette.muted
+        };
+        icon(
+            canvas,
+            HEART,
+            view.loved,
+            tint,
+            (k(love_center.0), k(love_center.1)),
+            k(18.0),
+        );
+    }
+
     let Some(fonts) = player.fonts.as_ref() else {
         return spots;
     };
-    let view = &player.view;
-    let active = player.active();
-    let left = PAD + COVER + PAD;
-    let room = WIDTH - left - PAD;
-    let up_next = view.up_next.as_ref().filter(|_| active);
-    let mut total = LINE + GAP + LINE + GAP + SEEK_ROW + GAP + BUTTON_HEIGHT;
-    if up_next.is_some() {
-        total += GAP + SMALL_LINE;
-    }
-    if player.problem.is_some() {
-        total += GAP + SMALL_LINE;
-    }
-    let mut top = ((height - total) / 2.0).max(0.0);
+    let left = PAD + COVER + 12.0;
+    let room = WIDTH - left - PAD - if shown_love { BUTTON + 8.0 } else { 0.0 };
+    let top = PAD + (COVER - 40.0) / 2.0;
     let title = if active {
         view.title.as_str()
     } else {
@@ -832,185 +940,170 @@ fn draw(canvas: &mut Pixmap, player: &Player, scale: f32) -> Vec<(Spot, Rect, bo
         &fonts.bold,
         &title,
         k(14.0),
-        (k(left), k(baseline(&fonts.bold, 14.0, top, LINE))),
+        (k(left), k(baseline(&fonts.bold, 14.0, top, 20.0))),
         palette.text,
     );
-    top += LINE + GAP;
-    let artist = if active {
-        format!("{} · {}", view.artist, view.source)
-    } else {
-        "Start a song in any player.".into()
+    let (second, tint) = match &player.problem {
+        Some(problem) => (problem.clone(), palette.error),
+        None if active => (format!("{} · {}", view.artist, view.source), palette.muted),
+        None => ("Start a song in any player.".into(), palette.muted),
     };
-    let artist = fitted(&fonts.regular, &artist, k(14.0), k(room));
+    let second = fitted(&fonts.regular, &second, k(13.0), k(room));
     text(
         canvas,
         &fonts.regular,
-        &artist,
-        k(14.0),
-        (k(left), k(baseline(&fonts.regular, 14.0, top, LINE))),
-        palette.muted,
+        &second,
+        k(13.0),
+        (k(left), k(baseline(&fonts.regular, 13.0, top + 20.0, 20.0))),
+        tint,
     );
-    top += LINE + GAP;
 
+    let middle = WIDTH / 2.0;
+    let row = PAD + COVER + 14.0 + PLAY_SIZE / 2.0;
+    if let Some(on) = view.shuffle {
+        let center = (middle - MODE_STEP, row);
+        button(canvas, Spot::Button("shuffle"), center, BUTTON, true);
+        let tint = if on { palette.accent } else { palette.muted };
+        icon(
+            canvas,
+            SHUFFLE,
+            false,
+            tint,
+            (k(center.0), k(center.1)),
+            k(18.0),
+        );
+        if on {
+            circle(
+                canvas,
+                (k(center.0), k(center.1 + 13.0)),
+                k(2.0),
+                palette.accent,
+            );
+        }
+    }
+    let previous = (middle - SKIP_STEP, row);
+    button(
+        canvas,
+        Spot::Button("previous"),
+        previous,
+        BUTTON,
+        view.can_skip,
+    );
+    icon(
+        canvas,
+        PREVIOUS,
+        true,
+        faded(palette.text, if view.can_skip { 1.0 } else { 0.4 }),
+        (k(previous.0), k(previous.1)),
+        k(20.0),
+    );
+    let toggle = (middle, row);
+    button(canvas, Spot::Button("toggle"), toggle, PLAY_SIZE, active);
+    let grow = if active && hovered(Spot::Button("toggle")) {
+        1.06
+    } else {
+        1.0
+    };
+    circle(
+        canvas,
+        (k(toggle.0), k(toggle.1)),
+        k(PLAY_SIZE / 2.0 * grow),
+        faded(palette.text, if active { 1.0 } else { 0.4 }),
+    );
+    icon(
+        canvas,
+        if view.playing { PAUSE } else { PLAY },
+        true,
+        palette.background,
+        (k(toggle.0), k(toggle.1)),
+        k(20.0),
+    );
+    let next = (middle + SKIP_STEP, row);
+    button(canvas, Spot::Button("next"), next, BUTTON, view.can_next);
+    icon(
+        canvas,
+        NEXT,
+        true,
+        faded(palette.text, if view.can_next { 1.0 } else { 0.4 }),
+        (k(next.0), k(next.1)),
+        k(20.0),
+    );
+    if let Some(mode) = view.repeat.as_deref() {
+        let center = (middle + MODE_STEP, row);
+        button(canvas, Spot::Button("repeat"), center, BUTTON, true);
+        let on = mode != "off";
+        let tint = if on { palette.accent } else { palette.muted };
+        let shapes = if mode == "one" {
+            format!("{REPEAT}{REPEAT_ONE}")
+        } else {
+            REPEAT.into()
+        };
+        icon(
+            canvas,
+            &shapes,
+            false,
+            tint,
+            (k(center.0), k(center.1)),
+            k(18.0),
+        );
+        if on {
+            circle(
+                canvas,
+                (k(center.0), k(center.1 + 13.0)),
+                k(2.0),
+                palette.accent,
+            );
+        }
+    }
+
+    let seek_row = row + PLAY_SIZE / 2.0 + 12.0 + 10.0;
     let length = player.length();
     let at = player.position();
-    let line = baseline(&fonts.regular, 12.0, top, SEEK_ROW);
-    let now = clock(at);
-    let total_time = clock(length);
-    let now_width = lay_out(&fonts.regular, &now, 12.0).1;
-    let total_width = lay_out(&fonts.regular, &total_time, 12.0).1;
-    text(
+    centered(
         canvas,
         &fonts.regular,
-        &now,
+        &clock(at),
         k(12.0),
-        (k(left), k(line)),
+        (k(PAD + TIME_WIDTH / 2.0), k(seek_row)),
         palette.muted,
     );
-    text(
+    centered(
         canvas,
         &fonts.regular,
-        &total_time,
+        &clock(length),
         k(12.0),
-        (k(left + room - total_width), k(line)),
+        (k(WIDTH - PAD - TIME_WIDTH / 2.0), k(seek_row)),
         palette.muted,
     );
-    let bar_left = left + now_width + 6.0;
-    let bar_width = (room - now_width - total_width - 12.0).max(10.0);
+    let bar_left = PAD + TIME_WIDTH + 4.0;
+    let bar_width = WIDTH - 2.0 * (PAD + TIME_WIDTH + 4.0);
     let seekable = player.seekable();
-    let dim = if seekable { 1.0 } else { 0.6 };
-    if let Some(rect) = Rect::from_xywh(k(bar_left), k(top + 7.0), k(bar_width), k(4.0)) {
-        fill(canvas, rect, k(2.0), faded(palette.border, dim));
-    }
     let share = if length > 0 {
         (at as f32 / length as f32).clamp(0.0, 1.0)
     } else {
         0.0
     };
+    if let Some(rect) = Rect::from_xywh(k(bar_left), k(seek_row - 2.0), k(bar_width), k(4.0)) {
+        fill(canvas, rect, k(2.0), faded(palette.muted, 0.35));
+    }
     if share > 0.0
-        && let Some(rect) = Rect::from_xywh(k(bar_left), k(top + 7.0), k(bar_width * share), k(4.0))
+        && let Some(rect) =
+            Rect::from_xywh(k(bar_left), k(seek_row - 2.0), k(bar_width * share), k(4.0))
     {
-        fill(canvas, rect, k(2.0), faded(palette.accent, dim));
+        fill(canvas, rect, k(2.0), palette.accent);
     }
-    if let Some(rect) = Rect::from_xywh(k(bar_left), k(top + 2.0), k(bar_width), k(14.0)) {
+    if seekable {
+        let knob = (k(bar_left + bar_width * share), k(seek_row));
+        circle(canvas, knob, k(7.0), palette.background);
+        circle(canvas, knob, k(5.0), palette.accent);
+    }
+    if let Some(rect) = Rect::from_xywh(
+        k(bar_left - 7.0),
+        k(seek_row - 10.0),
+        k(bar_width + 14.0),
+        k(20.0),
+    ) {
         spots.push((Spot::Seek, rect, seekable));
-    }
-    top += SEEK_ROW + GAP;
-
-    let repeat = view.repeat.as_deref().unwrap_or("off");
-    let mut buttons: Vec<(&'static str, f32, String, bool, bool, bool)> = Vec::new();
-    if let Some(on) = view.shuffle {
-        buttons.push(("shuffle", MODE_WIDTH, SHUFFLE.into(), false, true, on));
-    }
-    buttons.push((
-        "previous",
-        BUTTON_WIDTH,
-        PREVIOUS.into(),
-        true,
-        view.can_skip,
-        false,
-    ));
-    buttons.push((
-        "toggle",
-        BUTTON_WIDTH,
-        if view.playing { PAUSE } else { PLAY }.into(),
-        true,
-        active,
-        false,
-    ));
-    buttons.push((
-        "next",
-        BUTTON_WIDTH,
-        NEXT.into(),
-        true,
-        view.can_next,
-        false,
-    ));
-    if view.repeat.is_some() {
-        let shapes = if repeat == "one" {
-            format!("{REPEAT}{REPEAT_ONE}")
-        } else {
-            REPEAT.into()
-        };
-        buttons.push(("repeat", MODE_WIDTH, shapes, false, true, repeat != "off"));
-    }
-    buttons.push((
-        "love",
-        BUTTON_WIDTH,
-        HEART.into(),
-        view.loved,
-        view.can_love,
-        view.loved,
-    ));
-    let mut x = left;
-    for (action, width, shapes, solid, enabled, pressed) in buttons {
-        let opacity = if enabled { 1.0 } else { 0.45 };
-        let Some(rect) = Rect::from_xywh(k(x), k(top), k(width), k(BUTTON_HEIGHT)) else {
-            continue;
-        };
-        let border = if pressed {
-            palette.accent
-        } else {
-            palette.border
-        };
-        fill(canvas, rect, k(8.0), faded(border, opacity));
-        if let Some(inner) = Rect::from_xywh(
-            rect.left() + k(1.0),
-            rect.top() + k(1.0),
-            rect.width() - k(2.0),
-            rect.height() - k(2.0),
-        ) {
-            fill(canvas, inner, k(7.0), faded(palette.field, opacity));
-        }
-        let mode = matches!(action, "shuffle" | "repeat");
-        let tint = if pressed {
-            palette.accent
-        } else if mode {
-            palette.muted
-        } else {
-            palette.text
-        };
-        icon(
-            canvas,
-            &shapes,
-            solid,
-            faded(tint, opacity),
-            (k(x + width / 2.0), k(top + BUTTON_HEIGHT / 2.0)),
-            k(16.0),
-        );
-        spots.push((Spot::Button(action), rect, enabled));
-        x += width + BUTTON_GAP;
-    }
-    top += BUTTON_HEIGHT;
-    if let Some(next) = up_next {
-        top += GAP;
-        let words = fitted(
-            &fonts.regular,
-            &format!("Up next: {next}"),
-            k(12.0),
-            k(room),
-        );
-        text(
-            canvas,
-            &fonts.regular,
-            &words,
-            k(12.0),
-            (k(left), k(baseline(&fonts.regular, 12.0, top, SMALL_LINE))),
-            palette.muted,
-        );
-        top += SMALL_LINE;
-    }
-    if let Some(problem) = &player.problem {
-        top += GAP;
-        let words = fitted(&fonts.regular, problem, k(12.0), k(room));
-        text(
-            canvas,
-            &fonts.regular,
-            &words,
-            k(12.0),
-            (k(left), k(baseline(&fonts.regular, 12.0, top, SMALL_LINE))),
-            palette.error,
-        );
     }
     spots
 }

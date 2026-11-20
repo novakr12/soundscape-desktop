@@ -105,6 +105,7 @@
           <li>The window runs separately and is shut down completely when you close it, so the app left running in the background takes a few dozen megabytes instead of several hundred</li>
           <li>Music, scrobbling, the tray and notifications keep going while the window is closed, and it opens again where you left off</li>
           <li>The player bar no longer slides in again every time you start a song</li>
+          <li>Seeking while a song is still loading no longer flashes 0:00 first</li>
         </ul>
       </description>
     </release>

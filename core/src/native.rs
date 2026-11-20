@@ -60,6 +60,27 @@ pub struct Handover {
     pub crossfade: f64,
 }
 
+const SEEK_ARRIVED: f64 = 1.0;
+const SEEK_GIVE_UP: f64 = 4.0;
+const NOT_STARTED: f64 = 0.05;
+
+pub fn shown_position(target: Option<(f64, f64)>, actual: Option<f64>) -> (Option<f64>, bool) {
+    let loading = matches!(target, Some((wanted, _)) if wanted >= SEEK_ARRIVED)
+        && actual.is_some_and(|now| now < NOT_STARTED);
+    let actual = if loading { None } else { actual };
+    match (target, actual) {
+        (Some((wanted, waited)), Some(now)) => {
+            if (now - wanted).abs() < SEEK_ARRIVED || waited >= SEEK_GIVE_UP {
+                (Some(now), false)
+            } else {
+                (Some(wanted), true)
+            }
+        }
+        (Some((wanted, _)), None) => (Some(wanted), true),
+        (None, actual) => (actual, false),
+    }
+}
+
 pub fn crossfade_due(crossfade: f64, length: f64, position: f64) -> bool {
     crossfade > 0.0 && length >= crossfade * 3.0 && length - position <= crossfade
 }
@@ -338,6 +359,8 @@ fn make_playbin(
 
 struct Engine {
     playbin: gst::Element,
+    seek_target: std::cell::Cell<Option<(f64, Instant)>>,
+    last_shown: std::cell::Cell<f64>,
     active: Arc<AtomicBool>,
     outgoing: Option<Outgoing>,
     crossfade: f64,
@@ -500,6 +523,8 @@ impl Engine {
     }
 
     fn load(&mut self, at: usize, time: f64) {
+        self.seek_target.set(None);
+        self.last_shown.set(time.max(0.0));
         let Some(uri) = ({
             let mut queue = self.queue.lock().expect("queue lock");
             queue.at = at;
@@ -528,11 +553,23 @@ impl Engine {
         if self.released {
             return self.resume_time;
         }
-        self.playbin
+        let actual = self
+            .playbin
             .query_position::<gst::ClockTime>()
-            .map_or(self.seek_when_ready.unwrap_or(0.0), |time| {
-                time.nseconds() as f64 / 1e9
-            })
+            .map(|time| time.nseconds() as f64 / 1e9);
+        let target = self
+            .seek_target
+            .get()
+            .map(|(wanted, asked)| (wanted, asked.elapsed().as_secs_f64()));
+        let (shown, keep) = shown_position(target, actual);
+        if !keep {
+            self.seek_target.set(None);
+        }
+        let shown = shown
+            .or(self.seek_when_ready)
+            .unwrap_or(self.last_shown.get());
+        self.last_shown.set(shown);
+        shown
     }
 
     fn known_length(&self) -> Option<f64> {
@@ -564,7 +601,9 @@ impl Engine {
         {
             self.seek_when_ready = Some(seconds);
         }
+        self.seek_target.set(Some((seconds, Instant::now())));
         self.last = None;
+        self.previous_position = None;
     }
 
     fn set_playing(&mut self, playing: bool) {
@@ -701,6 +740,8 @@ impl Engine {
                         }
                     };
                     if moved {
+                        self.seek_target.set(None);
+                        self.last_shown.set(0.0);
                         self.started();
                     }
                     self.failures = 0;
@@ -900,6 +941,8 @@ pub fn start(
         levelling: handover.levelling,
         want_playing: handover.playing,
         seek_when_ready: None,
+        seek_target: std::cell::Cell::new(None),
+        last_shown: std::cell::Cell::new(handover.time.max(0.0)),
         released: false,
         resume_time: 0.0,
         paused_since: (!handover.playing).then(Instant::now),
@@ -1081,5 +1124,38 @@ mod tests {
         assert!(!crossfade_due(0.0, 200.0, 199.0));
         assert!(!crossfade_due(6.0, 15.0, 14.0));
         assert!(crossfade_due(2.0, 6.0, 4.5));
+    }
+
+    #[test]
+    fn shows_where_a_seek_is_going_until_it_gets_there() {
+        assert_eq!(
+            shown_position(Some((120.0, 0.1)), Some(30.0)),
+            (Some(120.0), true)
+        );
+        assert_eq!(
+            shown_position(Some((120.0, 0.3)), Some(120.4)),
+            (Some(120.4), false)
+        );
+        assert_eq!(
+            shown_position(Some((120.0, 5.0)), Some(30.0)),
+            (Some(30.0), false)
+        );
+        assert_eq!(
+            shown_position(Some((120.0, 0.2)), None),
+            (Some(120.0), true)
+        );
+        assert_eq!(
+            shown_position(Some((120.0, 9.0)), None),
+            (Some(120.0), true)
+        );
+        assert_eq!(
+            shown_position(Some((120.0, 9.0)), Some(0.0)),
+            (Some(120.0), true)
+        );
+        assert_eq!(
+            shown_position(Some((0.4, 0.2)), Some(0.0)),
+            (Some(0.0), false)
+        );
+        assert_eq!(shown_position(None, Some(42.0)), (Some(42.0), false));
     }
 }

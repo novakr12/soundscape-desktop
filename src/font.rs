@@ -39,16 +39,62 @@ pub fn from_kdeglobals(text: &str) -> Option<String> {
     None
 }
 
-pub fn stylesheet(family: &str) -> String {
-    let quoted: String = family
+fn quoted(family: &str) -> String {
+    family
         .chars()
         .filter(|letter| !letter.is_control())
         .flat_map(|letter| match letter {
             '"' | '\\' => vec!['\\', letter],
             _ => vec![letter],
         })
-        .collect();
-    format!("body {{ font-family: \"{quoted}\", system-ui, sans-serif !important; }}")
+        .collect()
+}
+
+fn rule_json(family: Option<&str>) -> serde_json::Value {
+    family.map_or(serde_json::Value::Null, |family| {
+        serde_json::Value::from(stylesheet(family))
+    })
+}
+
+pub fn page_script(family: Option<&str>) -> String {
+    format!(
+        r#"(() => {{
+  const id = "soundscape-desktop-font";
+  window.soundscapeDesktopFont = (css) => {{
+    const place = () => {{
+      let style = document.getElementById(id);
+      if (!css) {{
+        if (style) style.remove();
+        return;
+      }}
+      if (!style) {{
+        style = document.createElement("style");
+        style.id = id;
+        (document.head || document.documentElement).appendChild(style);
+      }}
+      style.textContent = css;
+    }};
+    if (document.documentElement) place();
+    else document.addEventListener("DOMContentLoaded", place, {{ once: true }});
+  }};
+  window.soundscapeDesktopFont({});
+}})();"#,
+        rule_json(family)
+    )
+}
+
+pub fn restyle_script(family: Option<&str>) -> String {
+    format!(
+        "window.soundscapeDesktopFont && window.soundscapeDesktopFont({})",
+        rule_json(family)
+    )
+}
+
+pub fn stylesheet(family: &str) -> String {
+    format!(
+        "body {{ font-family: \"{}\", system-ui, sans-serif !important; }}",
+        quoted(family)
+    )
 }
 
 fn text(value: &Value) -> Option<String> {
@@ -84,6 +130,32 @@ fn from_kde_file() -> Option<String> {
     from_kdeglobals(&std::fs::read_to_string(config.join("kdeglobals")).ok()?)
 }
 
+pub fn watch(send: impl Fn(Option<String>) + Send + 'static) {
+    std::thread::spawn(move || {
+        let Ok(connection) = Connection::session() else {
+            return;
+        };
+        let Ok(proxy) = Proxy::new(&connection, DESTINATION, PATH, INTERFACE) else {
+            return;
+        };
+        let Ok(changes) = proxy.receive_signal("SettingChanged") else {
+            return;
+        };
+        for change in changes {
+            let Ok((namespace, key, _)) =
+                change.body().deserialize::<(String, String, OwnedValue)>()
+            else {
+                continue;
+            };
+            if (namespace.as_str(), key.as_str()) == GNOME
+                || (namespace.as_str(), key.as_str()) == KDE
+            {
+                send(desktop());
+            }
+        }
+    });
+}
+
 pub fn desktop() -> Option<String> {
     std::env::var("SOUNDSCAPE_FONT")
         .ok()
@@ -114,6 +186,17 @@ mod tests {
         let globals = "[Colors:View]\nfont=Wrong,9\n\n[General]\nColorScheme=Breeze\nfont=Inter Variable,10,-1,5,400,0,0,0,0,0\n";
         assert_eq!(from_kdeglobals(globals), Some("Inter Variable".into()));
         assert_eq!(from_kdeglobals("[General]\nColorScheme=Breeze\n"), None);
+    }
+
+    #[test]
+    fn restyles_the_open_page() {
+        assert_eq!(
+            restyle_script(Some("Adwaita Sans")),
+            r#"window.soundscapeDesktopFont && window.soundscapeDesktopFont("body { font-family: \"Adwaita Sans\", system-ui, sans-serif !important; }")"#
+        );
+        assert!(restyle_script(None).ends_with("(null)"));
+        assert!(page_script(Some("Inter")).contains("soundscape-desktop-font"));
+        assert!(page_script(None).ends_with("window.soundscapeDesktopFont(null);\n})();"));
     }
 
     #[test]

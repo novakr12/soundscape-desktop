@@ -61,6 +61,12 @@ pub struct Config {
     pub discord_app_id: Option<String>,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub native_player: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_size: Option<(u32, u32)>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub maximized: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub cpu_rendering: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
@@ -123,6 +129,9 @@ impl Default for Config {
             discord: false,
             discord_app_id: None,
             native_player: true,
+            device_id: None,
+            window_size: None,
+            maximized: false,
             cpu_rendering: false,
             smooth_scrolling: true,
             memory_limit: None,

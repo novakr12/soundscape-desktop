@@ -238,7 +238,7 @@ struct Player {
 
 impl Player {
     fn run(&self, action: &str, seconds: f64) {
-        if crate::handover::control(&self.app, action, seconds) {
+        if crate::native_link::control(&self.app, action, seconds) {
             self.shared.wake.notify_one();
             return;
         }
@@ -350,7 +350,7 @@ pub async fn evaluate(app: &AppHandle, script: impl Into<String>) -> Option<Stri
 }
 
 async fn read(app: &AppHandle) -> Option<Preview> {
-    if let Some(preview) = crate::handover::preview(app) {
+    if let Some(preview) = crate::native_link::preview(app) {
         return Some(preview);
     }
     parse(&evaluate(app, READ).await?)
@@ -410,7 +410,7 @@ pub fn control(app: &AppHandle, action: &str) {
 }
 
 pub fn control_at(app: &AppHandle, action: &str, seconds: f64) {
-    if crate::handover::control(app, action, seconds) {
+    if crate::native_link::control(app, action, seconds) {
         return;
     }
     if let (Some(window), Some(js)) = (app.get_webview_window(MAIN), script(action, seconds)) {

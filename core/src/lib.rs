@@ -3,7 +3,6 @@ pub mod config;
 pub mod discord;
 pub mod fixes;
 pub mod friends;
-pub mod handover;
 pub mod host;
 pub mod instance;
 pub mod links;
@@ -13,6 +12,7 @@ pub mod mini;
 pub mod mpris;
 pub mod music;
 pub mod native;
+pub mod native_link;
 pub mod notify;
 pub mod page;
 pub mod queue;
@@ -87,6 +87,7 @@ pub fn launch(host: Box<dyn Host>, dir: PathBuf, running: Running) -> AppHandle 
     async_runtime::spawn(media::run(app.clone()));
     async_runtime::spawn(search::run(app.clone()));
     async_runtime::spawn(mini::run(app.clone()));
+    async_runtime::spawn(native_link::run(app.clone()));
     tray::create(&app);
     app
 }
@@ -103,14 +104,10 @@ pub fn first_page(app: &AppHandle) -> Option<Url> {
 }
 
 pub fn open_main(app: &AppHandle, start: Url) -> host::Result<()> {
-    let back = handover::bring_back(app);
     let host = app.host();
     host.navigate(MAIN, start);
     host.show(MAIN);
     host.focus(MAIN);
-    if back {
-        async_runtime::spawn(handover::take_back(app.clone()));
-    }
     tray::refresh(app);
     Ok(())
 }
@@ -131,13 +128,9 @@ pub fn open_setup(app: &AppHandle) -> host::Result<()> {
 }
 
 pub fn show(app: &AppHandle) {
-    let back = !app.host().is_visible(MAIN) && handover::bring_back(app);
     let host = app.host();
     host.show(MAIN);
     host.focus(MAIN);
-    if back {
-        async_runtime::spawn(handover::take_back(app.clone()));
-    }
 }
 
 pub fn toggle_pause(app: &AppHandle) {
@@ -193,9 +186,6 @@ pub fn window_closed(app: &AppHandle) -> bool {
     let config = state.config();
     if !stays_running(&config) {
         return false;
-    }
-    if state.preview().is_some_and(|preview| preview.playing) && handover::wanted(app) {
-        async_runtime::spawn(handover::hand_over(app.clone()));
     }
     if !config.told_about_background {
         state.update(|config| config.told_about_background = true);

@@ -103,7 +103,10 @@
         <p>The app now draws its window with the Servo browser engine instead of WebKitGTK.</p>
         <ul>
           <li>Closing the window frees its graphics memory, and on Wayland the window really closes instead of staying around</li>
-          <li>While the app's own player carries on the music, the page is set aside completely and comes back where the music is when you open the window</li>
+          <li>Music plays in the app's own player, so closing or opening the window never interrupts it</li>
+          <li>Starting at login only loads the window once you open it</li>
+          <li>The window opens at the size you left it and uses your desktop's interface font</li>
+          <li>Touchpad scrolling follows your fingers directly and coasts to a stop</li>
           <li>Clicking a notification opens what it is about, like the new follower's profile or your Yearscape</li>
           <li>Clicking Soundscape in your desktop's media controls opens the window</li>
           <li>Title fixes, changing the server and signing out are now in Soundscape's Settings page, under This app</li>

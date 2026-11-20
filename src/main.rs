@@ -28,7 +28,9 @@ use std::rc::{Rc, Weak};
 use url::Url;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, Ime, MouseButton as WinitButton, MouseScrollDelta, WindowEvent};
+use winit::event::{
+    ElementState, Ime, MouseButton as WinitButton, MouseScrollDelta, TouchPhase, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamed};
 use winit::platform::wayland::WindowAttributesExtWayland;
@@ -54,6 +56,7 @@ pub enum Wake {
     Park(bool),
     Quit,
     Theme(Theme),
+    Font(Option<String>),
     Answer(u64, Answer),
     Call(host::Call),
 }
@@ -124,13 +127,10 @@ impl WebViewDelegate for MiniPage {
     }
 }
 
-fn add_font(scripts: &UserContentManager, css: &str) {
-    if let Ok(place) = Url::parse("soundscape://desktop-font.css") {
-        scripts.add_stylesheet(Rc::new(servo::user_contents::UserStyleSheet::new(
-            css.into(),
-            place,
-        )));
-    }
+fn add_font(scripts: &UserContentManager, family: Option<&str>) -> Rc<UserScript> {
+    let script = Rc::new(UserScript::new(font::page_script(family), None));
+    scripts.add_script(script.clone());
+    script
 }
 
 fn mini_page() -> Url {
@@ -145,10 +145,11 @@ struct Shell {
     window: RefCell<Option<Rc<Window>>>,
     mini: RefCell<Option<Rc<Mini>>>,
     scripts: Rc<UserContentManager>,
-    handback: RefCell<Option<Rc<UserScript>>>,
     theme: Cell<Theme>,
-    desktop_font: Option<String>,
+    desktop_font: RefCell<Option<String>>,
+    font_script: RefCell<Rc<UserScript>>,
     size: Cell<PhysicalSize<u32>>,
+    maximized: Cell<bool>,
     servo: Servo,
     context: Rc<WindowRenderingContext>,
     webview: RefCell<Option<WebView>>,
@@ -168,6 +169,7 @@ struct Shell {
     park_after: std::time::Duration,
     storage: Option<std::path::PathBuf>,
     glide: RefCell<glide::Glide>,
+    fling: RefCell<glide::Fling>,
     server: Option<Url>,
     app: soundscape_core::host::AppHandle,
     seen: std::sync::Arc<std::sync::Mutex<host::Seen>>,
@@ -330,8 +332,6 @@ impl Shell {
                     webview.load(url);
                 }
             }
-            host::Call::Rest => self.rest(),
-            host::Call::Prepare(script) => self.prepare(script),
             host::Call::OpenMini => self.open_mini(event_loop),
             host::Call::MiniEval(script) => {
                 if let Some(mini) = self.mini() {
@@ -404,29 +404,21 @@ impl Shell {
         webview.load(valve::resting_page());
     }
 
-    fn rest(&self) {
-        if self.window().is_some() || self.parked.borrow().is_some() {
+    fn change_font(&self, family: Option<String>) {
+        if *self.desktop_font.borrow() == family {
             return;
         }
-        let Some(webview) = self.webview() else {
-            return;
-        };
-        let Some(url) = webview.url() else {
-            return;
-        };
-        *self.parked.borrow_mut() = Some(url);
-        webview.load(valve::resting_page());
-    }
-
-    fn prepare(&self, script: String) {
-        if self.parked.borrow().is_none() {
-            return;
+        let fresh = add_font(&self.scripts, family.as_deref());
+        let old = self.font_script.replace(fresh);
+        self.scripts.remove_script(old);
+        let restyle = font::restyle_script(family.as_deref());
+        if let Some(webview) = self.webview() {
+            webview.evaluate_javascript(restyle.clone(), |_| {});
         }
-        let fresh = Rc::new(UserScript::new(script, None));
-        self.scripts.add_script(fresh.clone());
-        if let Some(old) = self.handback.borrow_mut().replace(fresh) {
-            self.scripts.remove_script(old);
+        if let Some(mini) = self.mini() {
+            mini.webview.evaluate_javascript(restyle, |_| {});
         }
+        *self.desktop_font.borrow_mut() = family;
     }
 
     fn mini(&self) -> Option<Rc<Mini>> {
@@ -460,9 +452,7 @@ impl Shell {
         };
         let context = Rc::new(context);
         let mini_scripts = Rc::new(UserContentManager::new(&self.servo));
-        if let Some(css) = &self.desktop_font {
-            add_font(&mini_scripts, css);
-        }
+        add_font(&mini_scripts, self.desktop_font.borrow().as_deref());
         let webview = WebViewBuilder::new(&self.servo, context.clone())
             .url(mini_page())
             .user_content_manager(mini_scripts)
@@ -569,7 +559,30 @@ impl Shell {
         }
     }
 
+    fn remember_window(&self) {
+        if let Some(window) = self.window() {
+            self.note_size(&window);
+        }
+        let size = self.size.get();
+        let maximized = self.maximized.get();
+        self.app
+            .state::<soundscape_core::AppState>()
+            .update(|config| {
+                config.window_size = Some((size.width, size.height));
+                config.maximized = maximized;
+            });
+    }
+
+    fn note_size(&self, window: &Window) {
+        let maximized = window.is_maximized();
+        self.maximized.set(maximized);
+        if !maximized {
+            self.size.set(window.inner_size());
+        }
+    }
+
     fn close(&self) {
+        self.remember_window();
         self.close_mini();
         self.select.borrow_mut().take();
         self.waiting.borrow_mut().clear();
@@ -596,10 +609,12 @@ impl Shell {
         if self.hidden_since.get().is_none() {
             self.hidden_since.set(Some(std::time::Instant::now()));
         }
+        if self.window().is_some() {
+            self.remember_window();
+        }
         let Some(window) = self.window.borrow_mut().take() else {
             return;
         };
-        self.size.set(window.inner_size());
         if let Some(webview) = self.webview() {
             webview.hide();
         }
@@ -610,7 +625,9 @@ impl Shell {
     fn show_window(&self, event_loop: &ActiveEventLoop) {
         self.set_hidden(false);
         if self.window().is_none() {
-            let Ok(window) = event_loop.create_window(attributes(Some(self.size.get()))) else {
+            let Ok(window) =
+                event_loop.create_window(attributes(Some(self.size.get()), self.maximized.get()))
+            else {
                 return;
             };
             let Ok(handle) = window.window_handle() else {
@@ -768,11 +785,6 @@ impl WebViewDelegate for Shell {
 
     fn notify_load_status_changed(&self, _: WebView, status: servo::LoadStatus) {
         if matches!(status, servo::LoadStatus::Complete) {
-            if self.parked.borrow().is_none()
-                && let Some(done) = self.handback.borrow_mut().take()
-            {
-                self.scripts.remove_script(done);
-            }
             self.loaded_at.set(std::time::Instant::now());
             self.armed.set(false);
             let _ = self.proxy.send_event(Wake::Push);
@@ -886,6 +898,10 @@ impl WebViewDelegate for Shell {
     }
 
     fn show_console_message(&self, _: WebView, level: servo::ConsoleLogLevel, message: String) {
+        if let Some(asked) = soundscape_core::native_link::asked(&message) {
+            soundscape_core::native_link::from_page(&self.app, asked);
+            return;
+        }
         let Some(picked) = pickers::picked(&self.nonce, &message) else {
             if self.debug {
                 eprintln!("page {level:?}: {message}");
@@ -978,8 +994,13 @@ impl App {
         profile: Profile,
         launched: Launched,
     ) -> Rc<Shell> {
+        let saved = launched.app.state::<soundscape_core::AppState>().config();
+        let saved_size = saved
+            .window_size
+            .filter(|(width, height)| *width >= 200 && *height >= 200)
+            .map(|(width, height)| PhysicalSize::new(width, height));
         let window = event_loop
-            .create_window(attributes(None).with_visible(!launched.hidden))
+            .create_window(attributes(saved_size, saved.maximized))
             .expect("window");
         let display = event_loop.display_handle().expect("display");
         let handle = window.window_handle().expect("window handle");
@@ -1024,10 +1045,15 @@ impl App {
                 place,
             )));
         }
-        let desktop_font = font::desktop().map(|family| font::stylesheet(&family));
-        if let Some(css) = &desktop_font {
-            add_font(&scripts, css);
+        scripts.add_script(Rc::new(UserScript::new(
+            soundscape_core::links::SAME_WINDOW.into(),
+            None,
+        )));
+        if let Some(native) = soundscape_core::native_link::script_for(&launched.app) {
+            scripts.add_script(Rc::new(UserScript::new(native, None)));
         }
+        let desktop_font = font::desktop();
+        let font_script = add_font(&scripts, desktop_font.as_deref());
         if let Some(extra) = std::env::var_os("SOUNDSCAPE_EXTRA_SCRIPT")
             .and_then(|path| std::fs::read_to_string(path).ok())
         {
@@ -1036,15 +1062,16 @@ impl App {
         if profile.show_fps {
             scripts.add_script(Rc::new(UserScript::new(FRAME_COUNTER.into(), None)));
         }
-        let size = window.inner_size();
+        let size = saved_size.unwrap_or_else(|| window.inner_size());
         let shell = Rc::new(Shell {
             window: RefCell::new(Some(Rc::new(window))),
             mini: RefCell::new(None),
             scripts: scripts.clone(),
-            handback: RefCell::new(None),
             theme: Cell::new(profile.theme),
-            desktop_font,
+            desktop_font: RefCell::new(desktop_font),
+            font_script: RefCell::new(font_script),
             size: Cell::new(size),
+            maximized: Cell::new(saved.maximized),
             servo,
             context,
             webview: RefCell::new(None),
@@ -1064,6 +1091,7 @@ impl App {
             park_after: valve::park_after(std::env::var("SOUNDSCAPE_PARK_SECONDS").ok().as_deref()),
             storage: profile.storage.clone(),
             glide: RefCell::new(glide::Glide::default()),
+            fling: RefCell::new(glide::Fling::default()),
             server: profile.server.clone(),
             app: launched.app.clone(),
             seen: launched.seen.clone(),
@@ -1093,9 +1121,6 @@ impl App {
         webview.set_focused(true);
         *shell.webview.borrow_mut() = Some(webview.clone());
         webview.notify_theme_change(profile.theme);
-        if launched.hidden {
-            shell.hide_window();
-        }
         match theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref()) {
             Some(_) => {}
             None => {
@@ -1105,22 +1130,66 @@ impl App {
                 });
             }
         }
+        if std::env::var_os("SOUNDSCAPE_FONT").is_none() {
+            let sender = proxy.clone();
+            font::watch(move |family| {
+                let _ = sender.send_event(Wake::Font(family));
+            });
+        }
         shell
+    }
+}
+
+impl App {
+    fn begin(&mut self, event_loop: &ActiveEventLoop) {
+        let App::Starting(proxy, profile, launched) = std::mem::replace(self, App::Stopped) else {
+            return;
+        };
+        if let Ok(mut seen) = launched.seen.lock() {
+            seen.hidden = false;
+        }
+        *self = App::Running(App::start(event_loop, proxy, profile, launched));
     }
 }
 
 impl ApplicationHandler<Wake> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if let App::Starting(..) = self {
-            let App::Starting(proxy, profile, launched) = std::mem::replace(self, App::Stopped)
-            else {
-                return;
-            };
-            *self = App::Running(App::start(event_loop, proxy, profile, launched));
+        if let App::Starting(_, _, launched) = self
+            && !launched.hidden
+        {
+            self.begin(event_loop);
         }
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, wake: Wake) {
+        if let App::Starting(..) = self {
+            let wanted = match &wake {
+                Wake::Quit | Wake::Call(host::Call::Exit) => {
+                    event_loop.exit();
+                    return;
+                }
+                Wake::Call(host::Call::Restart) => {
+                    RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
+                    event_loop.exit();
+                    return;
+                }
+                Wake::Call(
+                    host::Call::Show
+                    | host::Call::Focus
+                    | host::Call::Navigate(_)
+                    | host::Call::Setup
+                    | host::Call::OpenMini,
+                ) => true,
+                _ => false,
+            };
+            if !wanted {
+                if let Wake::Call(host::Call::Evaluate(_, reply)) = wake {
+                    reply(None);
+                }
+                return;
+            }
+            self.begin(event_loop);
+        }
         let App::Running(shell) = self else {
             return;
         };
@@ -1152,6 +1221,7 @@ impl ApplicationHandler<Wake> for App {
                 }
             }
             Wake::Answer(id, answer) => shell.answer(id, answer),
+            Wake::Font(family) => shell.change_font(family),
         }
     }
 
@@ -1180,7 +1250,21 @@ impl ApplicationHandler<Wake> for App {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
-                let moved = shell.glide.borrow_mut().tick(std::time::Instant::now());
+                let now = std::time::Instant::now();
+                let coasted = shell.fling.borrow_mut().tick(now);
+                if let Some((x, y)) = coasted {
+                    let (left, top) = shell.fling.borrow().point();
+                    webview.notify_scroll_event(
+                        Scroll::Delta(WebViewVector::Device(DeviceVector2D::new(
+                            x as f32, y as f32,
+                        ))),
+                        WebViewPoint::Device(DevicePoint::new(left as f32, top as f32)),
+                    );
+                }
+                let moved = shell.glide.borrow_mut().tick(now);
+                if moved.is_none() && coasted.is_some() {
+                    shell.servo.spin_event_loop();
+                }
                 if let Some((x, y)) = moved {
                     let (left, top) = shell.glide.borrow().point();
                     webview.notify_scroll_event(
@@ -1193,11 +1277,14 @@ impl ApplicationHandler<Wake> for App {
                 }
                 webview.paint();
                 shell.context.present();
-                if shell.glide.borrow().active() {
+                if shell.glide.borrow().active() || shell.fling.borrow().active() {
                     window.request_redraw();
                 }
             }
-            WindowEvent::Resized(size) => webview.resize(size),
+            WindowEvent::Resized(size) => {
+                webview.resize(size);
+                shell.note_size(&window);
+            }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 webview.set_hidpi_scale_factor(Scale::new(scale_factor as f32));
             }
@@ -1253,6 +1340,9 @@ impl ApplicationHandler<Wake> for App {
                 ..
             } => {
                 let down = state == ElementState::Pressed;
+                if down {
+                    shell.fling.borrow_mut().stop();
+                }
                 match pressed {
                     WinitButton::Back if down && webview.can_go_back() => {
                         webview.go_back(1);
@@ -1272,10 +1362,36 @@ impl ApplicationHandler<Wake> for App {
                     ))),
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
                 let (x, y) = wheel(delta, window.scale_factor());
                 if shell.debug {
-                    eprintln!("wheel {delta:?}");
+                    eprintln!("wheel {delta:?} {phase:?}");
+                }
+                if shell.smooth.get()
+                    && matches!(delta, MouseScrollDelta::PixelDelta(..))
+                    && !shell.held.get().control_key()
+                {
+                    let now = std::time::Instant::now();
+                    let at = shell.pointer.get();
+                    let mut fling = shell.fling.borrow_mut();
+                    if phase == TouchPhase::Started {
+                        fling.stop();
+                    }
+                    if x != 0.0 || y != 0.0 {
+                        fling.touch(-x, -y, (at.x, at.y), now);
+                        webview.notify_scroll_event(
+                            Scroll::Delta(WebViewVector::Device(DeviceVector2D::new(
+                                -x as f32, -y as f32,
+                            ))),
+                            WebViewPoint::Device(DevicePoint::new(at.x as f32, at.y as f32)),
+                        );
+                    }
+                    if phase == TouchPhase::Ended {
+                        fling.release(now);
+                    }
+                    drop(fling);
+                    window.request_redraw();
+                    return;
                 }
                 if shell.smooth.get()
                     && matches!(delta, MouseScrollDelta::LineDelta(..))
@@ -1300,7 +1416,7 @@ impl ApplicationHandler<Wake> for App {
     }
 }
 
-fn attributes(size: Option<PhysicalSize<u32>>) -> WindowAttributes {
+fn attributes(size: Option<PhysicalSize<u32>>, maximized: bool) -> WindowAttributes {
     let attributes = Window::default_attributes()
         .with_title("Soundscape")
         .with_min_inner_size(LogicalSize::new(380.0, 480.0));
@@ -1309,7 +1425,9 @@ fn attributes(size: Option<PhysicalSize<u32>>) -> WindowAttributes {
         Some(size) => attributes.with_inner_size(size),
         None => attributes.with_inner_size(LogicalSize::new(1200.0, 820.0)),
     };
-    attributes.with_window_icon(window_icon())
+    attributes
+        .with_maximized(maximized)
+        .with_window_icon(window_icon())
 }
 
 fn named(attributes: WindowAttributes, instance: &str) -> WindowAttributes {
@@ -1419,6 +1537,9 @@ fn main() {
     let hidden =
         soundscape_core::starts_hidden(&args, &app.state::<soundscape_core::AppState>().config());
     let _ = waiting.set(app.clone());
+    if hidden && let Ok(mut held) = seen.lock() {
+        held.hidden = true;
+    }
     let launched = Launched { hidden, app, seen };
     let mut app = App::Starting(proxy, profile, launched);
     if let Err(error) = event_loop.run_app(&mut app) {

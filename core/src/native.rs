@@ -57,159 +57,6 @@ pub struct Handover {
     pub repeat: String,
 }
 
-pub const READ_HANDOVER: &str = r#"(() => {
-  const audio = document.querySelector(".player audio");
-  let queue = null;
-  let volume = null;
-  let options = null;
-  try {
-    queue = JSON.parse(localStorage.getItem("soundscape:queue") ?? "null");
-    volume = JSON.parse(localStorage.getItem("soundscape-volume") ?? "null");
-    options = JSON.parse(localStorage.getItem("soundscape:player-options") ?? "null");
-  } catch {}
-  if (!audio || !audio.currentSrc || !queue || !Array.isArray(queue.order) || !Array.isArray(queue.tracks)) return "null";
-  return JSON.stringify({
-    tracks: queue.order.map((index) => queue.tracks[index]).filter(Boolean),
-    position: queue.position,
-    time: Number.isFinite(audio.currentTime) ? audio.currentTime : 0,
-    playing: !audio.paused && !audio.ended,
-    volume: typeof volume?.volume === "number" ? volume.volume : 0.8,
-    muted: Boolean(volume?.muted),
-    levelling: options?.levelling !== false,
-    repeat: document.querySelector('[data-player="repeat"]')?.dataset.repeat ?? "off",
-  });
-})()"#;
-
-pub const PAUSE_PAGE: &str =
-    r#"(() => { for (const audio of document.querySelectorAll("audio")) audio.pause(); })()"#;
-
-pub const PAGE_CLOCK: &str = r#"(() => {
-  const audio = document.querySelector(".player audio");
-  let queue = null;
-  try {
-    queue = JSON.parse(localStorage.getItem("soundscape:queue") ?? "null");
-  } catch {}
-  if (!audio || !audio.currentSrc) return "null";
-  return JSON.stringify({
-    time: audio.currentTime,
-    playing: !audio.paused && !audio.ended,
-    ready: audio.readyState >= 3,
-    position: typeof queue?.position === "number" ? queue.position : -1,
-    volume: audio.volume,
-    at: Date.now(),
-  });
-})()"#;
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-pub struct PageClock {
-    pub time: f64,
-    pub playing: bool,
-    pub ready: bool,
-    pub position: i64,
-    pub volume: f64,
-    #[serde(default)]
-    pub at: f64,
-}
-
-pub const LONGEST_AGE: f64 = 0.5;
-
-pub fn page_age(at: f64, now: f64) -> f64 {
-    if at > 0.0 {
-        ((now - at) / 1000.0).clamp(0.0, LONGEST_AGE)
-    } else {
-        0.0
-    }
-}
-
-const HOLD: &str = r#"const hold = (audio, gain) => {
-    const real = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "volume");
-    if (!Object.prototype.hasOwnProperty.call(audio, "volume")) {
-      let wanted = real.get.call(audio);
-      Object.defineProperty(audio, "volume", { configurable: true, get: () => wanted, set: (value) => { wanted = value; } });
-    }
-    real.set.call(audio, Math.min(Math.max(audio.volume * gain, 0), 1));
-  };"#;
-
-pub fn page_hold(gain: f64) -> String {
-    format!(
-        r#"(() => {{
-  {HOLD}
-  const audio = document.querySelector(".player audio");
-  if (audio) hold(audio, {});
-}})()"#,
-        gain.clamp(0.0, 1.0)
-    )
-}
-
-pub const PAGE_RELEASE: &str = r#"(() => {
-  for (const audio of document.querySelectorAll("audio")) {
-    if (!Object.prototype.hasOwnProperty.call(audio, "volume")) continue;
-    const wanted = audio.volume;
-    delete audio.volume;
-    audio.volume = wanted;
-  }
-})()"#;
-
-pub fn parse_page_clock(json: &str) -> Option<PageClock> {
-    serde_json::from_str::<Option<PageClock>>(json).ok()?
-}
-
-pub fn page_volume(volume: f64) -> String {
-    format!(
-        r#"(() => {{ const audio = document.querySelector(".player audio"); if (audio) audio.volume = {}; }})()"#,
-        volume.clamp(0.0, 1.0)
-    )
-}
-
-pub fn page_play_at(time: f64) -> String {
-    format!(
-        r#"(() => {{
-  {HOLD}
-  const audio = document.querySelector(".player audio");
-  if (!audio) return;
-  hold(audio, 0);
-  audio.currentTime = {};
-  audio.play().catch(() => {{}});
-}})()"#,
-        time.max(0.0)
-    )
-}
-
-pub fn page_move_to(time: f64) -> String {
-    format!(
-        r#"(() => {{ const audio = document.querySelector(".player audio"); if (audio) audio.currentTime = {}; }})()"#,
-        time.max(0.0)
-    )
-}
-
-pub fn page_pause_with_volume(volume: f64) -> String {
-    format!(
-        r#"(() => {{ const audio = document.querySelector(".player audio"); if (!audio) return; audio.pause(); audio.volume = {}; }})()"#,
-        volume.clamp(0.0, 1.0)
-    )
-}
-
-pub const IN_STEP: f64 = 0.06;
-
-pub fn in_step(drift: f64) -> bool {
-    drift.abs() <= IN_STEP
-}
-
-pub fn next_lead(lead: f64, drift: f64) -> f64 {
-    (lead - drift).clamp(0.0, 2.0)
-}
-
-pub fn fade_steps(from: f64, to: f64, steps: usize) -> Vec<f64> {
-    (1..=steps)
-        .map(|step| from + (to - from) * step as f64 / steps as f64)
-        .collect()
-}
-
-pub fn parse_handover(json: &str) -> Option<Handover> {
-    let handover = serde_json::from_str::<Option<Handover>>(json).ok()??;
-    (handover.position < handover.tracks.len()).then_some(handover)
-}
-
 pub fn gain_level(gain: Option<&Gain>, by_album: bool) -> f64 {
     let Some(gain) = gain else { return 1.0 };
     let use_album = by_album && gain.album.is_some();
@@ -299,27 +146,6 @@ pub fn cover_for(server: &Url, track: &Track) -> Option<String> {
         .flatten()
 }
 
-pub fn handback_script(state: &Resume, nonce: u64) -> String {
-    format!(
-        r#"(() => {{
-  try {{
-    if (sessionStorage.getItem("soundscape:handback") === "{nonce}") return;
-    sessionStorage.setItem("soundscape:handback", "{nonce}");
-    const queue = JSON.parse(localStorage.getItem("soundscape:queue") ?? "null");
-    if (!queue) return;
-    queue.position = {position};
-    queue.time = {time};
-    localStorage.setItem("soundscape:queue", JSON.stringify(queue));
-    if ({playing}) sessionStorage.setItem("soundscape:resume", "1");
-    else sessionStorage.removeItem("soundscape:resume");
-  }} catch {{}}
-}})()"#,
-        position = state.position,
-        time = (state.time * 10.0).round() / 10.0,
-        playing = state.playing,
-    )
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resume {
     pub position: usize,
@@ -336,8 +162,35 @@ pub enum Command {
     SeekBy(f64),
     SeekTo(f64),
     Repeat,
+    SetRepeat(String),
+    Volume(f64),
+    Enqueue(Box<Track>, bool),
+    Jump(usize),
     FadeTo(f64, Duration),
     Stop,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Snapshot {
+    pub track: Track,
+    pub playing: bool,
+    pub time: f64,
+    pub duration: Option<f64>,
+    pub volume: f64,
+    pub repeat: String,
+    pub up_next: Vec<Track>,
+}
+
+pub fn insert_at(at: usize, length: usize, next: bool) -> usize {
+    if next {
+        (at + 1).min(length)
+    } else {
+        length
+    }
+}
+
+pub fn shifted(coming: Option<usize>, inserted: usize) -> Option<usize> {
+    coming.map(|index| if index >= inserted { index + 1 } else { index })
 }
 
 pub fn command_for(action: &str, seconds: f64) -> Option<Command> {
@@ -364,6 +217,7 @@ struct Queue {
 
 struct Shown {
     preview: Option<Preview>,
+    snapshot: Option<Snapshot>,
     resume: Resume,
     clock: Option<Clock>,
 }
@@ -392,6 +246,10 @@ impl Player {
 
     pub fn preview(&self) -> Option<Preview> {
         self.shown.lock().expect("shown lock").preview.clone()
+    }
+
+    pub fn snapshot(&self) -> Option<Snapshot> {
+        self.shown.lock().expect("shown lock").snapshot.clone()
     }
 
     pub fn resume(&self) -> Resume {
@@ -633,6 +491,29 @@ impl Engine {
                 let mut queue = self.queue.lock().expect("queue lock");
                 queue.repeat = next_repeat(&queue.repeat).to_string();
             }
+            Command::SetRepeat(mode) => {
+                self.queue.lock().expect("queue lock").repeat = mode;
+            }
+            Command::Volume(volume) => {
+                self.volume = volume.clamp(0.0, 1.0);
+                self.muted = false;
+                self.apply_volume();
+            }
+            Command::Enqueue(track, next) => {
+                let mut queue = self.queue.lock().expect("queue lock");
+                let at = insert_at(queue.at, queue.tracks.len(), next);
+                queue.tracks.insert(at, *track);
+                queue.coming = shifted(queue.coming, at);
+            }
+            Command::Jump(ahead) => {
+                let (at, length) = {
+                    let queue = self.queue.lock().expect("queue lock");
+                    (queue.at, queue.tracks.len())
+                };
+                if ahead > 0 && at + ahead < length {
+                    self.load(at + ahead, 0.0);
+                }
+            }
             Command::FadeTo(to, length) => {
                 self.fade = Some((self.fade_gain, to.clamp(0.0, 1.0), Instant::now(), length));
                 self.step_fade();
@@ -791,9 +672,25 @@ impl Engine {
             time: position,
             playing: self.want_playing && !self.released,
         };
+        let snapshot = Snapshot {
+            track: track.clone(),
+            playing: self.want_playing && !self.released,
+            time: position,
+            duration: self.stream_length().or(track.duration),
+            volume: self.volume,
+            repeat: queue.repeat.clone(),
+            up_next: queue
+                .tracks
+                .iter()
+                .skip(queue.at + 1)
+                .take(10)
+                .cloned()
+                .collect(),
+        };
         drop(queue);
         let mut shown = self.shown.lock().expect("shown lock");
         shown.preview = Some(preview);
+        shown.snapshot = Some(snapshot);
         shown.resume = resume;
     }
 }
@@ -850,6 +747,7 @@ pub fn start(
 
     let shown = Arc::new(Mutex::new(Shown {
         preview: None,
+        snapshot: None,
         resume: Resume {
             position: handover.position,
             time: handover.time,
@@ -931,26 +829,6 @@ mod tests {
             gain: None,
             duration: Some(60.0),
         }
-    }
-
-    #[test]
-    fn reads_the_queue_the_page_hands_over() {
-        let json = r#"{"tracks":[{"trackId":"a-1","songId":"nd-1","title":"One","artist":"A","album":"X","duration":245,"gain":{"track":-6,"album":-4,"trackPeak":0.9}},{"trackId":"a-2","title":"Two","artist":"A"}],"position":1,"time":12.5,"playing":true,"volume":0.7,"muted":false,"levelling":true,"repeat":"all"}"#;
-        let handover = parse_handover(json).unwrap();
-        assert_eq!(handover.tracks.len(), 2);
-        assert_eq!(handover.tracks[0].song_id.as_deref(), Some("nd-1"));
-        assert_eq!(handover.tracks[0].gain.as_ref().unwrap().album, Some(-4.0));
-        assert_eq!(handover.tracks[1].song_id, None);
-        assert_eq!(handover.tracks[0].duration, Some(245.0));
-        assert_eq!(handover.tracks[1].duration, None);
-        assert_eq!(handover.time, 12.5);
-        assert_eq!(parse_handover("null"), None);
-        assert_eq!(
-            parse_handover(
-                r#"{"tracks":[],"position":0,"time":0,"playing":true,"volume":1,"muted":false,"levelling":true,"repeat":"off"}"#
-            ),
-            None
-        );
     }
 
     #[test]
@@ -1037,62 +915,6 @@ mod tests {
     }
 
     #[test]
-    fn hands_the_place_back_to_the_page_once() {
-        let script = handback_script(
-            &Resume {
-                position: 2,
-                time: 61.37,
-                playing: true,
-            },
-            42,
-        );
-        assert!(script.contains("queue.position = 2;"));
-        assert!(script.contains("queue.time = 61.4;"));
-        assert!(script.contains(r#"=== "42""#));
-        assert!(script.contains("if (true)"));
-    }
-
-    #[test]
-    fn lines_the_two_players_up() {
-        assert!(in_step(0.05));
-        assert!(in_step(-0.06));
-        assert!(!in_step(0.2));
-        assert_eq!(next_lead(0.25, 0.1), 0.15);
-        assert_eq!(next_lead(0.25, -0.3), 0.55);
-        assert_eq!(next_lead(0.1, 0.5), 0.0);
-        assert_eq!(
-            fade_steps(0.0, 0.8, 4),
-            vec![0.2, 0.4, 0.6000000000000001, 0.8]
-        );
-        let clock = parse_page_clock(
-            r#"{"time":12.5,"playing":true,"ready":true,"position":2,"volume":0.64}"#,
-        )
-        .unwrap();
-        assert_eq!(clock.position, 2);
-        assert_eq!(parse_page_clock("null"), None);
-        assert!(page_play_at(-1.0).contains("audio.currentTime = 0;"));
-        assert!(page_play_at(3.0).contains("hold(audio, 0);"));
-        assert!(page_hold(0.5).contains("hold(audio, 0.5);"));
-        assert!(page_hold(2.0).contains("hold(audio, 1);"));
-        assert!(PAGE_RELEASE.contains("delete audio.volume;"));
-        assert_eq!(clock.at, 0.0);
-        let stamped = parse_page_clock(
-            r#"{"time":1,"playing":true,"ready":true,"position":0,"volume":1,"at":1000}"#,
-        )
-        .unwrap();
-        assert_eq!(stamped.at, 1000.0);
-        assert!(page_volume(2.0).contains("audio.volume = 1;"));
-    }
-
-    #[test]
-    fn knows_how_old_a_page_reading_is() {
-        assert_eq!(page_age(1000.0, 1080.0), 0.08);
-        assert_eq!(page_age(1000.0, 990.0), 0.0);
-        assert_eq!(page_age(1000.0, 9000.0), LONGEST_AGE);
-        assert_eq!(page_age(0.0, 9000.0), 0.0);
-    }
-
-    #[test]
     fn keeps_time_between_measurements() {
         assert_eq!(clock_now(2, 10.0, 0.25, true), (2, 10.25));
         assert_eq!(clock_now(2, 10.0, 0.25, false), (2, 10.0));
@@ -1104,5 +926,15 @@ mod tests {
         assert!(matches!(command_for("seek", 5.0), Some(Command::SeekBy(s)) if s == 5.0));
         assert!(matches!(command_for("position", 30.0), Some(Command::SeekTo(s)) if s == 30.0));
         assert!(command_for("shuffle", 0.0).is_none());
+    }
+
+    #[test]
+    fn adds_songs_where_the_page_asks() {
+        assert_eq!(insert_at(2, 5, true), 3);
+        assert_eq!(insert_at(2, 5, false), 5);
+        assert_eq!(insert_at(4, 5, true), 5);
+        assert_eq!(shifted(Some(3), 3), Some(4));
+        assert_eq!(shifted(Some(2), 3), Some(2));
+        assert_eq!(shifted(None, 0), None);
     }
 }

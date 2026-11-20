@@ -20,7 +20,7 @@ On first start, enter your server's address, log in and approve the connection. 
 
 - **Scrobbling** from any MPRIS player (Spotify, Strawberry, Rhythmbox, Elisa, VLC, …). A play counts after half the song or four minutes. Browsers are off by default; when on, only songs count and titles like "(Official Video)" are cleaned up.
 - **Tray** with what's playing and today's stats, ♥ Love, Don't scrobble this one, Fix this title…, pause for an hour, players, friends listening and your Navidrome playlists.
-- **Runs in the background** after you close the window, and can start when you log in. If a song is playing, the app's own player can carry it on so the page can be set aside.
+- **Runs in the background** after you close the window, and can start when you log in. Music plays in the app's own player, so closing or opening the window never interrupts it.
 - **Mini player** that stays on top and controls whatever is playing.
 - **Notifications** for new followers, releases, leaderboard and milestones, a Monday recap, an optional streak reminder and your Yearscape. Clicking one opens what it's about.
 - **Media keys**, **GNOME and KDE search** for your artists and songs, and an optional **Discord status**.
@@ -36,7 +36,7 @@ Everything is set in Soundscape's Settings page, under **This app**.
 | Alt+← / Alt+→ | Back / forward |
 | Alt+Home | Home |
 
-Settings are stored in `~/.config/io.github.novakr12.SoundscapeDesktop/`. GNOME needs the AppIndicator extension to show the tray icon.
+The window uses your desktop's interface font and remembers its size. Settings are stored in `~/.config/io.github.novakr12.SoundscapeDesktop/`. GNOME needs the AppIndicator extension to show the tray icon.
 
 ## Build from source
 

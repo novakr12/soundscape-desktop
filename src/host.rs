@@ -13,8 +13,6 @@ pub enum Call {
     Focus,
     Navigate(Url),
     Setup,
-    Rest,
-    Prepare(String),
     OpenMini,
     MiniEval(String),
     CloseMini,
@@ -115,18 +113,6 @@ impl Host for ServoHost {
     fn navigate(&self, label: &str, url: Url) {
         if label == MAIN {
             self.call(Call::Navigate(url));
-        }
-    }
-
-    fn rest(&self, label: &str) {
-        if label == MAIN {
-            self.call(Call::Rest);
-        }
-    }
-
-    fn prepare(&self, label: &str, script: String) {
-        if label == MAIN {
-            self.call(Call::Prepare(script));
         }
     }
 

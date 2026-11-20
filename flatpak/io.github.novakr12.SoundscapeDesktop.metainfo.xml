@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8" ?>
 <component type="desktop-application">
   <id>io.github.novakr12.SoundscapeDesktop</id>
   <metadata_license>CC0-1.0</metadata_license>
@@ -18,22 +18,33 @@
       listening history.
     </p>
     <ul>
-      <li>Picks up what Spotify, Strawberry, Rhythmbox, Elisa and other players are playing, with no plugins</li>
-      <li>Counts a play once you've heard half the song or four minutes, like ListenBrainz and Last.fm</li>
-      <li>Lets you love the song that's playing, or keep it out of your history, from the tray</li>
+      <li
+            >Picks up what Spotify, Strawberry, Rhythmbox, Elisa and other players are playing, with no plugins</li>
+      <li
+            >Counts a play once you've heard half the song or four minutes, like ListenBrainz and Last.fm</li>
+      <li
+            >Lets you love the song that's playing, or keep it out of your history, from the tray</li>
       <li>Remembers fixes for players that send wrong or messy song names</li>
       <li>Pauses scrobbling for an hour and turns it back on by itself</li>
-      <li>Tidies up the names of untagged music files, like "03 - Artist - Song.flac"</li>
+      <li
+            >Tidies up the names of untagged music files, like "03 - Artist - Song.flac"</li>
       <li>Shows today's plays, listening time and your streak in the tray</li>
       <li>Can remind you in the evening before your listening streak ends</li>
       <li>Tells you in December when your Yearscape for the year is ready</li>
-      <li>Has a small mini player that stays on top and controls any music player</li>
-      <li>Keeps plays while your server is offline and sends them with their original times later</li>
-      <li>Leaves browsers out unless you turn them on, and then counts only songs, with titles like "(Official Video)" cleaned up</li>
-      <li>Shows new followers, friends passing you on the weekly leaderboard and play milestones as notifications</li>
-      <li>Shows who you follow is playing right now and plays their song with one click, and sums up your week every Monday</li>
-      <li>Lets media keys and your desktop's media controls play and pause song previews</li>
-      <li>Finds your artists and songs from GNOME's search and KDE's KRunner</li>
+      <li
+            >Has a small mini player that stays on top and controls any music player</li>
+      <li
+            >Keeps plays while your server is offline and sends them with their original times later</li>
+      <li
+            >Leaves browsers out unless you turn them on, and then counts only songs, with titles like "(Official Video)" cleaned up</li>
+      <li
+            >Shows new followers, friends passing you on the weekly leaderboard and play milestones as notifications</li>
+      <li
+            >Shows who you follow is playing right now and plays their song with one click, and sums up your week every Monday</li>
+      <li
+            >Lets media keys and your desktop's media controls play and pause song previews</li>
+      <li
+            >Finds your artists and songs from GNOME's search and KDE's KRunner</li>
       <li>Can start when you log in and keep scrobbling in the background</li>
     </ul>
     <p>
@@ -42,28 +53,36 @@
     </p>
   </description>
 
-  <launchable type="desktop-id">io.github.novakr12.SoundscapeDesktop.desktop</launchable>
+  <launchable
+        type="desktop-id"
+    >io.github.novakr12.SoundscapeDesktop.desktop</launchable>
 
   <url type="homepage">https://github.com/novakr12/soundscape-desktop</url>
-  <url type="bugtracker">https://github.com/novakr12/soundscape-desktop/issues</url>
+  <url
+        type="bugtracker"
+    >https://github.com/novakr12/soundscape-desktop/issues</url>
   <url type="vcs-browser">https://github.com/novakr12/soundscape-desktop</url>
 
   <screenshots>
     <screenshot type="default">
       <caption>Your Soundscape server in its own window</caption>
-      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/home.png</image>
+      <image
+            >https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/home.png</image>
     </screenshot>
     <screenshot>
       <caption>Listening stats</caption>
-      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/stats.png</image>
+      <image
+            >https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/stats.png</image>
     </screenshot>
     <screenshot>
       <caption>Scrobbling, players and notifications in one place</caption>
-      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/settings.png</image>
+      <image
+            >https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/settings.png</image>
     </screenshot>
     <screenshot>
       <caption>Connecting to your server</caption>
-      <image>https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/setup.png</image>
+      <image
+            >https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/screenshots/setup.png</image>
     </screenshot>
   </screenshots>
 
@@ -98,14 +117,26 @@
   </supports>
 
   <releases>
+  <release version="0.10.5" date="2026-11-20">
+    <description>
+      <ul>
+        <li
+                    >Seeking while a song is still loading no longer flashes 0:00 first</li>
+        <li>Quitting from the tray closes the app right away</li>
+      </ul>
+    </description>
+  </release>
     <release version="0.10.4" date="2026-11-20">
       <description>
-        <p>The app uses far less memory while its window is closed.</p>
         <ul>
-          <li>The window runs separately and is shut down completely when you close it, so the app left running in the background takes a few dozen megabytes instead of several hundred</li>
-          <li>Music, scrobbling, the tray and notifications keep going while the window is closed, and it opens again where you left off</li>
-          <li>The player bar no longer slides in again every time you start a song</li>
-          <li>Seeking while a song is still loading no longer flashes 0:00 first</li>
+          <li
+                    >The window runs separately and is shut down completely when you close it, so the app left running in the background takes a few dozen megabytes instead of several hundred</li>
+          <li
+                    >Music, scrobbling, the tray and notifications keep going while the window is closed, and it opens again where you left off</li>
+          <li
+                    >The player bar no longer slides in again every time you start a song</li>
+          <li
+                    >Seeking while a song is still loading no longer flashes 0:00 first</li>
           <li>Quitting from the tray closes the app right away</li>
         </ul>
       </description>
@@ -114,73 +145,98 @@
       <description>
         <p>Seeking is smooth again.</p>
         <ul>
-          <li>Seeking moves the progress bar straight to the new spot instead of jumping back first</li>
-          <li>Media keys and the mini player show the new spot right away too</li>
+          <li
+                    >Seeking moves the progress bar straight to the new spot instead of jumping back first</li>
+          <li
+                    >Media keys and the mini player show the new spot right away too</li>
         </ul>
       </description>
     </release>
     <release version="0.10.2" date="2026-11-20">
       <description>
-        <p>The app's own player follows your player settings, and your other devices see and control it.</p>
         <ul>
-          <li>Music starts at the volume you set in Soundscape instead of a fixed level</li>
-          <li>Volume levelling and crossfade from Soundscape's player settings now apply, and change as soon as you change them</li>
-          <li>Your phone and other browsers see what the computer is playing under Devices, and can pause, skip or send music to it</li>
+          <li
+                    >Music starts at the volume you set in Soundscape instead of a fixed level</li>
+          <li
+                    >Volume levelling and crossfade from Soundscape's player settings now apply, and change as soon as you change them</li>
+          <li
+                    >Your phone and other browsers see what the computer is playing under Devices, and can pause, skip or send music to it</li>
         </ul>
       </description>
     </release>
     <release version="0.10.1" date="2026-11-20">
       <description>
-        <p>Music plays smoothly when you close or open the window.</p>
         <ul>
-          <li>Music plays in the app's own player, so closing or opening the window never interrupts it</li>
-          <li>Songs that only have a preview play in the app's own player too (needs an up-to-date Soundscape server)</li>
-          <li>Starting at login only loads the window once you open it, which saves a lot of memory</li>
+          <li
+                    >Music plays in the app's own player, so closing or opening the window never interrupts it</li>
+          <li
+                    >Songs that only have a preview play in the app's own player too (needs an up-to-date Soundscape server)</li>
+          <li
+                    >Starting at login only loads the window once you open it, which saves a lot of memory</li>
           <li>The window opens at the size you left it, maximised or not</li>
-          <li>The window uses your desktop's interface font and follows when you change it</li>
-          <li>Touchpad scrolling follows your fingers directly and coasts to a stop</li>
-          <li>Back and forward buttons and the version show on the page again</li>
+          <li
+                    >The window uses your desktop's interface font and follows when you change it</li>
+          <li
+                    >Touchpad scrolling follows your fingers directly and coasts to a stop</li>
+          <li
+                    >Back and forward buttons and the version show on the page again</li>
         </ul>
       </description>
     </release>
     <release version="0.10.0" date="2026-11-19">
       <description>
-        <p>The app now draws its window with the Servo browser engine instead of WebKitGTK.</p>
+        <p
+                >The app now draws its window with the Servo browser engine instead of WebKitGTK.</p>
         <ul>
-          <li>Closing the window frees its graphics memory, and on Wayland the window really closes instead of staying around</li>
-          <li>While the app's own player carries on the music, the page is set aside completely and comes back where the music is when you open the window</li>
-          <li>Clicking a notification opens what it is about, like the new follower's profile or your Yearscape</li>
-          <li>Clicking Soundscape in your desktop's media controls opens the window</li>
-          <li>Title fixes, changing the server and signing out are now in Soundscape's Settings page, under This app</li>
-          <li>The tray no longer needs extra libraries, and opening the app a second time brings the running one forward</li>
+          <li
+                    >Closing the window frees its graphics memory, and on Wayland the window really closes instead of staying around</li>
+          <li
+                    >While the app's own player carries on the music, the page is set aside completely and comes back where the music is when you open the window</li>
+          <li
+                    >Clicking a notification opens what it is about, like the new follower's profile or your Yearscape</li>
+          <li
+                    >Clicking Soundscape in your desktop's media controls opens the window</li>
+          <li
+                    >Title fixes, changing the server and signing out are now in Soundscape's Settings page, under This app</li>
+          <li
+                    >The tray no longer needs extra libraries, and opening the app a second time brings the running one forward</li>
         </ul>
       </description>
     </release>
     <release version="0.9.16" date="2026-11-18">
       <description>
-        <p>Opening the window while a song plays in the background no longer stutters.</p>
+        <p
+                >Opening the window while a song plays in the background no longer stutters.</p>
         <ul>
-          <li>The window stays silent until it has caught up with the background player, then the two fade over</li>
+          <li
+                    >The window stays silent until it has caught up with the background player, then the two fade over</li>
           <li>The two players line up more closely before they switch</li>
         </ul>
       </description>
     </release>
     <release version="0.9.15" date="2026-11-18">
       <description>
-        <p>Fixes the app closing right after it starts on Wayland desktops that enforce explicit sync, with NVIDIA graphics.</p>
+        <p
+                >Fixes the app closing right after it starts on Wayland desktops that enforce explicit sync, with NVIDIA graphics.</p>
         <ul>
-          <li>The app turns off NVIDIA's explicit sync for itself, which some compositors otherwise refused</li>
-          <li>If the app ever closes right after starting, the next start tries the other rendering setting and says so</li>
+          <li
+                    >The app turns off NVIDIA's explicit sync for itself, which some compositors otherwise refused</li>
+          <li
+                    >If the app ever closes right after starting, the next start tries the other rendering setting and says so</li>
         </ul>
       </description>
     </release>
     <release version="0.9.14" date="2026-11-18">
       <description>
-        <p>Fixes the app closing right after it starts on some Wayland desktops with NVIDIA graphics, and makes wheel scrolling glide more evenly.</p>
+        <p
+                >Fixes the app closing right after it starts on some Wayland desktops with NVIDIA graphics, and makes wheel scrolling glide more evenly.</p>
         <ul>
-          <li>CPU rendering no longer changes how frames reach the screen, which some compositors refused</li>
-          <li>If the app ever closes right after starting, the next start turns CPU rendering off by itself and says so</li>
-          <li>Wheel scrolling now speeds up and slows down gradually, even when you turn the wheel quickly</li>
+          <li
+                    >CPU rendering no longer changes how frames reach the screen, which some compositors refused</li>
+          <li
+                    >If the app ever closes right after starting, the next start turns CPU rendering off by itself and says so</li>
+          <li
+                    >Wheel scrolling now speeds up and slows down gradually, even when you turn the wheel quickly</li>
         </ul>
       </description>
     </release>
@@ -188,7 +244,8 @@
       <description>
         <p>A quicker glide when scrolling with the mouse wheel.</p>
         <ul>
-          <li>Each turn of the wheel now glides to its place in about a seventh of a second, and quick turns add up</li>
+          <li
+                    >Each turn of the wheel now glides to its place in about a seventh of a second, and quick turns add up</li>
           <li>Touchpads scroll as before</li>
         </ul>
       </description>
@@ -198,7 +255,8 @@
         <p>Smooth scrolling with the mouse wheel.</p>
         <ul>
           <li>Each turn of the wheel now glides instead of jumping</li>
-          <li>Turn it off with Smooth scrolling under This app on the Settings page, or in the app's own settings window</li>
+          <li
+                    >Turn it off with Smooth scrolling under This app on the Settings page, or in the app's own settings window</li>
         </ul>
       </description>
     </release>
@@ -206,8 +264,10 @@
       <description>
         <p>Smoother scrolling, especially with NVIDIA graphics.</p>
         <ul>
-          <li>Pages are now drawn with the processor by default, which keeps scrolling smooth on high refresh rate screens</li>
-          <li>Turn it off with Enable CPU rendering under This app on the Settings page, or in the app's own settings window</li>
+          <li
+                    >Pages are now drawn with the processor by default, which keeps scrolling smooth on high refresh rate screens</li>
+          <li
+                    >Turn it off with Enable CPU rendering under This app on the Settings page, or in the app's own settings window</li>
         </ul>
       </description>
     </release>
@@ -215,7 +275,8 @@
       <description>
         <p>A frame counter for checking how smoothly the window draws.</p>
         <ul>
-          <li>Start the app with SOUNDSCAPE_SHOW_FPS=1 to show frames per second in the corner of the window</li>
+          <li
+                    >Start the app with SOUNDSCAPE_SHOW_FPS=1 to show frames per second in the corner of the window</li>
         </ul>
       </description>
     </release>
@@ -223,8 +284,10 @@
       <description>
         <p>One settings page.</p>
         <ul>
-          <li>Settings (Ctrl+, the menu and the tray) now opens Soundscape's Settings page, where the app's settings are under This app, next to your account and the player</li>
-          <li>The small settings window is still there for title fixes, changing the server and signing out, and for when the server can't be reached</li>
+          <li
+                    >Settings (Ctrl+, the menu and the tray) now opens Soundscape's Settings page, where the app's settings are under This app, next to your account and the player</li>
+          <li
+                    >The small settings window is still there for title fixes, changing the server and signing out, and for when the server can't be reached</li>
         </ul>
       </description>
     </release>
@@ -232,14 +295,17 @@
       <description>
         <p>Clearer settings.</p>
         <ul>
-          <li>The app's own settings are now called App settings, and say what is on Soundscape's Settings page instead</li>
-          <li>Each settings page has a button that opens the other one (Soundscape's needs an up-to-date server)</li>
+          <li
+                    >The app's own settings are now called App settings, and say what is on Soundscape's Settings page instead</li>
+          <li
+                    >Each settings page has a button that opens the other one (Soundscape's needs an up-to-date server)</li>
         </ul>
       </description>
     </release>
     <release version="0.9.7" date="2026-11-17">
       <description>
-        <p>The version also shows under the Soundscape logo on the home page.</p>
+        <p
+                >The version also shows under the Soundscape logo on the home page.</p>
         <ul>
           <li>Needs an up-to-date Soundscape server</li>
         </ul>
@@ -249,8 +315,10 @@
       <description>
         <p>See which version you have.</p>
         <ul>
-          <li>The version is at the bottom of Settings and at the top of the Soundscape menu</li>
-          <li>When a newer version is out, Settings says so, with a Download button</li>
+          <li
+                    >The version is at the bottom of Settings and at the top of the Soundscape menu</li>
+          <li
+                    >When a newer version is out, Settings says so, with a Download button</li>
         </ul>
       </description>
     </release>
@@ -258,7 +326,8 @@
       <description>
         <p>The Discord status always names the album.</p>
         <ul>
-          <li>Songs started from the home page or the feed show their album, looked up on your Soundscape server</li>
+          <li
+                    >Songs started from the home page or the feed show their album, looked up on your Soundscape server</li>
           <li>When no album is known, the status says Unknown album</li>
         </ul>
       </description>
@@ -267,9 +336,12 @@
       <description>
         <p>A Discord status that looks like a music app's.</p>
         <ul>
-          <li>The album cover, with the album name when you point at it, and a progress bar with the song's length</li>
-          <li>Jumping in a song moves the bar, and pausing clears the status</li>
-          <li>Covers come from the player, or from your Soundscape server when it's on https; otherwise the Soundscape logo</li>
+          <li
+                    >The album cover, with the album name when you point at it, and a progress bar with the song's length</li>
+          <li
+                    >Jumping in a song moves the bar, and pausing clears the status</li>
+          <li
+                    >Covers come from the player, or from your Soundscape server when it's on https; otherwise the Soundscape logo</li>
         </ul>
       </description>
     </release>
@@ -277,7 +349,8 @@
       <description>
         <p>Song lengths everywhere.</p>
         <ul>
-          <li>The mini player, media keys and the app's own player use the length your Navidrome reports when the stream doesn't say how long a song is, so the time bar works and these songs count as plays</li>
+          <li
+                    >The mini player, media keys and the app's own player use the length your Navidrome reports when the stream doesn't say how long a song is, so the time bar works and these songs count as plays</li>
         </ul>
       </description>
     </release>
@@ -290,8 +363,10 @@
       <description>
         <p>No more pause when the player changes over.</p>
         <ul>
-          <li>Closing the window: the app's player starts quietly in step with the page, then the two cross over in a third of a second, so the music doesn't stop</li>
-          <li>Opening it again: the app's player keeps playing while the page loads, and the page takes over in step the same way</li>
+          <li
+                    >Closing the window: the app's player starts quietly in step with the page, then the two cross over in a third of a second, so the music doesn't stop</li>
+          <li
+                    >Opening it again: the app's player keeps playing while the page loads, and the page takes over in step the same way</li>
         </ul>
       </description>
     </release>
@@ -299,10 +374,14 @@
       <description>
         <p>Music that keeps playing on far less memory.</p>
         <ul>
-          <li>When you close the window while music plays, the app's own player takes over the same queue at the same second and the page is closed, so the app uses about half the memory</li>
-          <li>Media keys, the mini player, the tray and Discord keep working, songs still count as plays, and the next song follows without a gap</li>
-          <li>Open the window again and the page carries on from where the app's player is</li>
-          <li>Turn it off in Settings to keep the page playing in the background as before</li>
+          <li
+                    >When you close the window while music plays, the app's own player takes over the same queue at the same second and the page is closed, so the app uses about half the memory</li>
+          <li
+                    >Media keys, the mini player, the tray and Discord keep working, songs still count as plays, and the next song follows without a gap</li>
+          <li
+                    >Open the window again and the page carries on from where the app's player is</li>
+          <li
+                    >Turn it off in Settings to keep the page playing in the background as before</li>
         </ul>
       </description>
     </release>
@@ -310,9 +389,12 @@
       <description>
         <p>Your music in your Discord status.</p>
         <ul>
-          <li>Turn on "Show what I'm playing in my Discord status" in Settings to show the song, artist and album as "Listening to" on Discord</li>
-          <li>It follows the player you're listening to, and songs played in the Soundscape window</li>
-          <li>Discord needs an application of your own for this; Settings explains how to make one in a minute</li>
+          <li
+                    >Turn on "Show what I'm playing in my Discord status" in Settings to show the song, artist and album as "Listening to" on Discord</li>
+          <li
+                    >It follows the player you're listening to, and songs played in the Soundscape window</li>
+          <li
+                    >Discord needs an application of your own for this; Settings explains how to make one in a minute</li>
         </ul>
       </description>
     </release>
@@ -320,8 +402,10 @@
       <description>
         <p>Hear about new versions.</p>
         <ul>
-          <li>Once a day the app checks the releases on GitHub; when a newer version is out, a notification says so once and the tray gets a "Download Soundscape Desktop …" item that opens the download page</li>
-          <li>Turn it off in Settings with "Tell me when a new version of this app is out"</li>
+          <li
+                    >Once a day the app checks the releases on GitHub; when a newer version is out, a notification says so once and the tray gets a "Download Soundscape Desktop …" item that opens the download page</li>
+          <li
+                    >Turn it off in Settings with "Tell me when a new version of this app is out"</li>
         </ul>
       </description>
     </release>
@@ -329,8 +413,10 @@
       <description>
         <p>Music that keeps playing.</p>
         <ul>
-          <li>Closing the window while a song plays no longer stops it: the window hides, the music keeps going, and the mini player, media keys and tray still control it</li>
-          <li>Once nothing has played for 5 minutes, the hidden page is closed to free memory, as before</li>
+          <li
+                    >Closing the window while a song plays no longer stops it: the window hides, the music keeps going, and the mini player, media keys and tray still control it</li>
+          <li
+                    >Once nothing has played for 5 minutes, the hidden page is closed to free memory, as before</li>
         </ul>
       </description>
     </release>
@@ -338,7 +424,8 @@
       <description>
         <p>Buttons to find your way.</p>
         <ul>
-          <li>Back, forward and home buttons next to the Soundscape logo in the window, like in a browser</li>
+          <li
+                    >Back, forward and home buttons next to the Soundscape logo in the window, like in a browser</li>
           <li>The buttons need an up-to-date Soundscape server</li>
         </ul>
       </description>
@@ -347,8 +434,10 @@
       <description>
         <p>Links and going back.</p>
         <ul>
-          <li>Links to other websites, like an artist's own site or Bandcamp, now open in your web browser, also from the Flatpak and also when they were meant to open in a new tab</li>
-          <li>A new Go menu with Back (Alt+Left), Forward (Alt+Right) and Home (Alt+Home), like in a browser</li>
+          <li
+                    >Links to other websites, like an artist's own site or Bandcamp, now open in your web browser, also from the Flatpak and also when they were meant to open in a new tab</li>
+          <li
+                    >A new Go menu with Back (Alt+Left), Forward (Alt+Right) and Home (Alt+Home), like in a browser</li>
         </ul>
       </description>
     </release>
@@ -356,9 +445,12 @@
       <description>
         <p>Your music, closer at hand.</p>
         <ul>
-          <li>Soundscape → Music, also in the tray, opens the Music tab, and each Navidrome playlist can be started from there with one click</li>
-          <li>The mini player has a seek bar you can click or drag, and shuffle and repeat buttons for players that support them</li>
-          <li>While a song plays in the Soundscape window, the mini player shows which song is up next in the queue</li>
+          <li
+                    >Soundscape → Music, also in the tray, opens the Music tab, and each Navidrome playlist can be started from there with one click</li>
+          <li
+                    >The mini player has a seek bar you can click or drag, and shuffle and repeat buttons for players that support them</li>
+          <li
+                    >While a song plays in the Soundscape window, the mini player shows which song is up next in the queue</li>
           <li>The Music menu needs an up-to-date Soundscape server</li>
         </ul>
       </description>
@@ -367,10 +459,14 @@
       <description>
         <p>Lighter and better with the Soundscape player.</p>
         <ul>
-          <li>Closing the window now frees most of the memory the page was using while the app keeps scrobbling in the tray</li>
-          <li>Next and previous in the mini player and on your media keys move through the Soundscape play queue</li>
-          <li>The Soundscape window gets the new player: queue, shuffle, repeat, Play all and keyboard shortcuts</li>
-          <li>The play queue and the new player need an up-to-date Soundscape server</li>
+          <li
+                    >Closing the window now frees most of the memory the page was using while the app keeps scrobbling in the tray</li>
+          <li
+                    >Next and previous in the mini player and on your media keys move through the Soundscape play queue</li>
+          <li
+                    >The Soundscape window gets the new player: queue, shuffle, repeat, Play all and keyboard shortcuts</li>
+          <li
+                    >The play queue and the new player need an up-to-date Soundscape server</li>
         </ul>
       </description>
     </release>
@@ -378,11 +474,15 @@
       <description>
         <p>Friends and fun.</p>
         <ul>
-          <li>A mini player (Ctrl+M) stays on top with the cover, play/pause, next, previous and love, for any music player</li>
-          <li>Play what a friend is playing with one click from Friends listening</li>
-          <li>An optional evening reminder before your listening streak ends</li>
+          <li
+                    >A mini player (Ctrl+M) stays on top with the cover, play/pause, next, previous and love, for any music player</li>
+          <li
+                    >Play what a friend is playing with one click from Friends listening</li>
+          <li
+                    >An optional evening reminder before your listening streak ends</li>
           <li>A notification in December when your Yearscape is ready</li>
-          <li>Playing friends' songs and the Yearscape notification need an up-to-date Soundscape server</li>
+          <li
+                    >Playing friends' songs and the Yearscape notification need an up-to-date Soundscape server</li>
         </ul>
       </description>
     </release>
@@ -390,12 +490,15 @@
       <description>
         <p>Better scrobbling.</p>
         <ul>
-          <li>Love the song that's playing, or keep it out of your history, from the tray</li>
+          <li
+                    >Love the song that's playing, or keep it out of your history, from the tray</li>
           <li>Fix wrong or messy song names once, and the app remembers</li>
           <li>Pause scrobbling for an hour; it turns back on by itself</li>
-          <li>Untagged music files like "03 - Artist - Song.flac" are tidied up and scrobbled</li>
+          <li
+                    >Untagged music files like "03 - Artist - Song.flac" are tidied up and scrobbled</li>
           <li>The tray shows today's plays, listening time and your streak</li>
-          <li>Loving songs and today's stats need an up-to-date Soundscape server</li>
+          <li
+                    >Loving songs and today's stats need an up-to-date Soundscape server</li>
         </ul>
       </description>
     </release>
@@ -403,18 +506,24 @@
       <description>
         <p>Friends, a weekly recap, desktop search and media keys.</p>
         <ul>
-          <li>Friends listening, in the menu and the tray, shows who you follow is playing right now</li>
-          <li>A notification sums up your week every Monday; turn it off in Settings</li>
-          <li>Browsers only count songs, and titles like "(Official Video)" are cleaned up</li>
-          <li>Media keys and your desktop's media controls play, pause and seek songs in the window</li>
-          <li>GNOME search and KRunner find artists and songs from your history</li>
+          <li
+                    >Friends listening, in the menu and the tray, shows who you follow is playing right now</li>
+          <li
+                    >A notification sums up your week every Monday; turn it off in Settings</li>
+          <li
+                    >Browsers only count songs, and titles like "(Official Video)" are cleaned up</li>
+          <li
+                    >Media keys and your desktop's media controls play, pause and seek songs in the window</li>
+          <li
+                    >GNOME search and KRunner find artists and songs from your history</li>
           <li>Plays from the app itself are never scrobbled</li>
         </ul>
       </description>
     </release>
     <release version="0.1.0" date="2026-11-13">
       <description>
-        <p>First release: your Soundscape server in its own window, scrobbling from Linux music players with an offline queue, desktop notifications, a tray icon and starting at login.</p>
+        <p
+                >First release: your Soundscape server in its own window, scrobbling from Linux music players with an offline queue, desktop notifications, a tray icon and starting at login.</p>
       </description>
     </release>
   </releases>

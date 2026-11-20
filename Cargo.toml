@@ -1,13 +1,23 @@
 [package]
 name = "soundscape-desktop"
-version = "0.10.4"
+version = "0.10.5"
 edition = "2024"
 publish = false
 
 [dependencies]
-servo = { version = "=0.8.0", default-features = false, features = ["bundled", "clipboard", "js_jit", "media-gstreamer"] }
+servo = { version = "=0.8.0", default-features = false, features = [
+    "bundled",
+    "clipboard",
+    "js_jit",
+    "media-gstreamer",
+] }
 winit = "0.30.13"
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
+rustls = { version = "0.23", default-features = false, features = [
+    "aws_lc_rs",
+    "std",
+    "tls12",
+    "logging",
+] }
 url = "2"
 euclid = "0.22"
 servo-base = "=0.8.0"
@@ -16,7 +26,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 signal-hook = "0.4"
 libc = "0.2"
-zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+zbus = { version = "5", default-features = false, features = [
+    "blocking-api",
+    "async-io",
+] }
 soundscape-core = { path = "core" }
 
 [workspace]

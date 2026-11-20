@@ -1,4 +1,4 @@
-use ab_glyph::{Font, FontVec, PxScale, ScaleFont};
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use resvg::tiny_skia::{
     Color, FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, Rect, SpreadMode,
     Transform,
@@ -581,9 +581,17 @@ fn icon(
     resvg::render(&tree, transform, &mut canvas.as_mut());
 }
 
+type Face = FontRef<'static>;
+
 struct Fonts {
-    regular: Vec<FontVec>,
-    bold: Vec<FontVec>,
+    regular: Vec<Face>,
+    bold: Vec<Face>,
+}
+
+fn mapped(path: &std::path::Path) -> Option<&'static [u8]> {
+    let file = std::fs::File::open(path).ok()?;
+    let map = unsafe { memmap2::Mmap::map(&file) }.ok()?;
+    Some(&Box::leak(Box::new(map))[..])
 }
 
 impl Fonts {
@@ -610,50 +618,59 @@ impl Fonts {
             "Droid Sans Fallback",
             "DejaVu Sans",
         ];
-        let pick = |weight: fontdb::Weight| {
-            let mut found = Vec::new();
-            let mut take = |families: &[fontdb::Family]| {
-                let query = fontdb::Query {
-                    families,
+        let mut files: std::collections::HashMap<std::path::PathBuf, Option<&'static [u8]>> =
+            std::collections::HashMap::new();
+        let mut open = |id: fontdb::ID| -> Option<Face> {
+            let face = database.face(id)?;
+            let fontdb::Source::File(path) = &face.source else {
+                return None;
+            };
+            let data = (*files.entry(path.clone()).or_insert_with(|| mapped(path)))?;
+            FontRef::try_from_slice_and_index(data, face.index).ok()
+        };
+        let mut pick = |weight: fontdb::Weight| {
+            let mut found: Vec<Face> = Vec::new();
+            let mut chosen: Vec<fontdb::ID> = Vec::new();
+            let mut ids = Vec::new();
+            ids.push(database.query(&fontdb::Query {
+                families: &families,
+                weight,
+                ..fontdb::Query::default()
+            }));
+            for name in fallbacks {
+                ids.push(database.query(&fontdb::Query {
+                    families: &[fontdb::Family::Name(name)],
                     weight,
                     ..fontdb::Query::default()
-                };
-                if let Some(id) = database.query(&query)
-                    && let Some(Some(font)) = database.with_face_data(id, |data, index| {
-                        FontVec::try_from_vec_and_index(data.to_vec(), index).ok()
-                    })
-                {
-                    found.push(font);
-                }
-            };
-            take(&families);
-            for name in fallbacks {
-                take(&[fontdb::Family::Name(name)]);
+                }));
             }
-            if found.is_empty()
-                && let Some(face) = database.faces().next()
-                && let Some(Some(font)) = database.with_face_data(face.id, |data, index| {
-                    FontVec::try_from_vec_and_index(data.to_vec(), index).ok()
-                })
-            {
-                found.push(font);
+            if ids.iter().all(Option::is_none) {
+                ids.push(database.faces().next().map(|face| face.id));
+            }
+            for id in ids.into_iter().flatten() {
+                if chosen.contains(&id) {
+                    continue;
+                }
+                chosen.push(id);
+                if let Some(face) = open(id) {
+                    found.push(face);
+                }
             }
             found
         };
-        Fonts {
-            regular: pick(fontdb::Weight::NORMAL),
-            bold: pick(fontdb::Weight::BOLD),
-        }
+        let regular = pick(fontdb::Weight::NORMAL);
+        let bold = pick(fontdb::Weight::BOLD);
+        Fonts { regular, bold }
     }
 }
 
 struct Glyph<'a> {
-    font: &'a FontVec,
+    font: &'a Face,
     id: ab_glyph::GlyphId,
     x: f32,
 }
 
-fn lay_out<'a>(fonts: &'a [FontVec], text: &str, size: f32) -> (Vec<Glyph<'a>>, f32) {
+fn lay_out<'a>(fonts: &'a [Face], text: &str, size: f32) -> (Vec<Glyph<'a>>, f32) {
     let mut glyphs = Vec::new();
     let mut x = 0.0;
     let mut previous: Option<(usize, ab_glyph::GlyphId)> = None;
@@ -679,7 +696,7 @@ fn lay_out<'a>(fonts: &'a [FontVec], text: &str, size: f32) -> (Vec<Glyph<'a>>, 
     (glyphs, x)
 }
 
-fn fitted(fonts: &[FontVec], text: &str, size: f32, room: f32) -> String {
+fn fitted(fonts: &[Face], text: &str, size: f32, room: f32) -> String {
     if lay_out(fonts, text, size).1 <= room {
         return text.to_string();
     }
@@ -716,14 +733,7 @@ fn blend(canvas: &mut Pixmap, x: i32, y: i32, color: Color, coverage: f32) {
     }
 }
 
-fn text(
-    canvas: &mut Pixmap,
-    fonts: &[FontVec],
-    words: &str,
-    size: f32,
-    at: (f32, f32),
-    color: Color,
-) {
+fn text(canvas: &mut Pixmap, fonts: &[Face], words: &str, size: f32, at: (f32, f32), color: Color) {
     let (glyphs, _) = lay_out(fonts, words, size);
     for glyph in glyphs {
         let placed = glyph
@@ -744,7 +754,7 @@ fn text(
     }
 }
 
-fn baseline(fonts: &[FontVec], size: f32, top: f32, line: f32) -> f32 {
+fn baseline(fonts: &[Face], size: f32, top: f32, line: f32) -> f32 {
     let Some(font) = fonts.first() else {
         return top + line * 0.75;
     };

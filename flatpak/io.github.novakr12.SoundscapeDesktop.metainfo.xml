@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.10.7" date="2026-11-20">
+      <description>
+        <p>The mini player uses much less memory.</p>
+        <ul>
+          <li>Fonts for the mini player are no longer copied into memory, which used up to a couple of hundred megabytes on systems with large Chinese and Japanese fonts</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.6" date="2026-11-20">
       <description>
         <p>The mini player is much lighter, and the window opens again instantly.</p>

@@ -182,9 +182,9 @@ pub struct Picture {
 }
 
 fn picture(bytes: &[u8]) -> Option<Picture> {
-    let decoder = png::Decoder::new(bytes);
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().ok()?;
-    let mut pixels = vec![0; reader.output_buffer_size()];
+    let mut pixels = vec![0; reader.output_buffer_size()?];
     let frame = reader.next_frame(&mut pixels).ok()?;
     if frame.color_type != png::ColorType::Rgba || frame.bit_depth != png::BitDepth::Eight {
         return None;

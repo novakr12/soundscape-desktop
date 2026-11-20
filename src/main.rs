@@ -50,7 +50,6 @@ const LOGO_MOTION: &str = include_str!("logo_motion.js");
 const VALVE: &str = include_str!("valve.js");
 const COVERS: &str = include_str!("covers.js");
 const LINE_HEIGHT: f64 = 76.0;
-const LINGER: std::time::Duration = std::time::Duration::from_secs(60);
 const SHUTDOWN_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
 const APP_ID: &str = soundscape_core::IDENTIFIER;
 
@@ -110,6 +109,7 @@ struct Shell {
     composing: Cell<bool>,
     smooth: Cell<bool>,
     memory_limit: Cell<u32>,
+    keep_window: Cell<i64>,
     armed: Cell<bool>,
     loaded_at: Cell<std::time::Instant>,
     hidden_since: Cell<Option<std::time::Instant>>,
@@ -243,11 +243,12 @@ impl Shell {
     }
 
     fn finished(&self) -> bool {
+        let keep = self.keep_window.get();
         self.window().is_none()
-            && self
-                .lingering
-                .get()
-                .is_none_or(|since| since.elapsed() >= LINGER)
+            && keep != soundscape_core::KEEP_WINDOW_ALWAYS
+            && self.lingering.get().is_none_or(|since| {
+                since.elapsed() >= std::time::Duration::from_secs(keep.max(0) as u64)
+            })
     }
 
     fn linger(&self) {
@@ -306,6 +307,7 @@ impl Shell {
                 self.memory_limit.set(mb);
                 self.check_memory();
             }
+            host::Call::KeepWindow(seconds) => self.keep_window.set(seconds),
             host::Call::Exit => self.quit(event_loop),
         }
     }
@@ -915,6 +917,7 @@ impl App {
             composing: Cell::new(false),
             smooth: Cell::new(start.smooth),
             memory_limit: Cell::new(start.memory_limit),
+            keep_window: Cell::new(start.keep_window),
             armed: Cell::new(false),
             loaded_at: Cell::new(std::time::Instant::now()),
             hidden_since: Cell::new(None),

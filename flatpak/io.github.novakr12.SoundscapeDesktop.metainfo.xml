@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.10.12" date="2026-11-20">
+      <description>
+        <p>Choose how long the window stays ready after you close it.</p>
+        <ul>
+          <li>A new setting under Starting and closing keeps the window ready for a minute, 5 or 15 minutes, always, or closes it right away to save memory</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.11" date="2026-11-20">
       <description>
         <p>Your Soundscape login is better protected.</p>

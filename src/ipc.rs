@@ -12,6 +12,12 @@ pub struct Start {
     pub maximized: bool,
     pub smooth: bool,
     pub memory_limit: u32,
+    #[serde(default = "standard_keep_window")]
+    pub keep_window: i64,
+}
+
+fn standard_keep_window() -> i64 {
+    soundscape_core::KEEP_WINDOW_SECONDS
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -28,6 +34,7 @@ pub enum ToWindow {
     Setup,
     Smooth { on: bool },
     Memory { mb: u32 },
+    KeepWindow { seconds: i64 },
     Exit,
 }
 
@@ -143,6 +150,7 @@ mod tests {
             maximized: false,
             smooth: true,
             memory_limit: 500,
+            keep_window: 300,
         };
         let mut wire = Vec::new();
         send(&mut wire, &ToWindow::Start(start.clone()));

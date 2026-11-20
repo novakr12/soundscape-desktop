@@ -48,6 +48,18 @@ pub const IDENTIFIER: &str = "io.github.novakr12.SoundscapeDesktop";
 pub const MEMORY_LIMIT_MB: u32 = 500;
 pub const MEMORY_LIMITS_MB: [u32; 4] = [0, 400, 500, 700];
 
+pub const KEEP_WINDOW_SECONDS: i64 = 60;
+pub const KEEP_WINDOW_ALWAYS: i64 = -1;
+pub const KEEP_WINDOW_CHOICES: [i64; 5] = [0, 60, 300, 900, KEEP_WINDOW_ALWAYS];
+
+pub fn allowed_keep_window(seconds: i64) -> i64 {
+    if KEEP_WINDOW_CHOICES.contains(&seconds) {
+        seconds
+    } else {
+        KEEP_WINDOW_SECONDS
+    }
+}
+
 pub fn allowed_memory_limit(limit_mb: u32) -> u32 {
     if MEMORY_LIMITS_MB.contains(&limit_mb) {
         limit_mb
@@ -307,5 +319,8 @@ mod tests {
         );
         assert_eq!(allowed_memory_limit(700), 700);
         assert_eq!(allowed_memory_limit(123), MEMORY_LIMIT_MB);
+        assert_eq!(allowed_keep_window(300), 300);
+        assert_eq!(allowed_keep_window(KEEP_WINDOW_ALWAYS), KEEP_WINDOW_ALWAYS);
+        assert_eq!(allowed_keep_window(7), KEEP_WINDOW_SECONDS);
     }
 }

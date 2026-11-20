@@ -16,6 +16,7 @@ pub enum Call {
     Setup,
     Smooth(bool),
     Memory(u32),
+    KeepWindow(i64),
     Exit,
 }
 
@@ -46,6 +47,7 @@ pub fn call_for(message: ToWindow, out: &Out) -> Option<Call> {
         ToWindow::Setup => Call::Setup,
         ToWindow::Smooth { on } => Call::Smooth(on),
         ToWindow::Memory { mb } => Call::Memory(mb),
+        ToWindow::KeepWindow { seconds } => Call::KeepWindow(seconds),
         ToWindow::Exit => Call::Exit,
     })
 }

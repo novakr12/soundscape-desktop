@@ -43,6 +43,7 @@ pub trait Host: Send + Sync {
     fn run_on_main(&self, work: Box<dyn FnOnce() + Send>);
     fn smooth_scrolling(&self, on: bool);
     fn memory_limit(&self, mb: u32);
+    fn keep_window(&self, _seconds: i64) {}
     fn running(&self) -> Running;
     fn restart(&self);
     fn exit(&self, code: i32);

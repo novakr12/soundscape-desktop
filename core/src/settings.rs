@@ -44,6 +44,7 @@ pub struct SettingsView {
     pub faster_scripts: bool,
     pub faster_scripts_now: bool,
     pub memory_limit: u32,
+    pub keep_window: i64,
     pub smooth_scrolling: bool,
     pub discord_app_id: Option<String>,
     pub keep_running: bool,
@@ -116,6 +117,9 @@ pub fn view(app: &AppHandle) -> SettingsView {
         faster_scripts: config.faster_scripts,
         faster_scripts_now: crate::rendering::faster_scripts(),
         memory_limit: config.memory_limit.unwrap_or(crate::MEMORY_LIMIT_MB),
+        keep_window: crate::allowed_keep_window(
+            config.keep_window.unwrap_or(crate::KEEP_WINDOW_SECONDS),
+        ),
         smooth_scrolling: config.smooth_scrolling,
         discord_app_id: config.discord_app_id.clone(),
         keep_running: config.keep_running,

@@ -96,6 +96,11 @@ impl WindowHost {
                     .memory_limit
                     .unwrap_or(soundscape_core::MEMORY_LIMIT_MB),
             ),
+            keep_window: soundscape_core::allowed_keep_window(
+                config
+                    .keep_window
+                    .unwrap_or(soundscape_core::KEEP_WINDOW_SECONDS),
+            ),
         };
         let Ok(me) = std::env::current_exe() else {
             return;
@@ -423,6 +428,10 @@ impl Host for WindowHost {
 
     fn memory_limit(&self, mb: u32) {
         self.tell(&ToWindow::Memory { mb });
+    }
+
+    fn keep_window(&self, seconds: i64) {
+        self.tell(&ToWindow::KeepWindow { seconds });
     }
 
     fn running(&self) -> Running {

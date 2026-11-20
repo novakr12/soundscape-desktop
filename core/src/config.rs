@@ -73,6 +73,8 @@ pub struct Config {
     pub smooth_scrolling: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_window: Option<i64>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub faster_scripts: bool,
 }
@@ -135,6 +137,7 @@ impl Default for Config {
             cpu_rendering: false,
             smooth_scrolling: true,
             memory_limit: None,
+            keep_window: None,
             faster_scripts: false,
         }
     }

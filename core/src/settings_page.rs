@@ -28,6 +28,9 @@ pub enum Command {
     MemoryLimit {
         mb: u32,
     },
+    KeepWindow {
+        seconds: i64,
+    },
     AddFix {
         artist: String,
         title: String,
@@ -139,6 +142,13 @@ async fn perform(app: &AppHandle, command: Command) -> Result<(), String> {
             app.state::<AppState>()
                 .update(|config| config.memory_limit = Some(mb));
             app.host().memory_limit(mb);
+            Ok(())
+        }
+        Command::KeepWindow { seconds } => {
+            let seconds = crate::allowed_keep_window(seconds);
+            app.state::<AppState>()
+                .update(|config| config.keep_window = Some(seconds));
+            app.host().keep_window(seconds);
             Ok(())
         }
         Command::AddFix {

@@ -2,6 +2,7 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use resvg::tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 use resvg::usvg;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 
 const SHUFFLE: &str = r#"<path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H20" /><path d="M3 17h3.5c1.3 0 2.3-.4 3.1-1.2M13.4 8.2c.8-.8 1.8-1.2 3.1-1.2H20" /><path d="M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" />"#;
@@ -57,24 +58,26 @@ impl Icons {
             solid,
             [rgba.red(), rgba.green(), rgba.blue(), rgba.alpha()],
         );
-        if !self.trees.contains_key(&key) {
-            let color = format!("#{:02x}{:02x}{:02x}", rgba.red(), rgba.green(), rgba.blue());
-            let opacity = f32::from(rgba.alpha()) / 255.0;
-            let look = if solid {
-                format!(r#"fill="{color}" stroke="none" opacity="{opacity:.3}""#)
-            } else {
-                format!(
-                    r#"fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="{opacity:.3}""#
-                )
-            };
-            let shapes = icon.shapes();
-            let svg = format!(
-                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><g {look}>{shapes}</g></svg>"#
-            );
-            let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
-            self.trees.insert(key, tree);
+        match self.trees.entry(key) {
+            Entry::Occupied(entry) => Some(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                let color = format!("#{:02x}{:02x}{:02x}", rgba.red(), rgba.green(), rgba.blue());
+                let opacity = f32::from(rgba.alpha()) / 255.0;
+                let look = if solid {
+                    format!(r#"fill="{color}" stroke="none" opacity="{opacity:.3}""#)
+                } else {
+                    format!(
+                        r#"fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="{opacity:.3}""#
+                    )
+                };
+                let shapes = icon.shapes();
+                let svg = format!(
+                    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><g {look}>{shapes}</g></svg>"#
+                );
+                let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
+                Some(entry.insert(tree))
+            }
         }
-        self.trees.get(&key)
     }
 
     pub fn draw(

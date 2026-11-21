@@ -132,6 +132,9 @@ pub enum Asked {
     Jump {
         ahead: usize,
     },
+    Autoplay {
+        on: bool,
+    },
 }
 
 pub fn asked(message: &str) -> Option<Asked> {
@@ -670,18 +673,29 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
             send(Command::SetRepeat(mode))
         }
         Asked::Jump { ahead } if (1..=MOST_UP_NEXT).contains(&ahead) => send(Command::Jump(ahead)),
+        Asked::Autoplay { on } => {
+            let state = app.state::<AppState>();
+            if state.config().autoplay != on {
+                state.update(|config| config.autoplay = on);
+            }
+            return;
+        }
         _ => {}
     }
     report_soon(app);
 }
 
-pub fn change_key(snapshot: Option<&Snapshot>) -> Option<(String, bool, String, i64)> {
+pub fn change_key(snapshot: Option<&Snapshot>) -> Option<(String, bool, String, i64, Vec<String>)> {
     snapshot.map(|now| {
         (
             now.track.track_id.clone(),
             now.playing,
             now.repeat.clone(),
             (now.volume * 100.0).round() as i64,
+            now.up_next
+                .iter()
+                .map(|next| next.track_id.clone())
+                .collect(),
         )
     })
 }
@@ -727,11 +741,62 @@ async fn find_album(app: AppHandle, track_id: String) {
     }
 }
 
+const REFILL_BELOW: usize = 3;
+
+#[derive(Deserialize)]
+struct RadioSongs {
+    #[serde(default)]
+    songs: Vec<Track>,
+}
+
+pub fn needs_more(snapshot: &Snapshot, autoplay: bool) -> bool {
+    autoplay && snapshot.repeat == "off" && snapshot.up_next.len() < REFILL_BELOW
+}
+
+pub fn radio_body(snapshot: &Snapshot) -> Value {
+    let exclude: Vec<&str> = std::iter::once(&snapshot.track)
+        .chain(snapshot.up_next.iter())
+        .filter_map(|track| track.song_id.as_deref())
+        .collect();
+    json!({ "trackId": snapshot.track.track_id, "exclude": exclude })
+}
+
+async fn keep_going(app: AppHandle, body: Value) {
+    let Some((server, token)) = crate::server::credentials(&app) else {
+        return;
+    };
+    let Ok(address) = crate::server::address(&server, "/api/radio") else {
+        return;
+    };
+    let request = crate::server::client().post(address).json(&body);
+    let Ok(response) = crate::server::answer(request, &token).await else {
+        return;
+    };
+    let Ok(found) = response.json::<RadioSongs>().await else {
+        return;
+    };
+    for track in found.songs {
+        with_player(&app, |player| {
+            player.send(Command::Enqueue(Box::new(track), false))
+        });
+    }
+}
+
 pub async fn run(app: AppHandle) {
     let mut since_heartbeat = HEARTBEAT;
     let mut told = None;
     let mut asked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut refilled_after: Option<String> = None;
     loop {
+        let autoplay = app.state::<AppState>().config().autoplay;
+        let low = settled(&app)
+            .flatten()
+            .filter(|now| needs_more(now, autoplay))
+            .filter(|now| refilled_after.as_deref() != Some(now.track.track_id.as_str()));
+        if let Some(now) = low {
+            refilled_after = Some(now.track.track_id.clone());
+            async_runtime::spawn(keep_going(app.clone(), radio_body(&now)));
+        }
         let missing = settled(&app)
             .flatten()
             .filter(|now| now.track.album.is_none())
@@ -771,6 +836,27 @@ mod tests {
             gain: None,
             duration: Some(200.0),
         }
+    }
+
+    #[test]
+    fn asks_for_more_songs_only_near_the_end_with_autoplay_on() {
+        let snapshot = |left: usize, repeat: &str| Snapshot {
+            track: track("now"),
+            playing: true,
+            time: 10.0,
+            duration: Some(200.0),
+            volume: 0.8,
+            repeat: repeat.into(),
+            up_next: (0..left).map(|at| track(&format!("next{at}"))).collect(),
+        };
+        assert!(needs_more(&snapshot(0, "off"), true));
+        assert!(needs_more(&snapshot(2, "off"), true));
+        assert!(!needs_more(&snapshot(3, "off"), true));
+        assert!(!needs_more(&snapshot(0, "off"), false));
+        assert!(!needs_more(&snapshot(0, "all"), true));
+        let body = radio_body(&snapshot(2, "off"));
+        assert_eq!(body["trackId"], "now");
+        assert_eq!(body["exclude"], json!(["nd-now", "nd-next0", "nd-next1"]));
     }
 
     #[test]

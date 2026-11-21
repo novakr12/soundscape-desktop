@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.10.16" date="2026-11-21">
+      <description>
+        <ul>
+          <li>Tighter security across the app: messages from the window are only accepted from your Soundscape server, the built-in player's local relay validates requests strictly and shuts down cleanly, and dialogs escape text safely</li>
+          <li>File pickers and dialogs fall back to kdialog when zenity isn't installed</li>
+          <li>More reliable scrobbling, Discord Rich Presence, live playback updates, autostart setup and window reopening, with race conditions and retry bugs fixed</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.15" date="2026-11-21">
       <description>
         <ul>

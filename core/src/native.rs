@@ -58,6 +58,8 @@ pub struct Handover {
     pub repeat: String,
     #[serde(default)]
     pub crossfade: f64,
+    #[serde(default)]
+    pub shuffle: bool,
 }
 
 const SEEK_ARRIVED: f64 = 1.0;
@@ -191,6 +193,7 @@ pub enum Command {
     SeekTo(f64),
     Repeat,
     SetRepeat(String),
+    Shuffle(Option<bool>),
     Volume(f64),
     Enqueue(Box<Track>, bool),
     Album(String, String),
@@ -213,6 +216,7 @@ pub struct Snapshot {
     pub duration: Option<f64>,
     pub volume: f64,
     pub repeat: String,
+    pub shuffle: bool,
     pub up_next: Vec<Track>,
 }
 
@@ -222,6 +226,40 @@ pub fn insert_at(at: usize, length: usize, next: bool) -> usize {
     } else {
         length
     }
+}
+
+pub fn shuffle_tracks(tracks: &mut [Track], seed: u64) {
+    let mut state = seed | 1;
+    for i in (1..tracks.len()).rev() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let j = (state % (i as u64 + 1)) as usize;
+        tracks.swap(i, j);
+    }
+}
+
+pub fn restore_order(original: &[Track], upcoming: Vec<Track>) -> Vec<Track> {
+    let mut left: Vec<Option<Track>> = upcoming.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(left.len());
+    for wanted in original {
+        let found = left.iter_mut().find(|slot| {
+            slot.as_ref().is_some_and(|track| {
+                track.track_id == wanted.track_id && track.song_id == wanted.song_id
+            })
+        });
+        if let Some(track) = found.and_then(Option::take) {
+            out.push(track);
+        }
+    }
+    out.extend(left.into_iter().flatten());
+    out
+}
+
+fn seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(1, |since| since.as_nanos() as u64)
 }
 
 pub fn shifted(coming: Option<usize>, inserted: usize) -> Option<usize> {
@@ -239,6 +277,7 @@ pub fn command_for(action: &str, seconds: f64) -> Option<Command> {
         "seek" => Command::SeekBy(seconds),
         "position" => Command::SeekTo(seconds),
         "repeat" => Command::Repeat,
+        "shuffle" => Command::Shuffle(None),
         _ => return None,
     })
 }
@@ -248,6 +287,28 @@ struct Queue {
     at: usize,
     repeat: String,
     coming: Option<usize>,
+    unshuffled: Option<Vec<Track>>,
+}
+
+impl Queue {
+    fn shuffle_from(&self) -> usize {
+        self.coming.unwrap_or(self.at).max(self.at) + 1
+    }
+
+    fn set_shuffle(&mut self, on: bool) {
+        let from = self.shuffle_from().min(self.tracks.len());
+        match (on, self.unshuffled.take()) {
+            (true, None) => {
+                self.unshuffled = Some(self.tracks[from..].to_vec());
+                shuffle_tracks(&mut self.tracks[from..], seed());
+            }
+            (false, Some(original)) => {
+                let upcoming = self.tracks.split_off(from);
+                self.tracks.extend(restore_order(&original, upcoming));
+            }
+            (_, kept) => self.unshuffled = kept,
+        }
+    }
 }
 
 struct Shown {
@@ -653,6 +714,7 @@ impl Engine {
                 | Command::Settings { .. }
                 | Command::FadeTo(..)
                 | Command::SetRepeat(_)
+                | Command::Shuffle(_)
                 | Command::Album(..)
         ) {
             self.drop_outgoing();
@@ -680,6 +742,11 @@ impl Engine {
             Command::SetRepeat(mode) => {
                 self.queue.lock().expect("queue lock").repeat = mode;
             }
+            Command::Shuffle(on) => {
+                let mut queue = self.queue.lock().expect("queue lock");
+                let on = on.unwrap_or(queue.unshuffled.is_none());
+                queue.set_shuffle(on);
+            }
             Command::Volume(volume) => {
                 self.volume = volume.clamp(0.0, 1.0);
                 self.muted = false;
@@ -696,6 +763,13 @@ impl Engine {
             Command::Enqueue(track, next) => {
                 let mut queue = self.queue.lock().expect("queue lock");
                 let at = insert_at(queue.at, queue.tracks.len(), next);
+                if let Some(original) = queue.unshuffled.as_mut() {
+                    if next {
+                        original.insert(0, (*track).clone());
+                    } else {
+                        original.push((*track).clone());
+                    }
+                }
                 queue.tracks.insert(at, *track);
                 queue.coming = shifted(queue.coming, at);
             }
@@ -868,7 +942,7 @@ impl Engine {
             )
             .is_some(),
             has_previous: true,
-            shuffle: None,
+            shuffle: Some(queue.unshuffled.is_some()),
             repeat: Some(queue.repeat.clone()),
             up_next: next.map(|track| UpNext {
                 title: track.title.clone(),
@@ -887,6 +961,7 @@ impl Engine {
             duration: self.stream_length().or(track.duration),
             volume: self.volume,
             repeat: queue.repeat.clone(),
+            shuffle: queue.unshuffled.is_some(),
             up_next: queue
                 .tracks
                 .iter()
@@ -918,12 +993,17 @@ pub fn start(
     gst::init().map_err(|error| error.to_string())?;
     let relay = Relay::start(server.clone(), token)?;
 
-    let queue = Arc::new(Mutex::new(Queue {
+    let mut first = Queue {
         tracks: handover.tracks.clone(),
         at: handover.position,
         repeat: handover.repeat.clone(),
         coming: None,
-    }));
+        unshuffled: None,
+    };
+    if handover.shuffle {
+        first.set_shuffle(true);
+    }
+    let queue = Arc::new(Mutex::new(first));
     let (playbin, active) = make_playbin(&queue, &relay)?;
 
     let shown = Arc::new(Mutex::new(Shown {
@@ -1117,7 +1197,76 @@ mod tests {
         assert!(matches!(command_for("toggle", 0.0), Some(Command::Toggle)));
         assert!(matches!(command_for("seek", 5.0), Some(Command::SeekBy(s)) if s == 5.0));
         assert!(matches!(command_for("position", 30.0), Some(Command::SeekTo(s)) if s == 30.0));
-        assert!(command_for("shuffle", 0.0).is_none());
+        assert!(matches!(
+            command_for("shuffle", 0.0),
+            Some(Command::Shuffle(None))
+        ));
+    }
+
+    fn named(ids: &[&str]) -> Vec<Track> {
+        ids.iter()
+            .map(|id| Track {
+                track_id: (*id).into(),
+                song_id: Some(format!("nd-{id}")),
+                title: (*id).into(),
+                artist: "Band".into(),
+                album: None,
+                cover: None,
+                gain: None,
+                duration: None,
+            })
+            .collect()
+    }
+
+    fn ids(tracks: &[Track]) -> Vec<&str> {
+        tracks.iter().map(|track| track.track_id.as_str()).collect()
+    }
+
+    #[test]
+    fn shuffles_only_what_is_still_to_come_and_puts_it_back() {
+        let mut queue = Queue {
+            tracks: named(&["a", "b", "c", "d", "e", "f", "g", "h"]),
+            at: 1,
+            repeat: "off".into(),
+            coming: None,
+            unshuffled: None,
+        };
+        queue.set_shuffle(true);
+        assert_eq!(ids(&queue.tracks[..2]), ["a", "b"]);
+        let mut rest: Vec<&str> = ids(&queue.tracks[2..]);
+        assert_ne!(rest, ["c", "d", "e", "f", "g", "h"]);
+        rest.sort();
+        assert_eq!(rest, ["c", "d", "e", "f", "g", "h"]);
+        queue.at = 3;
+        let playing = queue.tracks[3].track_id.clone();
+        queue.set_shuffle(false);
+        assert!(queue.unshuffled.is_none());
+        assert_eq!(queue.tracks[3].track_id, playing);
+        let after = ids(&queue.tracks[4..]);
+        let mut sorted = after.clone();
+        sorted.sort();
+        assert_eq!(after, sorted);
+        assert_eq!(queue.tracks.len(), 8);
+    }
+
+    #[test]
+    fn keeps_the_song_already_lined_up_next() {
+        let mut queue = Queue {
+            tracks: named(&["a", "b", "c", "d", "e"]),
+            at: 0,
+            repeat: "off".into(),
+            coming: Some(1),
+            unshuffled: None,
+        };
+        queue.set_shuffle(true);
+        assert_eq!(ids(&queue.tracks[..2]), ["a", "b"]);
+    }
+
+    #[test]
+    fn puts_songs_back_in_order_with_new_ones_last() {
+        let original = named(&["c", "d", "e"]);
+        let upcoming = named(&["x", "e", "c"]);
+        assert_eq!(ids(&restore_order(&original, upcoming)), ["c", "e", "x"]);
     }
 
     #[test]

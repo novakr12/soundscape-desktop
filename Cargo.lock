@@ -8066,7 +8066,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-core"
-version = "0.10.14"
+version = "0.10.15"
 dependencies = [
  "futures-util",
  "gethostname",
@@ -8084,7 +8084,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-desktop"
-version = "0.10.14"
+version = "0.10.15"
 dependencies = [
  "ab_glyph",
  "euclid",

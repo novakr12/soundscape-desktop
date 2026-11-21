@@ -5,6 +5,7 @@ use crate::{AppState, MAIN};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
@@ -77,6 +78,7 @@ impl Settings {
 }
 
 static SETTINGS: Mutex<Settings> = Mutex::new(Settings::DEFAULT);
+static SHUFFLE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Deserialize)]
 struct Carried {
@@ -166,7 +168,7 @@ pub fn preview(app: &AppHandle) -> Option<Preview> {
 
 pub fn control(app: &AppHandle, action: &str, seconds: f64) -> bool {
     let Some(command) = native::command_for(action, seconds) else {
-        return active(app) && matches!(action, "shuffle");
+        return false;
     };
     let sent = with_player(app, |player| player.send(command)).is_some();
     if sent {
@@ -293,6 +295,7 @@ pub fn report_json(id: &str, name: &str, snapshot: Option<&Snapshot>, volume: f6
             "volume": now.volume.clamp(0.0, 1.0),
             "blocked": false,
             "repeat": REPEAT_MODES.contains(&now.repeat.as_str()).then_some(now.repeat.as_str()),
+            "shuffle": now.shuffle,
             "upNext": now
                 .up_next
                 .iter()
@@ -308,6 +311,7 @@ pub fn report_json(id: &str, name: &str, snapshot: Option<&Snapshot>, volume: f6
             "volume": volume.clamp(0.0, 1.0),
             "blocked": false,
             "repeat": null,
+            "shuffle": null,
             "upNext": [],
         }),
     };
@@ -553,9 +557,11 @@ fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playin
     let Some((server, token)) = crate::server::credentials(app) else {
         return;
     };
-    let repeat = with_player(app, Player::snapshot)
-        .flatten()
-        .map_or_else(|| "off".to_string(), |now| now.repeat);
+    let before = with_player(app, Player::snapshot).flatten();
+    let repeat = before
+        .as_ref()
+        .map_or_else(|| "off".to_string(), |now| now.repeat.clone());
+    let shuffle = before.is_some_and(|now| now.shuffle) || SHUFFLE.load(Ordering::Relaxed);
     let handover = Handover {
         tracks,
         position,
@@ -566,6 +572,7 @@ fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playin
         levelling: settings().levelling,
         repeat,
         crossfade: settings().crossfade,
+        shuffle,
     };
     let state = app.state::<AppState>();
     let mut current = state.native.lock().expect("native lock");
@@ -673,6 +680,10 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
         Asked::Repeat { mode } if REPEAT_MODES.contains(&mode.as_str()) => {
             send(Command::SetRepeat(mode))
         }
+        Asked::Shuffle { on } => {
+            SHUFFLE.store(on, Ordering::Relaxed);
+            send(Command::Shuffle(Some(on)));
+        }
         Asked::Jump { ahead } if (1..=MOST_UP_NEXT).contains(&ahead) => send(Command::Jump(ahead)),
         Asked::Autoplay { on } => {
             let state = app.state::<AppState>();
@@ -691,7 +702,11 @@ pub fn change_key(snapshot: Option<&Snapshot>) -> Option<(String, bool, String, 
         (
             now.track.track_id.clone(),
             now.playing,
-            now.repeat.clone(),
+            format!(
+                "{}{}",
+                now.repeat,
+                if now.shuffle { "+shuffle" } else { "" }
+            ),
             (now.volume * 100.0).round() as i64,
             now.up_next
                 .iter()
@@ -875,6 +890,7 @@ mod tests {
             duration: Some(200.0),
             volume: 0.8,
             repeat: repeat.into(),
+            shuffle: false,
             up_next: (0..left).map(|at| track(&format!("next{at}"))).collect(),
         };
         assert!(needs_more(&snapshot(0, "off"), true));
@@ -955,6 +971,7 @@ mod tests {
             duration: Some(200.0),
             volume: 0.6,
             repeat: "all".into(),
+            shuffle: true,
             up_next: vec![track("b")],
         };
         let report: Value =
@@ -965,6 +982,7 @@ mod tests {
         assert_eq!(report["state"]["track"]["songId"], "nd-a");
         assert_eq!(report["state"]["upNext"][0]["title"], "Song b");
         assert_eq!(report["state"]["repeat"], "all");
+        assert_eq!(report["state"]["shuffle"], true);
         let idle: Value =
             serde_json::from_str(&report_json("abcdefgh12", "Desktop app", None, 0.5)).unwrap();
         assert_eq!(idle["state"]["track"], Value::Null);
@@ -1016,6 +1034,7 @@ mod tests {
             duration: Some(200.0),
             volume: 0.6,
             repeat: "off".into(),
+            shuffle: false,
             up_next: Vec::new(),
         };
         let later = Snapshot {
@@ -1028,6 +1047,11 @@ mod tests {
             ..now.clone()
         };
         assert_ne!(change_key(Some(&now)), change_key(Some(&paused)));
+        let shuffled = Snapshot {
+            shuffle: true,
+            ..now.clone()
+        };
+        assert_ne!(change_key(Some(&now)), change_key(Some(&shuffled)));
         assert_ne!(change_key(Some(&now)), change_key(None));
     }
 

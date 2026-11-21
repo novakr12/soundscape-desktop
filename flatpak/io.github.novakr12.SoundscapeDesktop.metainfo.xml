@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.10.15" date="2026-11-21">
+      <description>
+        <ul>
+          <li>Shuffle works in the built-in player, from the player bar and the mini player (needs an up-to-date Soundscape server)</li>
+          <li>Turning shuffle off puts the songs still to come back in their original order</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.14" date="2026-11-21">
       <description>
         <ul>

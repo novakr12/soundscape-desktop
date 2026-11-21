@@ -4,6 +4,7 @@ use crate::native::{self, Command, Handover, Player, Snapshot, Track};
 use crate::{AppState, MAIN};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
@@ -741,6 +742,7 @@ async fn find_album(app: AppHandle, track_id: String) {
     }
 }
 
+const RADIO_REMEMBERS: usize = 300;
 const REFILL_BELOW: usize = 3;
 
 #[derive(Deserialize)]
@@ -753,12 +755,34 @@ pub fn needs_more(snapshot: &Snapshot, autoplay: bool) -> bool {
     autoplay && snapshot.repeat == "off" && snapshot.up_next.len() < REFILL_BELOW
 }
 
-pub fn radio_body(snapshot: &Snapshot) -> Value {
-    let exclude: Vec<&str> = std::iter::once(&snapshot.track)
-        .chain(snapshot.up_next.iter())
+pub fn radio_body(snapshot: &Snapshot, played: &VecDeque<String>) -> Value {
+    let queued = || std::iter::once(&snapshot.track).chain(snapshot.up_next.iter());
+    let exclude: Vec<&str> = queued()
         .filter_map(|track| track.song_id.as_deref())
         .collect();
-    json!({ "trackId": snapshot.track.track_id, "exclude": exclude })
+    let skip_tracks: Vec<&str> = played
+        .iter()
+        .map(String::as_str)
+        .chain(queued().map(|track| track.track_id.as_str()))
+        .collect();
+    json!({
+        "trackId": snapshot.track.track_id,
+        "artist": snapshot.track.artist,
+        "title": snapshot.track.title,
+        "continuing": true,
+        "exclude": exclude,
+        "skipTracks": skip_tracks,
+    })
+}
+
+fn remember_played(played: &mut VecDeque<String>, track_id: &str) {
+    if played.back().map(String::as_str) == Some(track_id) {
+        return;
+    }
+    played.push_back(track_id.to_string());
+    while played.len() > RADIO_REMEMBERS {
+        played.pop_front();
+    }
 }
 
 async fn keep_going(app: AppHandle, body: Value) {
@@ -787,15 +811,19 @@ pub async fn run(app: AppHandle) {
     let mut told = None;
     let mut asked: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut refilled_after: Option<String> = None;
+    let mut played: VecDeque<String> = VecDeque::new();
     loop {
         let autoplay = app.state::<AppState>().config().autoplay;
+        if let Some(now) = settled(&app).flatten() {
+            remember_played(&mut played, &now.track.track_id);
+        }
         let low = settled(&app)
             .flatten()
             .filter(|now| needs_more(now, autoplay))
             .filter(|now| refilled_after.as_deref() != Some(now.track.track_id.as_str()));
         if let Some(now) = low {
             refilled_after = Some(now.track.track_id.clone());
-            async_runtime::spawn(keep_going(app.clone(), radio_body(&now)));
+            async_runtime::spawn(keep_going(app.clone(), radio_body(&now, &played)));
         }
         let missing = settled(&app)
             .flatten()
@@ -854,9 +882,18 @@ mod tests {
         assert!(!needs_more(&snapshot(3, "off"), true));
         assert!(!needs_more(&snapshot(0, "off"), false));
         assert!(!needs_more(&snapshot(0, "all"), true));
-        let body = radio_body(&snapshot(2, "off"));
+        let mut played = VecDeque::new();
+        remember_played(&mut played, "earlier");
+        remember_played(&mut played, "now");
+        remember_played(&mut played, "now");
+        let body = radio_body(&snapshot(2, "off"), &played);
         assert_eq!(body["trackId"], "now");
+        assert_eq!(body["continuing"], true);
         assert_eq!(body["exclude"], json!(["nd-now", "nd-next0", "nd-next1"]));
+        assert_eq!(
+            body["skipTracks"],
+            json!(["earlier", "now", "now", "next0", "next1"])
+        );
     }
 
     #[test]

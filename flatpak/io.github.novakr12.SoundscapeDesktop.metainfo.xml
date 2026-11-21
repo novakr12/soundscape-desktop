@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.10.14" date="2026-11-21">
+      <description>
+        <ul>
+          <li>Keep playing similar music no longer stops after a few songs you hadn't played before</li>
+          <li>The radio no longer adds the song that's playing, or songs already in the queue, a second time</li>
+          <li>Picks are based on artists that sound alike, from ListenBrainz and Deezer (needs an up-to-date Soundscape server)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.13" date="2026-11-21">
       <description>
         <ul>

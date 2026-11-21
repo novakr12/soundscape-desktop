@@ -1,6 +1,7 @@
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::OnceLock;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use url::Url;
 
@@ -8,17 +9,57 @@ const LONGEST_HEAD: usize = 16 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Relay {
+    inner: Arc<RelayInner>,
+}
+
+#[derive(Debug)]
+struct RelayInner {
     port: u16,
     secret: String,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for RelayInner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+        let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(100));
+    }
 }
 
 fn new_secret() -> Result<String, String> {
-    use std::io::Read;
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut bytes))
         .map_err(|error| error.to_string())?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hi = hex_value(*bytes.get(i + 1)?)?;
+            let lo = hex_value(*bytes.get(i + 2)?)?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -43,9 +84,13 @@ pub fn parse_head(head: &str, secret: &str) -> Option<Asked> {
     if kind != "full-song" && kind != "listen" {
         return None;
     }
-    let id = parts
+    let raw_id = parts
         .next()
         .filter(|id| !id.is_empty() && !id.contains('/'))?;
+    let id = percent_decode(raw_id)?;
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id == "." || id == ".." {
+        return None;
+    }
     let range = lines.find_map(|line| {
         let (name, value) = line.split_once(':')?;
         name.trim()
@@ -54,7 +99,7 @@ pub fn parse_head(head: &str, secret: &str) -> Option<Asked> {
     });
     Some(Asked {
         kind: kind.to_string(),
-        id: id.to_string(),
+        id,
         range,
     })
 }
@@ -63,7 +108,10 @@ pub fn content_range(value: &str) -> Option<(u64, u64, u64)> {
     let rest = value.trim().strip_prefix("bytes ")?;
     let (span, total) = rest.split_once('/')?;
     let (start, end) = span.split_once('-')?;
-    Some((start.parse().ok()?, end.parse().ok()?, total.parse().ok()?))
+    let start: u64 = start.parse().ok()?;
+    let end: u64 = end.parse().ok()?;
+    let total: u64 = total.parse().ok()?;
+    (start <= end).then_some((start, end, total))
 }
 
 pub fn response_head(status: u16, kind: &str, range: Option<&str>, length: Option<u64>) -> String {
@@ -77,7 +125,7 @@ pub fn response_head(status: u16, kind: &str, range: Option<&str>, length: Optio
     let mut head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {kind}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n");
     let length = range
         .and_then(content_range)
-        .map(|(start, end, _)| end + 1 - start)
+        .and_then(|(start, end, _)| end.checked_sub(start)?.checked_add(1))
         .or(length);
     if let Some(range) = range {
         head.push_str(&format!("Content-Range: {range}\r\n"));
@@ -104,14 +152,17 @@ fn client() -> reqwest::Client {
 }
 
 fn read_head(stream: &mut TcpStream) -> Option<String> {
-    let mut reader = BufReader::new(stream.try_clone().ok()?);
+    let mut reader = BufReader::new(stream.try_clone().ok()?.take(LONGEST_HEAD as u64 + 1));
     let mut head = String::new();
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).ok()? == 0 || head.len() > LONGEST_HEAD {
+        if reader.read_line(&mut line).ok()? == 0 {
             return None;
         }
         head.push_str(&line);
+        if head.len() > LONGEST_HEAD {
+            return None;
+        }
         if line == "\r\n" || line == "\n" {
             return Some(head.replace("\r\n", "\n").replace('\n', "\r\n"));
         }
@@ -189,10 +240,15 @@ impl Relay {
             .local_addr()
             .map_err(|error| error.to_string())?
             .port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
         std::thread::Builder::new()
             .name("soundscape-relay".into())
             .spawn(move || {
                 for stream in listener.incoming().flatten() {
+                    if stopped.load(Ordering::Acquire) {
+                        break;
+                    }
                     let server = server.clone();
                     let token = token.clone();
                     let secret = expected.clone();
@@ -202,16 +258,18 @@ impl Relay {
                 }
             })
             .map_err(|error| error.to_string())?;
-        Ok(Relay { port, secret })
+        Ok(Relay {
+            inner: Arc::new(RelayInner { port, secret, stop }),
+        })
     }
 
     pub fn address(&self, kind: &str, id: &str) -> Option<Url> {
-        let mut url = Url::parse(&format!("http://127.0.0.1:{}/", self.port)).ok()?;
+        let mut url = Url::parse(&format!("http://127.0.0.1:{}/", self.inner.port)).ok()?;
         url.path_segments_mut()
             .ok()?
             .clear()
             .push("s")
-            .push(&self.secret)
+            .push(&self.inner.secret)
             .push(kind)
             .push(id);
         Some(url)
@@ -265,17 +323,58 @@ mod tests {
     }
 
     #[test]
+    fn decodes_song_ids_once_and_rejects_separators() {
+        let server = Url::parse("https://music.example/").unwrap();
+        let relay = Relay::start(server.clone(), "t".into()).unwrap();
+        let address = relay.address("listen", "band-a b%20c#1?x").unwrap();
+        let head = format!("GET {} HTTP/1.1\r\n\r\n", address.path());
+        let asked = parse_head(&head, &relay.inner.secret).unwrap();
+        assert_eq!(asked.id, "band-a b%20c#1?x");
+        let mut target = server.join("/").unwrap();
+        target
+            .path_segments_mut()
+            .unwrap()
+            .clear()
+            .push("api")
+            .push(&asked.kind)
+            .push(&asked.id);
+        assert_eq!(
+            target.as_str(),
+            "https://music.example/api/listen/band-a%20b%2520c%231%3Fx"
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/full-song/a%2Fb HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/full-song/a%5Cb HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/full-song/%2e%2e HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/full-song/%ZZ HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+    }
+
+    #[test]
     fn tells_the_player_how_long_the_song_is() {
         assert_eq!(
             content_range("bytes 0-482732/482733"),
             Some((0, 482_732, 482_733))
         );
         assert_eq!(content_range("bytes */100"), None);
+        assert_eq!(content_range("bytes 200-100/1000"), None);
         let head = response_head(206, "audio/mpeg", Some("bytes 100-199/1000"), None);
         assert!(head.starts_with("HTTP/1.1 206 Partial Content\r\n"));
         assert!(head.contains("Content-Length: 100\r\n"));
         assert!(head.contains("Content-Range: bytes 100-199/1000\r\n"));
         assert!(head.contains("Accept-Ranges: bytes\r\n"));
+        let bad = response_head(206, "audio/mpeg", Some("bytes 200-100/1000"), None);
+        assert!(!bad.contains("Content-Length"));
         let plain = response_head(200, "audio/mpeg", None, Some(5000));
         assert!(plain.contains("Content-Length: 5000\r\n"));
         assert!(!plain.contains("Content-Range"));

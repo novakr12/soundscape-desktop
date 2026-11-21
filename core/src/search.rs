@@ -94,6 +94,8 @@ async fn fetch(server: &Url, token: &str, text: &str) -> Result<Vec<Hit>, Failur
         .map(hits)
 }
 
+const MAX_FOUND: usize = 500;
+
 #[derive(Clone)]
 struct Search {
     app: AppHandle,
@@ -115,6 +117,9 @@ impl Search {
                 .and_then(Result::ok)
                 .unwrap_or_default();
         let mut known = self.found.lock().expect("search lock");
+        if known.len() + found.len() > MAX_FOUND {
+            known.clear();
+        }
         for hit in &found {
             known.insert(hit.id.clone(), hit.clone());
         }

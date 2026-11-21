@@ -96,6 +96,7 @@ pub fn view(app: &AppHandle) -> SettingsView {
     let state = app.state::<AppState>();
     let config = state.config();
     let status = state.status();
+    let running = app.host().running();
     SettingsView {
         server: config
             .server
@@ -113,9 +114,9 @@ pub fn view(app: &AppHandle) -> SettingsView {
         discord: config.discord,
         native_player: config.native_player,
         cpu_rendering: config.cpu_rendering,
-        cpu_rendering_now: crate::rendering::active(),
+        cpu_rendering_now: running.cpu_rendering,
         faster_scripts: config.faster_scripts,
-        faster_scripts_now: crate::rendering::faster_scripts(),
+        faster_scripts_now: running.faster_scripts,
         memory_limit: config.memory_limit.unwrap_or(crate::MEMORY_LIMIT_MB),
         keep_window: crate::allowed_keep_window(
             config.keep_window.unwrap_or(crate::KEEP_WINDOW_SECONDS),
@@ -158,10 +159,6 @@ pub fn view(app: &AppHandle) -> SettingsView {
         version: crate::updates::CURRENT.to_string(),
         update: state.update_available(),
     }
-}
-
-pub fn get_settings(app: AppHandle) -> SettingsView {
-    view(&app)
 }
 
 pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<SettingsView, String> {
@@ -289,30 +286,6 @@ pub async fn test_notification(app: AppHandle) -> Result<(), String> {
     )
     .await
     .map_err(|error| format!("Your desktop didn't show the notification: {error}"))
-}
-
-pub fn settings_action(app: AppHandle, action: String) {
-    match action.as_str() {
-        "change-server" => {
-            let _ = crate::open_setup(&app);
-        }
-        "sign-out" => crate::sign_out(&app),
-        "connect" => crate::connect_app(&app),
-        "open" => crate::show(&app),
-        "pause" => crate::toggle_pause(&app),
-        "download" => crate::updates::open_downloads(&app),
-        "restart" => app.restart(),
-        "web-settings" => {
-            if let Some(page) = app
-                .state::<AppState>()
-                .server()
-                .and_then(|server| server.join("/settings").ok())
-            {
-                let _ = crate::open_main(&app, page);
-            }
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]

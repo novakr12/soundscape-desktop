@@ -3,8 +3,13 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 pub const MAX_WAITING: usize = 20_000;
+
+static LOCK: Mutex<()> = Mutex::new(());
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub struct Queue {
     path: PathBuf,
@@ -17,7 +22,7 @@ impl Queue {
         }
     }
 
-    pub fn all(&self) -> Vec<Listen> {
+    fn read_all(&self) -> Vec<Listen> {
         fs::read_to_string(&self.path)
             .map(|text| {
                 text.lines()
@@ -25,6 +30,11 @@ impl Queue {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    pub fn all(&self) -> Vec<Listen> {
+        let _guard = LOCK.lock().expect("queue lock");
+        self.read_all()
     }
 
     pub fn len(&self) -> usize {
@@ -35,7 +45,7 @@ impl Queue {
         self.len() == 0
     }
 
-    fn write(&self, listens: &[Listen]) -> std::io::Result<()> {
+    fn write_locked(&self, listens: &[Listen]) -> std::io::Result<()> {
         if listens.is_empty() {
             return match fs::remove_file(&self.path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
@@ -45,34 +55,46 @@ impl Queue {
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
         }
-        let temporary = self.path.with_extension("jsonl.new");
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        for listen in listens {
-            writeln!(file, "{}", serde_json::to_string(listen)?)?;
+        let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let temporary = self
+            .path
+            .with_extension(format!("jsonl.new.{}.{seq}", std::process::id()));
+        let written = (|| -> std::io::Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&temporary)?;
+            for listen in listens {
+                writeln!(file, "{}", serde_json::to_string(listen)?)?;
+            }
+            file.sync_all()?;
+            fs::rename(&temporary, &self.path)
+        })();
+        if written.is_err() {
+            let _ = fs::remove_file(&temporary);
         }
-        file.sync_all()?;
-        fs::rename(temporary, &self.path)
+        written
     }
 
     pub fn push(&self, listen: Listen) -> std::io::Result<()> {
-        let mut listens = self.all();
+        let _guard = LOCK.lock().expect("queue lock");
+        let mut listens = self.read_all();
         listens.push(listen);
         let extra = listens.len().saturating_sub(MAX_WAITING);
-        self.write(&listens[extra..])
+        self.write_locked(&listens[extra..])
     }
 
     pub fn first(&self, count: usize) -> Vec<Listen> {
-        self.all().into_iter().take(count).collect()
+        let _guard = LOCK.lock().expect("queue lock");
+        self.read_all().into_iter().take(count).collect()
     }
 
     pub fn drop_first(&self, count: usize) -> std::io::Result<()> {
-        let listens = self.all();
-        self.write(&listens[count.min(listens.len())..])
+        let _guard = LOCK.lock().expect("queue lock");
+        let listens = self.read_all();
+        self.write_locked(&listens[count.min(listens.len())..])
     }
 }
 

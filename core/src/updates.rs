@@ -58,10 +58,6 @@ pub fn should_tell(available: &str, enabled: bool, told: Option<&str>) -> bool {
     enabled && told != Some(available)
 }
 
-pub fn version_text(current: &str) -> String {
-    format!("Soundscape Desktop {current}")
-}
-
 pub fn menu_text(version: &str) -> String {
     format!("Download Soundscape Desktop {version}…")
 }
@@ -170,11 +166,6 @@ mod tests {
         assert!(should_tell("0.7.1", true, Some("0.7.0")));
         assert!(!should_tell("0.7.0", true, Some("0.7.0")));
         assert!(!should_tell("0.7.0", false, None));
-    }
-
-    #[test]
-    fn names_the_version_running() {
-        assert_eq!(version_text("0.9.6"), "Soundscape Desktop 0.9.6");
     }
 
     #[test]

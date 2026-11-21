@@ -60,6 +60,14 @@ pub fn listening(found: &[Player], allowed: impl Fn(&str) -> bool) -> Option<(Tr
 
 static SENDING: AtomicBool = AtomicBool::new(false);
 
+struct SendingGuard;
+
+impl Drop for SendingGuard {
+    fn drop(&mut self) {
+        SENDING.store(false, Ordering::Release);
+    }
+}
+
 pub async fn send_waiting(app: &AppHandle) -> Result<usize, Failure> {
     let state = app.state::<AppState>();
     let queue = Queue::new(&state.dir);
@@ -68,29 +76,33 @@ pub async fn send_waiting(app: &AppHandle) -> Result<usize, Failure> {
         config.server.as_deref().and_then(|s| Url::parse(s).ok()),
         config.token,
     ) else {
-        return Ok(queue.len());
+        return Ok(0);
     };
     if SENDING.swap(true, Ordering::AcqRel) {
-        return Ok(queue.len());
+        return Ok(0);
     }
-    let result = loop {
+    let _guard = SendingGuard;
+    let mut sent = 0usize;
+    loop {
         let batch = queue.first(BATCH);
         if batch.is_empty() {
-            break Ok(0);
+            return Ok(sent);
         }
         match submit::listens(&server, &token, &batch).await {
-            Ok(()) | Err(Failure::Refused(_)) => {
+            Ok(()) => {
+                sent += batch.len();
+                let _ = queue.drop_first(batch.len());
+            }
+            Err(Failure::Refused(_)) => {
                 let _ = queue.drop_first(batch.len());
             }
             Err(Failure::SignedOut) => {
                 state.set_signed_out(true);
-                break Err(Failure::SignedOut);
+                return Err(Failure::SignedOut);
             }
-            Err(Failure::Offline) => break Err(Failure::Offline),
+            Err(Failure::Offline) => return Err(Failure::Offline),
         }
-    };
-    SENDING.store(false, Ordering::Release);
-    result
+    }
 }
 
 pub fn focus(

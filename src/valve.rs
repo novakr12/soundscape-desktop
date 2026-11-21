@@ -1,10 +1,21 @@
 use std::time::Duration;
 
 pub const SETTLE: Duration = Duration::from_secs(60);
-const PAGE_BYTES: u64 = 4096;
+const DEFAULT_PAGE_BYTES: u64 = 4096;
 pub const PARK_AFTER: Duration = Duration::from_secs(60);
 pub const PLAYING: &str = r#"[...document.querySelectorAll("audio, video")].some((media) => !media.paused && !media.ended)"#;
 const RESTING_PAGE: &str = "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Ctitle%3ESoundscape%3C%2Ftitle%3E%3Cbody%3E%3C%2Fbody%3E";
+
+fn page_bytes() -> u64 {
+    static BYTES: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        u64::try_from(size)
+            .ok()
+            .filter(|&bytes| bytes > 0)
+            .unwrap_or(DEFAULT_PAGE_BYTES)
+    })
+}
 
 pub fn resting_page() -> url::Url {
     url::Url::parse(RESTING_PAGE).expect("resting page")
@@ -21,9 +32,13 @@ pub fn should_park(hidden_for: Option<Duration>, parked: bool, wait: Duration) -
     !parked && hidden_for.is_some_and(|hidden| hidden >= wait)
 }
 
-pub fn resident_mb(statm: &str) -> Option<u32> {
+pub fn resident_mb_with_page_size(statm: &str, page_bytes: u64) -> Option<u32> {
     let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
-    Some((pages * PAGE_BYTES / 1024 / 1024) as u32)
+    Some((pages.saturating_mul(page_bytes) / 1024 / 1024) as u32)
+}
+
+pub fn resident_mb(statm: &str) -> Option<u32> {
+    resident_mb_with_page_size(statm, page_bytes())
 }
 
 pub fn own_resident_mb() -> Option<u32> {
@@ -44,7 +59,14 @@ mod tests {
 
     #[test]
     fn reads_its_own_memory() {
-        assert_eq!(resident_mb("1000000 153600 2000 1 0 3000 0"), Some(600));
+        assert_eq!(
+            resident_mb_with_page_size("1000000 153600 2000 1 0 3000 0", 4096),
+            Some(600)
+        );
+        assert_eq!(
+            resident_mb_with_page_size("1000000 153600 2000 1 0 3000 0", 16384),
+            Some(2400)
+        );
         assert_eq!(resident_mb("nonsense"), None);
         assert_eq!(resident_mb(""), None);
     }

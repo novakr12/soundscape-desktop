@@ -25,35 +25,6 @@ pub const SAME_WINDOW: &str = concat!(
 })();"#
 );
 
-pub const FRAME_COUNTER: &str = r#"(() => {
-  if (window.top !== window) return;
-  const show = () => {
-    const box = document.createElement("div");
-    box.setAttribute("aria-hidden", "true");
-    box.style.cssText = "position:fixed;top:6px;right:6px;z-index:2147483647;padding:2px 6px;border-radius:4px;background:rgba(0,0,0,.75);color:#00ff66;font:12px monospace;pointer-events:none";
-    box.textContent = "… fps";
-    document.documentElement.append(box);
-    let frames = 0;
-    let since = performance.now();
-    const tick = (now) => {
-      frames += 1;
-      if (now - since >= 500) {
-        box.textContent = `${Math.round((frames * 1000) / (now - since))} fps`;
-        frames = 0;
-        since = now;
-      }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-  };
-  if (document.documentElement) show();
-  else document.addEventListener("DOMContentLoaded", show);
-})();"#;
-
-pub fn wants_frame_counter(value: Option<&str>) -> bool {
-    matches!(value.map(str::trim), Some("1" | "true" | "yes"))
-}
-
 pub fn openable(target: &Url) -> bool {
     matches!(target.scheme(), "http" | "https" | "mailto")
 }
@@ -91,16 +62,6 @@ pub fn open(_app: &AppHandle, target: &Url) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn shows_the_frame_counter_only_when_asked() {
-        assert!(wants_frame_counter(Some("1")));
-        assert!(wants_frame_counter(Some("true")));
-        assert!(!wants_frame_counter(Some("0")));
-        assert!(!wants_frame_counter(Some("")));
-        assert!(!wants_frame_counter(None));
-        assert!(FRAME_COUNTER.contains("requestAnimationFrame"));
-    }
 
     #[test]
     fn tells_the_page_which_version_it_runs_in() {

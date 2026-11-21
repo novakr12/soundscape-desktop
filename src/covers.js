@@ -1,11 +1,11 @@
 (() => {
-  if (window.top !== window || window.soundscapeCanvasCovers) return;
   const internals = navigator.servo;
+  delete Navigator.prototype.servo;
+  if (window.top !== window || window.soundscapeCanvasCovers) return;
   const collect =
     internals && typeof internals.garbageCollectAllContexts === "function"
       ? () => internals.garbageCollectAllContexts()
       : null;
-  delete Navigator.prototype.servo;
   window.soundscapeCanvasCovers = true;
   if (!collect) return;
   let timer = 0;

@@ -192,7 +192,15 @@ struct CoverLink {
     album: Option<String>,
 }
 
-fn look_up(app: &AppHandle, playing: &Playing, known: &mut HashMap<Song, Looked>) -> Looked {
+const COVER_RETRY_AFTER: Duration = Duration::from_secs(60);
+const MAX_FRAME: usize = 1 << 20;
+
+fn look_up(
+    app: &AppHandle,
+    playing: &Playing,
+    known: &mut HashMap<Song, Looked>,
+    failed: &mut HashMap<Song, std::time::Instant>,
+) -> Looked {
     if let Some(looked) = known.get(&playing.song) {
         return looked.clone();
     }
@@ -202,39 +210,65 @@ fn look_up(app: &AppHandle, playing: &Playing, known: &mut HashMap<Song, Looked>
         .and_then(|(server, _)| server.host_str().map(str::to_string));
     let art = public_art(playing.art.as_deref(), server_host.as_deref());
     let page_album = real_album(playing.song.album.as_deref()).map(str::to_string);
-    let asked = (art.is_none() || page_album.is_none())
-        .then(|| {
-            let (server, token) = credentials?;
-            let song = &playing.song;
-            crate::host::async_runtime::block_on(crate::server::get_json::<CoverLink>(
-                &server,
-                &token,
-                "/api/cover-link",
-                &[
-                    ("artist", song.artist.as_str()),
-                    ("title", song.title.as_str()),
-                ],
-            ))
-            .ok()
-        })
-        .flatten();
+    let needs_lookup = art.is_none() || page_album.is_none();
+    let mut cacheable = !needs_lookup;
+    let mut asked: Option<CoverLink> = None;
+    if needs_lookup {
+        let recently_failed = failed
+            .get(&playing.song)
+            .is_some_and(|at| at.elapsed() < COVER_RETRY_AFTER);
+        if !recently_failed {
+            if let Some((server, token)) = credentials {
+                let song = &playing.song;
+                match crate::host::async_runtime::block_on(crate::server::get_json::<CoverLink>(
+                    &server,
+                    &token,
+                    "/api/cover-link",
+                    &[
+                        ("artist", song.artist.as_str()),
+                        ("title", song.title.as_str()),
+                    ],
+                )) {
+                    Ok(link) => {
+                        asked = Some(link);
+                        cacheable = true;
+                        failed.remove(&playing.song);
+                    }
+                    Err(_) => {
+                        if failed.len() > 200 {
+                            failed.clear();
+                        }
+                        failed.insert(playing.song.clone(), std::time::Instant::now());
+                    }
+                }
+            }
+        }
+    }
     let (url, album) = asked.map_or((None, None), |link| (link.url, link.album));
     let looked = Looked {
         image: art.or(url).unwrap_or_else(|| LOGO.to_string()),
         album: page_album.or(album),
     };
-    if known.len() > 200 {
-        known.clear();
+    if cacheable {
+        if known.len() > 200 {
+            known.clear();
+        }
+        known.insert(playing.song.clone(), looked.clone());
     }
-    known.insert(playing.song.clone(), looked.clone());
     looked
 }
 
-fn read_frame(stream: &mut UnixStream) -> std::io::Result<()> {
+fn read_frame(stream: &mut impl Read) -> std::io::Result<()> {
     let mut header = [0u8; 8];
     stream.read_exact(&mut header)?;
     let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
-    let mut body = vec![0u8; length.min(1 << 20)];
+    if length > MAX_FRAME {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Discord frame too large",
+        ));
+    }
+    let mut body = vec![0u8; length];
     stream.read_exact(&mut body)
 }
 
@@ -273,6 +307,7 @@ pub fn run(app: AppHandle) {
         let mut stream: Option<(String, UnixStream)> = None;
         let mut shown: Option<Option<Shown>> = None;
         let mut looked: HashMap<Song, Looked> = HashMap::new();
+        let mut failed: HashMap<Song, std::time::Instant> = HashMap::new();
         let mut nonce = 0u64;
         loop {
             let Some(app_id) = wanted(&app) else {
@@ -298,7 +333,7 @@ pub fn run(app: AppHandle) {
             }
             let next = current(&app).map(|playing| {
                 let (start_ms, end_ms) = timing(now_ms(), playing.position, playing.length);
-                let found = look_up(&app, &playing, &mut looked);
+                let found = look_up(&app, &playing, &mut looked, &mut failed);
                 Shown {
                     album: album_label(playing.song.album.as_deref(), found.album.as_deref()),
                     image: found.image,
@@ -360,6 +395,12 @@ mod tests {
         assert_eq!(&bytes[0..4], &1u32.to_le_bytes());
         assert_eq!(&bytes[4..8], &7u32.to_le_bytes());
         assert_eq!(&bytes[8..], br#"{"a":1}"#);
+        assert!(read_frame(&mut std::io::Cursor::new(&bytes)).is_ok());
+        let mut huge = Vec::new();
+        huge.extend_from_slice(&1u32.to_le_bytes());
+        huge.extend_from_slice(&((MAX_FRAME as u32) + 1).to_le_bytes());
+        let err = read_frame(&mut std::io::Cursor::new(&huge)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     fn song() -> Song {

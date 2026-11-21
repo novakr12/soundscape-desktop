@@ -176,13 +176,6 @@ pub fn cover_for(server: &Url, track: &Track) -> Option<String> {
         .flatten()
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Resume {
-    pub position: usize,
-    pub time: f64,
-    pub playing: bool,
-}
-
 pub enum Command {
     Play,
     Pause,
@@ -204,7 +197,6 @@ pub enum Command {
         levelling: bool,
         crossfade: f64,
     },
-    FadeTo(f64, Duration),
     Stop,
 }
 
@@ -314,20 +306,6 @@ impl Queue {
 struct Shown {
     preview: Option<Preview>,
     snapshot: Option<Snapshot>,
-    resume: Resume,
-    clock: Option<Clock>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Clock {
-    at: usize,
-    position: f64,
-    measured: Instant,
-    moving: bool,
-}
-
-pub fn clock_now(at: usize, position: f64, elapsed: f64, moving: bool) -> (usize, f64) {
-    (at, if moving { position + elapsed } else { position })
 }
 
 pub struct Player {
@@ -346,21 +324,6 @@ impl Player {
 
     pub fn snapshot(&self) -> Option<Snapshot> {
         self.shown.lock().expect("shown lock").snapshot.clone()
-    }
-
-    pub fn resume(&self) -> Resume {
-        self.shown.lock().expect("shown lock").resume.clone()
-    }
-
-    pub fn now(&self) -> Option<(usize, f64, bool)> {
-        let clock = self.shown.lock().expect("shown lock").clock?;
-        let (at, position) = clock_now(
-            clock.at,
-            clock.position,
-            clock.measured.elapsed().as_secs_f64(),
-            clock.moving,
-        );
-        Some((at, position, clock.moving))
     }
 }
 
@@ -445,7 +408,6 @@ struct Engine {
     report: Report,
     fade_gain: f64,
     fade: Option<(f64, f64, Instant, Duration)>,
-    previous_position: Option<f64>,
 }
 
 impl Engine {
@@ -527,24 +489,6 @@ impl Engine {
             self.fade = None;
         }
         self.apply_volume();
-    }
-
-    fn measure(&mut self) {
-        let position = self.position();
-        let moving = self.want_playing
-            && !self.released
-            && self.seek_when_ready.is_none()
-            && self
-                .previous_position
-                .is_some_and(|before| position > before);
-        self.previous_position = Some(position);
-        let at = self.queue.lock().expect("queue lock").at;
-        self.shown.lock().expect("shown lock").clock = Some(Clock {
-            at,
-            position,
-            measured: Instant::now(),
-            moving,
-        });
     }
 
     fn track(&self) -> Option<Track> {
@@ -665,7 +609,6 @@ impl Engine {
         }
         self.seek_target.set(Some((seconds, Instant::now())));
         self.last = None;
-        self.previous_position = None;
     }
 
     fn set_playing(&mut self, playing: bool) {
@@ -712,7 +655,6 @@ impl Engine {
             command,
             Command::Volume(_)
                 | Command::Settings { .. }
-                | Command::FadeTo(..)
                 | Command::SetRepeat(_)
                 | Command::Shuffle(_)
                 | Command::Album(..)
@@ -793,10 +735,6 @@ impl Engine {
                 if ahead > 0 && at + ahead < length {
                     self.load(at + ahead, 0.0);
                 }
-            }
-            Command::FadeTo(to, length) => {
-                self.fade = Some((self.fade_gain, to.clamp(0.0, 1.0), Instant::now(), length));
-                self.step_fade();
             }
             Command::Stop => {
                 let _ = self.playbin.set_state(gst::State::Null);
@@ -949,11 +887,6 @@ impl Engine {
                 artist: track.artist.clone(),
             }),
         };
-        let resume = Resume {
-            position: queue.at,
-            time: position,
-            playing: self.want_playing && !self.released,
-        };
         let snapshot = Snapshot {
             track: track.clone(),
             playing: self.want_playing && !self.released,
@@ -974,7 +907,6 @@ impl Engine {
         let mut shown = self.shown.lock().expect("shown lock");
         shown.preview = Some(preview);
         shown.snapshot = Some(snapshot);
-        shown.resume = resume;
     }
 }
 
@@ -988,7 +920,6 @@ pub fn start(
     token: String,
     handover: Handover,
     report: Report,
-    silent: bool,
 ) -> Result<Player, String> {
     gst::init().map_err(|error| error.to_string())?;
     let relay = Relay::start(server.clone(), token)?;
@@ -1009,12 +940,6 @@ pub fn start(
     let shown = Arc::new(Mutex::new(Shown {
         preview: None,
         snapshot: None,
-        resume: Resume {
-            position: handover.position,
-            time: handover.time,
-            playing: handover.playing,
-        },
-        clock: None,
     }));
     let (commands, receive) = channel::<Command>();
     let mut engine = Engine {
@@ -1041,9 +966,8 @@ pub fn start(
         counted: false,
         failures: 0,
         report,
-        fade_gain: if silent { 0.0 } else { 1.0 },
+        fade_gain: 1.0,
         fade: None,
-        previous_position: None,
     };
     std::thread::Builder::new()
         .name("soundscape-player".into())
@@ -1073,7 +997,6 @@ pub fn start(
                 engine.crossfade_soon();
                 engine.messages();
                 engine.seek_when_ready();
-                engine.measure();
                 engine.listen();
                 engine.release_when_quiet();
                 engine.publish();
@@ -1184,12 +1107,6 @@ mod tests {
             cover_for(&server, &full).as_deref(),
             Some("https://music.example/api/navidrome/cover/al-1")
         );
-    }
-
-    #[test]
-    fn keeps_time_between_measurements() {
-        assert_eq!(clock_now(2, 10.0, 0.25, true), (2, 10.25));
-        assert_eq!(clock_now(2, 10.0, 0.25, false), (2, 10.0));
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod host;
 mod ipc;
 mod keys;
 mod memory;
+mod mini_draw;
 mod mini_window;
 mod parent;
 mod pickers;
@@ -96,6 +97,8 @@ struct Shell {
     theme: Cell<Theme>,
     desktop_font: RefCell<Option<String>>,
     font_script: RefCell<Rc<UserScript>>,
+    native_code: RefCell<Option<String>>,
+    native_script: RefCell<Option<Rc<UserScript>>>,
     size: Cell<PhysicalSize<u32>>,
     maximized: Cell<bool>,
     servo: Servo,
@@ -302,6 +305,7 @@ impl Shell {
                 self.show_window(event_loop);
             }
             host::Call::Server(server) => *self.link.server.borrow_mut() = server,
+            host::Call::Native(script) => self.set_native(script),
             host::Call::Smooth(on) => self.smooth.set(on),
             host::Call::Memory(mb) => {
                 self.memory_limit.set(mb);
@@ -310,6 +314,21 @@ impl Shell {
             host::Call::KeepWindow(seconds) => self.keep_window.set(seconds),
             host::Call::Exit => self.quit(event_loop),
         }
+    }
+
+    fn set_native(&self, script: Option<String>) {
+        if *self.native_code.borrow() == script {
+            return;
+        }
+        if let Some(old) = self.native_script.borrow_mut().take() {
+            self.scripts.remove_script(old);
+        }
+        if let Some(code) = script.clone() {
+            let fresh = Rc::new(UserScript::new(code, None));
+            self.scripts.add_script(fresh.clone());
+            *self.native_script.borrow_mut() = Some(fresh);
+        }
+        *self.native_code.borrow_mut() = script;
     }
 
     fn check_hidden(&self) {
@@ -733,9 +752,20 @@ impl WebViewDelegate for Shell {
         }
     }
 
-    fn show_console_message(&self, _: WebView, level: servo::ConsoleLogLevel, message: String) {
+    fn show_console_message(
+        &self,
+        webview: WebView,
+        level: servo::ConsoleLogLevel,
+        message: String,
+    ) {
         if message.starts_with(soundscape_core::native_link::ASKED) {
-            self.link.send(FromWindow::Page { message });
+            let from_server = match (self.server(), webview.url()) {
+                (Some(server), Some(current)) => current.origin() == server.origin(),
+                _ => false,
+            };
+            if from_server {
+                self.link.send(FromWindow::Page { message });
+            }
             return;
         }
         let Some(picked) = pickers::picked(&self.nonce, &message) else {
@@ -883,9 +913,12 @@ impl App {
             soundscape_core::links::SAME_WINDOW.into(),
             None,
         )));
-        if let Some(native) = start.native.clone() {
-            scripts.add_script(Rc::new(UserScript::new(native, None)));
-        }
+        let native_code = start.native.clone();
+        let native_script = native_code.as_ref().map(|native| {
+            let script = Rc::new(UserScript::new(native.clone(), None));
+            scripts.add_script(script.clone());
+            script
+        });
         let desktop_font = font::desktop();
         let font_script = add_font(&scripts, desktop_font.as_deref());
         if let Some(extra) = std::env::var_os("SOUNDSCAPE_EXTRA_SCRIPT")
@@ -904,6 +937,8 @@ impl App {
             theme: Cell::new(profile.theme),
             desktop_font: RefCell::new(desktop_font),
             font_script: RefCell::new(font_script),
+            native_code: RefCell::new(native_code),
+            native_script: RefCell::new(native_script),
             size: Cell::new(size),
             maximized: Cell::new(start.maximized),
             servo,
@@ -1307,7 +1342,7 @@ fn app_main() {
         });
     }
     let host = parent::WindowHost::new(waiting.clone(), stop, running);
-    let app = soundscape_core::launch(Box::new(host.clone()), dir, running);
+    let app = soundscape_core::launch(Box::new(host.clone()), dir);
     let _ = waiting.set(app.clone());
     if !soundscape_core::starts_hidden(&args, &app.state::<soundscape_core::AppState>().config()) {
         soundscape_core::show(&app);
@@ -1321,7 +1356,8 @@ fn app_main() {
 
 fn protocol_out() -> host::Out {
     use std::os::fd::FromRawFd;
-    let copy = unsafe { libc::dup(1) };
+    let min_fd: libc::c_int = 3;
+    let copy = unsafe { libc::fcntl(1, libc::F_DUPFD_CLOEXEC, min_fd) };
     let out: Box<dyn std::io::Write + Send> = if copy >= 0 {
         unsafe { libc::dup2(2, 1) };
         Box::new(unsafe { std::fs::File::from_raw_fd(copy) })

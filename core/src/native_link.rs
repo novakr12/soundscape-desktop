@@ -427,9 +427,45 @@ pub struct EventReader {
     event: String,
     data: String,
     buffer: String,
+    pending: Vec<u8>,
 }
 
 impl EventReader {
+    pub fn feed_bytes(&mut self, bytes: &[u8]) -> Vec<(String, String)> {
+        self.pending.extend_from_slice(bytes);
+        let mut text = String::new();
+        loop {
+            match std::str::from_utf8(&self.pending) {
+                Ok(valid) => {
+                    text.push_str(valid);
+                    self.pending.clear();
+                    break;
+                }
+                Err(error) => {
+                    let valid_up_to = error.valid_up_to();
+                    if valid_up_to > 0 {
+                        if let Ok(valid) = std::str::from_utf8(&self.pending[..valid_up_to]) {
+                            text.push_str(valid);
+                        }
+                        self.pending.drain(..valid_up_to);
+                    }
+                    match error.error_len() {
+                        Some(bad_len) => {
+                            text.push('\u{FFFD}');
+                            self.pending.drain(..bad_len);
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        if text.is_empty() {
+            Vec::new()
+        } else {
+            self.feed(&text)
+        }
+    }
+
     pub fn feed(&mut self, chunk: &str) -> Vec<(String, String)> {
         self.buffer.push_str(chunk);
         let mut found = Vec::new();
@@ -459,12 +495,15 @@ impl EventReader {
     }
 }
 
+const LIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+
 fn live_client() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(15))
+                .read_timeout(LIVE_IDLE_TIMEOUT)
                 .user_agent(concat!("SoundscapeDesktop/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .expect("HTTP client")
@@ -498,7 +537,7 @@ async fn listen_once(app: &AppHandle) {
         if !wanted(app) {
             return;
         }
-        for (event, data) in reader.feed(&String::from_utf8_lossy(&chunk)) {
+        for (event, data) in reader.feed_bytes(&chunk) {
             if command_for_me(&event, &data, &id) {
                 take_commands(app).await;
             }
@@ -582,7 +621,6 @@ fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playin
         token.clone(),
         handover,
         scrobbles(server, token),
-        false,
     ) {
         Ok(player) => *current = Some(player),
         Err(error) => eprintln!("The built-in player couldn't start: {error}"),
@@ -821,6 +859,8 @@ async fn keep_going(app: AppHandle, body: Value) {
     }
 }
 
+const MAX_ASKED: usize = 500;
+
 pub async fn run(app: AppHandle) {
     let mut since_heartbeat = HEARTBEAT;
     let mut told = None;
@@ -844,8 +884,14 @@ pub async fn run(app: AppHandle) {
             .flatten()
             .filter(|now| now.track.album.is_none())
             .map(|now| now.track.track_id);
-        if let Some(track_id) = missing.filter(|track_id| asked.insert(track_id.clone())) {
-            async_runtime::spawn(find_album(app.clone(), track_id));
+        if let Some(track_id) = missing {
+            if !asked.contains(&track_id) {
+                if asked.len() >= MAX_ASKED {
+                    asked.clear();
+                }
+                asked.insert(track_id.clone());
+                async_runtime::spawn(find_album(app.clone(), track_id));
+            }
         }
         let now = settled(&app).map(|snapshot| change_key(snapshot.as_ref()));
         let due = now
@@ -1023,6 +1069,15 @@ mod tests {
         assert!(command_for_me(&found[0].0, &found[0].1, "abcdefgh12"));
         assert!(!command_for_me(&found[0].0, &found[0].1, "someone-else"));
         assert!(!command_for_me(&found[1].0, &found[1].1, "abcdefgh12"));
+        let mut split = EventReader::default();
+        let raw = "event: command\ndata: {\"title\":\"🎵 café\"}\n\n".as_bytes();
+        let cut = raw.iter().position(|&b| b == 0xF0).unwrap() + 2;
+        assert!(split.feed_bytes(&raw[..cut]).is_empty());
+        let decoded = split.feed_bytes(&raw[cut..]);
+        assert_eq!(
+            decoded,
+            vec![("command".into(), r#"{"title":"🎵 café"}"#.into())]
+        );
     }
 
     #[test]

@@ -105,6 +105,7 @@ pub fn arguments(ask: &Ask, message: &str) -> Vec<String> {
         ]),
         Ask::Prompt(value) => arguments.extend([
             "--entry".into(),
+            "--no-markup".into(),
             format!("--text={message}"),
             format!("--entry-text={value}"),
         ]),
@@ -118,22 +119,48 @@ pub fn arguments(ask: &Ask, message: &str) -> Vec<String> {
     arguments
 }
 
+pub fn kdialog_arguments(ask: &Ask, message: &str) -> Vec<String> {
+    let mut arguments = vec!["--title".to_string(), "Soundscape".to_string()];
+    match ask {
+        Ask::Alert => arguments.extend(["--msgbox".into(), message.to_string()]),
+        Ask::Confirm => arguments.extend(["--yesno".into(), message.to_string()]),
+        Ask::Prompt(value) => {
+            arguments.extend(["--inputbox".into(), message.to_string(), value.clone()])
+        }
+        Ask::Files { many } => {
+            if *many {
+                arguments.extend(["--multiple".into(), "--separate-output".into()]);
+            }
+            arguments.push("--getopenfilename".into());
+        }
+    }
+    arguments
+}
+
 pub struct Answer {
     pub ok: bool,
     pub text: String,
 }
 
+fn run_dialog(program: &str, args: Vec<String>) -> std::io::Result<Answer> {
+    let output = Command::new(program).args(args).output()?;
+    Ok(Answer {
+        ok: output.status.success(),
+        text: String::from_utf8_lossy(&output.stdout)
+            .trim_end_matches('\n')
+            .to_string(),
+    })
+}
+
 pub fn ask(ask: &Ask, message: &str) -> Answer {
-    match Command::new("zenity")
-        .args(arguments(ask, message))
-        .output()
-    {
-        Ok(output) => Answer {
-            ok: output.status.success(),
-            text: String::from_utf8_lossy(&output.stdout)
-                .trim_end_matches('\n')
-                .to_string(),
-        },
+    match run_dialog("zenity", arguments(ask, message)) {
+        Ok(answer) => answer,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            run_dialog("kdialog", kdialog_arguments(ask, message)).unwrap_or(Answer {
+                ok: false,
+                text: String::new(),
+            })
+        }
         Err(_) => Answer {
             ok: false,
             text: String::new(),
@@ -220,11 +247,25 @@ mod tests {
                 "--text=Revoke?"
             ]
         );
-        assert!(
-            arguments(&Ask::Prompt("x".into()), "Name").contains(&"--entry-text=x".to_string())
-        );
+        let prompt = arguments(&Ask::Prompt("x".into()), "Name");
+        assert!(prompt.contains(&"--no-markup".to_string()));
+        assert!(prompt.contains(&"--entry-text=x".to_string()));
         assert!(arguments(&Ask::Files { many: true }, "").contains(&"--multiple".to_string()));
         assert!(!arguments(&Ask::Files { many: false }, "").contains(&"--multiple".to_string()));
+        assert_eq!(
+            kdialog_arguments(&Ask::Prompt("x".into()), "Name"),
+            vec!["--title", "Soundscape", "--inputbox", "Name", "x"]
+        );
+        assert_eq!(
+            kdialog_arguments(&Ask::Files { many: true }, ""),
+            vec![
+                "--title",
+                "Soundscape",
+                "--multiple",
+                "--separate-output",
+                "--getopenfilename"
+            ]
+        );
         assert_eq!(
             paths("/a\n/b\n"),
             vec![PathBuf::from("/a"), PathBuf::from("/b")]

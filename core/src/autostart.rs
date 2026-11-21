@@ -62,15 +62,43 @@ pub fn set_file(config_home: &Path, executable: &str, on: bool) -> std::io::Resu
     }
 }
 
+pub fn request_path(unique_name: &str, token: &str) -> String {
+    let sender = unique_name.trim_start_matches(':').replace('.', "_");
+    format!("/org/freedesktop/portal/desktop/request/{sender}/{token}")
+}
+
 async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
     poll_fn(|context| Pin::new(&mut *stream).poll_next(context)).await
 }
 
 async fn ask_portal(on: bool) -> Result<bool, String> {
+    static REQUEST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let connection = zbus::Connection::session()
         .await
         .map_err(|error| error.to_string())?;
+    let seq = REQUEST_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let token = format!("soundscape_{}_{seq}", std::process::id());
+    let unique = connection
+        .unique_name()
+        .ok_or_else(|| "Couldn't read the D-Bus connection name.".to_string())?;
+    let expected = OwnedObjectPath::try_from(request_path(unique.as_str(), &token))
+        .map_err(|error| error.to_string())?;
+    let proxy = zbus::Proxy::new(
+        &connection,
+        "org.freedesktop.portal.Desktop",
+        expected.clone(),
+        "org.freedesktop.portal.Request",
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let mut fallback_proxy = None;
+    let mut responses = proxy
+        .receive_signal("Response")
+        .await
+        .map_err(|error| error.to_string())?;
+
     let mut options: HashMap<&str, Value> = HashMap::new();
+    options.insert("handle_token", Value::from(token.as_str()));
     options.insert(
         "reason",
         Value::from("Keep sending what you play to Soundscape after you log in."),
@@ -90,22 +118,26 @@ async fn ask_portal(on: bool) -> Result<bool, String> {
         )
         .await
         .map_err(|_| "This desktop doesn't offer a way to start apps at login.".to_string())?;
-    let request: OwnedObjectPath = reply
+    let actual: OwnedObjectPath = reply
         .body()
         .deserialize()
         .map_err(|error| error.to_string())?;
-    let proxy = zbus::Proxy::new(
-        &connection,
-        "org.freedesktop.portal.Desktop",
-        request,
-        "org.freedesktop.portal.Request",
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    let mut responses = proxy
-        .receive_signal("Response")
-        .await
-        .map_err(|error| error.to_string())?;
+    if actual != expected {
+        let fallback = fallback_proxy.insert(
+            zbus::Proxy::new(
+                &connection,
+                "org.freedesktop.portal.Desktop",
+                actual,
+                "org.freedesktop.portal.Request",
+            )
+            .await
+            .map_err(|error| error.to_string())?,
+        );
+        responses = fallback
+            .receive_signal("Response")
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     match tokio::time::timeout(PORTAL_WAIT, next(&mut responses)).await {
         Ok(Some(message)) => {
             let (code, results): (u32, HashMap<String, OwnedValue>) = message
@@ -118,7 +150,8 @@ async fn ask_portal(on: bool) -> Result<bool, String> {
                 .unwrap_or(false);
             Ok(code == 0 && (granted || !on))
         }
-        _ => Ok(true),
+        Ok(None) => Err("Your desktop closed the login permission request.".into()),
+        Err(_) => Err("Your desktop didn't answer the login permission request in time.".into()),
     }
 }
 
@@ -135,6 +168,14 @@ pub async fn set(on: bool) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn predicts_portal_request_path_from_unique_name() {
+        assert_eq!(
+            request_path(":1.42", "soundscape_7_0"),
+            "/org/freedesktop/portal/desktop/request/1_42/soundscape_7_0"
+        );
+    }
 
     #[test]
     fn writes_a_login_entry_that_starts_hidden() {

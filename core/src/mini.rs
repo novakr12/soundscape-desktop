@@ -1,39 +1,18 @@
 use crate::host::{async_runtime, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::scrobble::Track;
 use crate::AppState;
-use serde::Serialize;
 use std::sync::Mutex;
 use std::time::Duration;
 
 pub const MINI: &str = "mini";
 const LARGEST_COVER: u64 = 3 * 1024 * 1024;
 const EVERY: Duration = Duration::from_secs(1);
-pub const ASKED: &str = "soundscape-mini ";
 pub const UNKNOWN_ALBUM: &str = "Unknown album";
 
-#[derive(Debug, serde::Deserialize, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Asked {
     pub action: String,
-    #[serde(default)]
     pub seconds: Option<f64>,
-}
-
-pub fn asked(message: &str) -> Option<Asked> {
-    serde_json::from_str(message.strip_prefix(ASKED)?).ok()
-}
-
-pub fn render_script(view: &MiniView) -> String {
-    format!(
-        "window.soundscapeMini && window.soundscapeMini.render({})",
-        serde_json::to_string(view).unwrap_or_else(|_| "null".into())
-    )
-}
-
-pub fn failed_script(problem: &str) -> String {
-    format!(
-        "window.soundscapeMini && window.soundscapeMini.failed({})",
-        serde_json::Value::from(problem)
-    )
 }
 
 fn shown(app: &AppHandle) -> bool {
@@ -76,7 +55,7 @@ pub struct Source {
     pub position_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MiniView {
     pub kind: &'static str,
     pub title: String,
@@ -93,7 +72,6 @@ pub struct MiniView {
     pub shuffle: Option<bool>,
     pub repeat: Option<String>,
     pub can_seek: bool,
-    pub up_next: Option<String>,
 }
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -244,9 +222,6 @@ pub fn view(app: &AppHandle) -> MiniView {
             shuffle: preview.shuffle,
             repeat: preview.repeat,
             can_seek: preview.length.is_some(),
-            up_next: preview
-                .up_next
-                .map(|next| format!("{} — {}", next.title, next.artist)),
             ..MiniView::default()
         };
     }
@@ -375,28 +350,6 @@ mod tests {
         assert!(shows_preview(Some(&preview), false));
         assert!(!shows_preview(Some(&preview), true));
         assert!(!shows_preview(None, false));
-    }
-
-    #[test]
-    fn reads_what_the_mini_player_asks_for() {
-        assert_eq!(
-            asked(r#"soundscape-mini {"action":"seek","seconds":12.5}"#),
-            Some(Asked {
-                action: "seek".into(),
-                seconds: Some(12.5)
-            })
-        );
-        assert_eq!(
-            asked(r#"soundscape-mini {"action":"toggle"}"#).map(|asked| asked.action),
-            Some("toggle".into())
-        );
-        assert_eq!(asked("something else"), None);
-        assert_eq!(asked("soundscape-mini nonsense"), None);
-        assert!(render_script(&MiniView::default()).contains(r#""kind":"""#));
-        assert_eq!(
-            failed_script("Strawberry didn't \"respond\""),
-            r#"window.soundscapeMini && window.soundscapeMini.failed("Strawberry didn't \"respond\"")"#
-        );
     }
 
     #[test]

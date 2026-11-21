@@ -13,6 +13,10 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25,11 +29,11 @@ pub struct Config {
     pub scrobbling: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub keep_running: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub told_about_background: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub notifications: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub autostart: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_notification: Option<i64>,
@@ -79,10 +83,6 @@ pub struct Config {
     pub autoplay: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub faster_scripts: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
 }
 
 pub const PAUSE_SECONDS: i64 = 60 * 60;

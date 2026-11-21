@@ -1,3 +1,10 @@
+// Servo SVG rendering workarounds for charts (Recharts) and dynamic themed icons:
+// 1. Hide transient Recharts hover overlays that trigger expensive full-SVG repaints.
+// 2. Inline CSS custom properties (`var(--...)`) on SVG paint attributes, and re-resolve them
+//    on color-scheme changes, because Servo does not always resolve/update CSS variables in SVG.
+// 3. Bust Servo's SVG `<text>` glyph cache by prefixing a unique dummy font family per mutation.
+// 4. Double-buffer mutated `<svg>` elements using a cloned static overlay once React has hydrated
+//    the parent container so chart updates do not flash blank frames.
 (() => {
   if (window.top !== window || window.soundscapeSvgReady) return;
   window.soundscapeSvgReady = true;
@@ -8,11 +15,13 @@
   const GAP_MS = 16;
   const KEEP_MS = 80;
   const copies = new WeakMap();
+  // Recharts hover overlays cause constant SVG re-rasterization on pointer moves in Servo.
   const HOVER = ".recharts-tooltip-cursor, .recharts-active-dot, .recharts-active-bar";
   const drawn = new WeakMap();
 
   const SKIPPED = new Set([NUDGE, "style", "font-family"]);
 
+  // Fingerprint meaningful SVG structure so unrelated/internal attribute tweaks do not re-clone.
   const content = (svg) => {
     const parts = [];
     const walk = (node) => {
@@ -53,6 +62,7 @@
     return own || getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   };
 
+  // Iteratively expand nested CSS custom properties (`var(--x, fallback)`) into concrete values.
   const resolve = (text, element) => {
     let value = text;
     for (let round = 0; round < 8 && value.includes("var("); round += 1) {
@@ -68,6 +78,7 @@
     if (element.matches?.(HOVER) && element.getAttribute("display") !== "none") {
       element.setAttribute("display", "none");
     }
+    // Tag each SVG <text> node with a per-SVG dummy font prefix to defeat Servo's glyph cache.
     if (element.localName === "text" && !families.has(element)) {
       const given = element.getAttribute("font-family") || getComputedStyle(element).fontFamily;
       families.set(element, given ? `${given}, sans-serif` : "sans-serif");
@@ -114,6 +125,8 @@
     return found?.hasAttribute(COPY) ? null : found;
   };
 
+  // Inserting sibling clone overlays before React finishes SSR hydration would cause hydration
+  // mismatches, so wait until React attaches its internal `__reactFiber` property to the parent.
   const hydrated = (element) => Object.keys(element).some((key) => key.startsWith("__reactFiber"));
 
   const holder = (svg) => {
@@ -125,6 +138,7 @@
     return parent;
   };
 
+  // Bump the dummy font-family prefix so Servo discards cached text bitmaps on redraw.
   const restamp = (root) => {
     stamps += 1;
     tokens.set(root, stamps);
@@ -137,6 +151,8 @@
     }
   };
 
+  // Paint an updated static clone over the live SVG, then hide the live SVG and drop older
+  // clones after `KEEP_MS` so Servo swaps frames cleanly without flashing blank space.
   const layer = (svg) => {
     const parent = holder(svg);
     if (!parent) return false;
@@ -178,6 +194,7 @@
   let last = 0;
   let waiting = false;
 
+  // Throttle repaints to ~60 fps; fall back to bumping `NUDGE` when cloning is not possible.
   const nudge = () => {
     waiting = false;
     const now = performance.now();
@@ -228,6 +245,7 @@
     }
   });
 
+  // Re-evaluate saved `var(--...)` paint attributes when the OS dark/light theme changes.
   const refresh = () => {
     for (const element of document.querySelectorAll("svg, svg *")) {
       const kept = originals.get(element);

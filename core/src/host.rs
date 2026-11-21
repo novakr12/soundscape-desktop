@@ -47,12 +47,8 @@ pub trait Host: Send + Sync {
     fn running(&self) -> Running;
     fn restart(&self);
     fn exit(&self, code: i32);
-    fn mini_view(&self, view: &crate::mini::MiniView) {
-        self.eval(crate::mini::MINI, crate::mini::render_script(view));
-    }
-    fn mini_problem(&self, problem: &str) {
-        self.eval(crate::mini::MINI, crate::mini::failed_script(problem));
-    }
+    fn mini_view(&self, view: &crate::mini::MiniView);
+    fn mini_problem(&self, problem: &str);
 }
 
 pub mod async_runtime {
@@ -208,21 +204,11 @@ impl WebviewWindow {
         Ok(())
     }
 
-    pub fn unminimize(&self) -> Result<()> {
-        self.host().show(&self.label);
-        Ok(())
-    }
-
     pub fn is_visible(&self) -> Result<bool> {
         Ok(self.host().is_visible(&self.label))
     }
 
     pub fn close(&self) -> Result<()> {
-        self.host().close(&self.label);
-        Ok(())
-    }
-
-    pub fn destroy(&self) -> Result<()> {
         self.host().close(&self.label);
         Ok(())
     }
@@ -251,7 +237,6 @@ impl Manager for WebviewWindow {
 
 pub enum WebviewUrl {
     App(std::path::PathBuf),
-    External(Url),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -276,10 +261,8 @@ impl WebviewWindowBuilder {
         label: impl Into<String>,
         url: WebviewUrl,
     ) -> WebviewWindowBuilder {
-        let page = match url {
-            WebviewUrl::App(path) => path.to_string_lossy().into_owned(),
-            WebviewUrl::External(url) => url.to_string(),
-        };
+        let WebviewUrl::App(path) = url;
+        let page = path.to_string_lossy().into_owned();
         WebviewWindowBuilder {
             app: manager.app_handle().clone(),
             label: label.into(),

@@ -5,10 +5,11 @@ pub const EGL_VENDORS: &str = "__EGL_VENDOR_LIBRARY_FILENAMES";
 const MESA_VENDOR: &str = "50_mesa.json";
 const NVIDIA_VENDOR: &str = "10_nvidia.json";
 const NVIDIA_DRIVER: &str = "/proc/driver/nvidia/version";
-const VENDOR_DIRS: [&str; 3] = [
+const VENDOR_DIRS: [&str; 4] = [
     "/usr/share/glvnd/egl_vendor.d",
     "/etc/glvnd/egl_vendor.d",
     "/usr/lib/x86_64-linux-gnu/GL/glvnd/egl_vendor.d",
+    "/usr/lib/aarch64-linux-gnu/GL/glvnd/egl_vendor.d",
 ];
 
 const STARTING: &str = "starting";
@@ -204,6 +205,12 @@ mod tests {
         assert_eq!(
             mesa_vendor(|path| path.starts_with("/etc")),
             Some(PathBuf::from("/etc/glvnd/egl_vendor.d/50_mesa.json"))
+        );
+        assert_eq!(
+            mesa_vendor(|path| path.starts_with("/usr/lib/aarch64-linux-gnu")),
+            Some(PathBuf::from(
+                "/usr/lib/aarch64-linux-gnu/GL/glvnd/egl_vendor.d/50_mesa.json"
+            ))
         );
         assert_eq!(mesa_vendor(|_| false), None);
     }

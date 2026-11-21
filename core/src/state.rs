@@ -2,14 +2,15 @@ use crate::config::Config;
 use crate::{friends, media, mini, music, native, scrobble, scrobbler, today};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use url::Url;
 
 pub struct AppState {
     pub(crate) dir: PathBuf,
-    pub(crate) config: Mutex<Config>,
+    pub(crate) config: Arc<Mutex<Config>>,
     pub(crate) signed_out: AtomicBool,
-    pub(crate) in_keyring: std::sync::Arc<AtomicBool>,
+    pub(crate) in_keyring: Arc<AtomicBool>,
+    pub(crate) keyring_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) status: Mutex<scrobbler::Status>,
     pub(crate) friends: Mutex<Vec<friends::Friend>>,
     pub(crate) playlists: Mutex<Vec<music::Playlist>>,
@@ -27,9 +28,10 @@ impl AppState {
     pub fn new(dir: PathBuf, config: Config) -> AppState {
         AppState {
             dir,
-            config: Mutex::new(config),
+            config: Arc::new(Mutex::new(config)),
             signed_out: AtomicBool::new(false),
-            in_keyring: std::sync::Arc::new(AtomicBool::new(false)),
+            in_keyring: Arc::new(AtomicBool::new(false)),
+            keyring_lock: Arc::new(tokio::sync::Mutex::new(())),
             status: Mutex::new(scrobbler::Status::default()),
             friends: Mutex::new(Vec::new()),
             playlists: Mutex::new(Vec::new()),
@@ -59,16 +61,18 @@ impl AppState {
         let in_keyring = self.in_keyring.load(Ordering::Relaxed);
         crate::keyring::save(&config, &self.dir, in_keyring);
         if in_keyring && before != config.token {
-            let token = config.token.clone();
+            let shared_config = self.config.clone();
             let dir = self.dir.clone();
             let flag = self.in_keyring.clone();
+            let keyring_lock = self.keyring_lock.clone();
             crate::host::async_runtime::spawn(async move {
-                if let Err(error) = crate::keyring::write(token.clone()).await {
+                let _guard = keyring_lock.lock().await;
+                let latest = shared_config.lock().expect("config lock").token.clone();
+                if let Err(error) = crate::keyring::write(latest).await {
                     eprintln!("Keeping the login in the settings file: {error}");
                     flag.store(false, Ordering::Relaxed);
-                    let mut on_disk = Config::load(&dir);
-                    on_disk.token = token;
-                    crate::keyring::save(&on_disk, &dir, false);
+                    let current = shared_config.lock().expect("config lock");
+                    crate::keyring::save(&current, &dir, false);
                 }
             });
         }

@@ -1,5 +1,7 @@
 use crate::scrobble::{Snapshot, Track};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 use zbus::proxy::{Builder, CacheProperties};
 use zbus::zvariant::OwnedValue;
 use zbus::{Connection, Proxy};
@@ -35,8 +37,19 @@ pub struct Player {
     pub snapshot: Snapshot,
 }
 
-pub async fn control(bus: &str, method: &str) -> zbus::Result<()> {
+async fn session() -> zbus::Result<Connection> {
+    static CONNECTION: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
+    let mut guard = CONNECTION.get_or_init(|| Mutex::new(None)).lock().await;
+    if let Some(connection) = guard.as_ref() {
+        return Ok(connection.clone());
+    }
     let connection = Connection::session().await?;
+    *guard = Some(connection.clone());
+    Ok(connection)
+}
+
+pub async fn control(bus: &str, method: &str) -> zbus::Result<()> {
+    let connection = session().await?;
     let player = proxy(&connection, bus, PLAYER).await?;
     player.call_method(method, &()).await?;
     Ok(())
@@ -67,7 +80,7 @@ pub fn next_loop(loop_status: &str) -> &'static str {
 }
 
 pub async fn modes(bus: &str) -> Modes {
-    let Ok(connection) = Connection::session().await else {
+    let Ok(connection) = session().await else {
         return Modes::default();
     };
     let Ok(player) = proxy(&connection, bus, PLAYER).await else {
@@ -82,7 +95,7 @@ pub async fn modes(bus: &str) -> Modes {
 }
 
 pub async fn toggle_shuffle(bus: &str) -> zbus::Result<()> {
-    let connection = Connection::session().await?;
+    let connection = session().await?;
     let player = proxy(&connection, bus, PLAYER).await?;
     let shuffle: bool = player.get_property("Shuffle").await?;
     player.set_property("Shuffle", !shuffle).await?;
@@ -90,7 +103,7 @@ pub async fn toggle_shuffle(bus: &str) -> zbus::Result<()> {
 }
 
 pub async fn cycle_repeat(bus: &str) -> zbus::Result<()> {
-    let connection = Connection::session().await?;
+    let connection = session().await?;
     let player = proxy(&connection, bus, PLAYER).await?;
     let loop_status: String = player.get_property("LoopStatus").await?;
     player
@@ -100,7 +113,7 @@ pub async fn cycle_repeat(bus: &str) -> zbus::Result<()> {
 }
 
 pub async fn seek_to(bus: &str, position_ms: u64) -> zbus::Result<()> {
-    let connection = Connection::session().await?;
+    let connection = session().await?;
     let player = proxy(&connection, bus, PLAYER).await?;
     let target = i64::try_from(position_ms.saturating_mul(1000)).unwrap_or(i64::MAX);
     let metadata: HashMap<String, OwnedValue> =
@@ -297,6 +310,20 @@ pub async fn players(connection: &Connection) -> zbus::Result<Vec<Player>> {
     list(connection, true).await
 }
 
+fn merge_player(found: &mut Vec<Player>, candidate: Player) {
+    if let Some(existing) = found.iter_mut().find(|player| player.id == candidate.id) {
+        let better = (!existing.snapshot.playing && candidate.snapshot.playing)
+            || (existing.snapshot.playing == candidate.snapshot.playing
+                && existing.snapshot.track.is_none()
+                && candidate.snapshot.track.is_some());
+        if better {
+            *existing = candidate;
+        }
+    } else {
+        found.push(candidate);
+    }
+}
+
 async fn list(connection: &Connection, skip_this_app: bool) -> zbus::Result<Vec<Player>> {
     let bus = zbus::fdo::DBusProxy::new(connection).await?;
     let names = bus.list_names().await?;
@@ -305,13 +332,11 @@ async fn list(connection: &Connection, skip_this_app: bool) -> zbus::Result<Vec<
         let Some(id) = player_id(name.as_str()) else {
             continue;
         };
-        if found.iter().any(|player| player.id == id)
-            || (skip_this_app && from_this_app(&bus, name.as_str()).await)
-        {
+        if skip_this_app && from_this_app(&bus, name.as_str()).await {
             continue;
         }
         if let Ok(player) = read(connection, name.as_str(), id).await {
-            found.push(player);
+            merge_player(&mut found, player);
         }
     }
     found.sort_by(|a, b| a.id.cmp(&b.id));
@@ -321,6 +346,45 @@ async fn list(connection: &Connection, skip_this_app: bool) -> zbus::Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefers_playing_instance_when_a_player_has_multiple_bus_names() {
+        let paused = Player {
+            id: "firefox".into(),
+            name: "Firefox".into(),
+            bus: "org.mpris.MediaPlayer2.firefox.instance1".into(),
+            art: None,
+            snapshot: Snapshot {
+                player: "firefox".into(),
+                playing: false,
+                track: None,
+                position_ms: None,
+            },
+        };
+        let playing = Player {
+            bus: "org.mpris.MediaPlayer2.firefox.instance2".into(),
+            snapshot: Snapshot {
+                player: "firefox".into(),
+                playing: true,
+                track: Some(Track {
+                    artist: "A".into(),
+                    title: "B".into(),
+                    album: None,
+                    length_ms: None,
+                }),
+                position_ms: None,
+            },
+            ..paused.clone()
+        };
+        let mut found = Vec::new();
+        merge_player(&mut found, paused.clone());
+        merge_player(&mut found, playing.clone());
+        assert_eq!(found.len(), 1);
+        assert!(found[0].snapshot.playing);
+        assert_eq!(found[0].bus, playing.bus);
+        merge_player(&mut found, paused);
+        assert!(found[0].snapshot.playing);
+    }
 
     #[test]
     fn turns_loop_status_into_repeat_and_cycles_it_like_soundscape() {

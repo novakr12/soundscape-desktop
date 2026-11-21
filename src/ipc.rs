@@ -31,6 +31,7 @@ pub enum ToWindow {
     Focus,
     Navigate { url: String },
     Server { url: Option<String> },
+    Native { script: Option<String> },
     Setup,
     Smooth { on: bool },
     Memory { mb: u32 },

@@ -34,6 +34,7 @@ struct Inner {
 #[derive(Clone)]
 pub struct WindowHost {
     inner: Arc<Mutex<Inner>>,
+    open_lock: Arc<Mutex<()>>,
     app: Arc<OnceLock<AppHandle>>,
     stop: Sender<()>,
     running: Arc<Mutex<Running>>,
@@ -46,6 +47,7 @@ impl WindowHost {
                 hidden: true,
                 ..Inner::default()
             })),
+            open_lock: Arc::new(Mutex::new(())),
             app,
             stop,
             running: Arc::new(Mutex::new(running)),
@@ -75,7 +77,35 @@ impl WindowHost {
             .map(String::from)
     }
 
+    fn native_script(&self) -> Option<String> {
+        self.app()
+            .and_then(soundscape_core::native_link::script_for)
+    }
+
     fn open(&self, url: Option<Url>) {
+        let _opening = self.open_lock.lock().expect("open lock");
+        if self.running_window() {
+            let next = url
+                .clone()
+                .or_else(|| self.inner.lock().expect("window lock").next_url.take());
+            if let Some(target) = &next {
+                self.tell(&ToWindow::Server {
+                    url: self.server_text(),
+                });
+                self.tell(&ToWindow::Native {
+                    script: self.native_script(),
+                });
+                self.tell(&ToWindow::Navigate {
+                    url: target.to_string(),
+                });
+            }
+            if self.tell(&ToWindow::Show) {
+                return;
+            }
+            if let Some(target) = next {
+                self.inner.lock().expect("window lock").next_url = Some(target);
+            }
+        }
         let Some(app) = self.app().cloned() else {
             return;
         };
@@ -144,8 +174,9 @@ impl WindowHost {
             inner.generation
         };
         let inner = self.inner.clone();
+        let running = self.running.clone();
         let host_app = app.clone();
-        std::thread::spawn(move || listen(host_app, inner, output, generation));
+        std::thread::spawn(move || listen(host_app, inner, running, output, generation));
     }
 
     fn open_mini_window(&self) -> bool {
@@ -189,13 +220,14 @@ impl WindowHost {
 fn listen(
     app: AppHandle,
     inner: Arc<Mutex<Inner>>,
+    running: Arc<Mutex<Running>>,
     output: std::process::ChildStdout,
     generation: u64,
 ) {
     let mut reader = BufReader::new(output);
     while let Some(message) = ipc::read::<FromWindow>(&mut reader) {
         if let Some(message) = message {
-            heard(&app, &inner, message);
+            heard(&app, &inner, &running, message);
         }
     }
     let (respawn, waiting, process) = {
@@ -225,7 +257,12 @@ fn listen(
     }
 }
 
-fn heard(app: &AppHandle, inner: &Arc<Mutex<Inner>>, message: FromWindow) {
+fn heard(
+    app: &AppHandle,
+    inner: &Arc<Mutex<Inner>>,
+    running: &Arc<Mutex<Running>>,
+    message: FromWindow,
+) {
     match message {
         FromWindow::Answer { id, text } => {
             let reply = inner.lock().expect("window lock").waiting.remove(&id);
@@ -240,11 +277,7 @@ fn heard(app: &AppHandle, inner: &Arc<Mutex<Inner>>, message: FromWindow) {
         }
         FromWindow::Hidden { hidden } => inner.lock().expect("window lock").hidden = hidden,
         FromWindow::Page { message } => {
-            if !soundscape_core::native_link::heard(app, &message)
-                && let Some(asked) = soundscape_core::mini::asked(&message)
-            {
-                soundscape_core::mini::act(app, asked);
-            }
+            soundscape_core::native_link::heard(app, &message);
         }
         FromWindow::Follow { url } => {
             if let Ok(url) = Url::parse(&url) {
@@ -277,6 +310,7 @@ fn heard(app: &AppHandle, inner: &Arc<Mutex<Inner>>, message: FromWindow) {
         }
         FromWindow::Done => inner.lock().expect("window lock").done = true,
         FromWindow::CpuRendering { on } => {
+            running.lock().expect("running lock").cpu_rendering = on;
             app.state::<AppState>()
                 .update(|config| config.cpu_rendering = on);
         }
@@ -386,6 +420,9 @@ impl Host for WindowHost {
             self.tell(&ToWindow::Server {
                 url: self.server_text(),
             });
+            self.tell(&ToWindow::Native {
+                script: self.native_script(),
+            });
             self.tell(&ToWindow::Navigate {
                 url: url.to_string(),
             });
@@ -397,6 +434,9 @@ impl Host for WindowHost {
     fn open_window(&self, label: &str, _page: &str, _options: &WindowOptions) -> Result<()> {
         match label {
             SETUP => {
+                self.tell(&ToWindow::Native {
+                    script: self.native_script(),
+                });
                 if !self.tell(&ToWindow::Setup) {
                     let page = soundscape_core::setup::page("", None);
                     self.open(Some(page));

@@ -36,7 +36,7 @@ pub mod updates;
 pub mod yearscape;
 
 use config::Config;
-use host::{async_runtime, AppHandle, Host, Manager, Running};
+use host::{async_runtime, AppHandle, Host, Manager};
 use std::path::PathBuf;
 use url::Url;
 
@@ -82,9 +82,8 @@ pub fn config_dir() -> Option<PathBuf> {
     )
 }
 
-pub fn launch(host: Box<dyn Host>, dir: PathBuf, running: Running) -> AppHandle {
+pub fn launch(host: Box<dyn Host>, dir: PathBuf) -> AppHandle {
     let app = AppHandle::new(host);
-    rendering::remember(running);
     let (config, in_keyring) = async_runtime::block_on(keyring::settle(&dir, Config::load(&dir)));
     let state = AppState::new(dir.clone(), config);
     state.use_keyring(in_keyring);

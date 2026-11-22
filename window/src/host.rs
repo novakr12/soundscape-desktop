@@ -1,9 +1,10 @@
-use crate::ipc::{self, FromWindow, ToWindow};
-use soundscape_core::host::Reply;
+use soundscape_protocol::{self as ipc, FromWindow, ToWindow};
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 use url::Url;
+
+pub type Reply = Box<dyn FnOnce(Option<String>) + Send>;
 
 pub enum Call {
     Eval(String),
@@ -18,6 +19,8 @@ pub enum Call {
     Smooth(bool),
     Memory(u32),
     KeepWindow(i64),
+    Theme(bool),
+    Font(Option<String>),
     Exit,
 }
 
@@ -50,6 +53,8 @@ pub fn call_for(message: ToWindow, out: &Out) -> Option<Call> {
         ToWindow::Smooth { on } => Call::Smooth(on),
         ToWindow::Memory { mb } => Call::Memory(mb),
         ToWindow::KeepWindow { seconds } => Call::KeepWindow(seconds),
+        ToWindow::Theme { dark } => Call::Theme(dark),
+        ToWindow::Font { family } => Call::Font(family),
         ToWindow::Exit => Call::Exit,
     })
 }

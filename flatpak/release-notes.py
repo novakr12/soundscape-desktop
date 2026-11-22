@@ -5,8 +5,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 METAINFO = ROOT / "flatpak" / "io.github.novakr12.SoundscapeDesktop.metainfo.xml"
-CARGO = ROOT / "Cargo.toml"
-CORE = ROOT / "core" / "Cargo.toml"
+MANIFESTS = (
+    "Cargo.toml",
+    "core/Cargo.toml",
+    "protocol/Cargo.toml",
+    "window/Cargo.toml",
+)
 
 
 def text(element):
@@ -28,13 +32,15 @@ def main():
         sys.exit("Usage: release-notes.py <tag, like v0.2.0>")
     tag = sys.argv[1]
     version = tag.removeprefix("v")
-    cargo = tomllib.loads(CARGO.read_text())["package"]["version"]
-    core = tomllib.loads(CORE.read_text())["package"]["version"]
+    versions = [
+        (path, tomllib.loads((ROOT / path).read_text())["package"]["version"])
+        for path in MANIFESTS
+    ]
     releases = ElementTree.parse(METAINFO).getroot().findall("./releases/release")
     newest = releases[0].get("version") if releases else None
     problems = [
         f"{name} says {found}"
-        for name, found in (("Cargo.toml", cargo), ("core/Cargo.toml", core), ("the newest metainfo release", newest))
+        for name, found in (*versions, ("the newest metainfo release", newest))
         if found != version
     ]
     if problems:

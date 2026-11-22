@@ -61,6 +61,8 @@ pub mod async_runtime {
         RUNTIME.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
+                .max_blocking_threads(4)
+                .thread_keep_alive(std::time::Duration::from_secs(15))
                 .thread_name("soundscape-tasks")
                 .enable_all()
                 .build()

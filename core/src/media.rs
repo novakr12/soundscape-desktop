@@ -389,10 +389,10 @@ async fn announce(connection: &Connection, old: Option<&Preview>, new: Option<&P
 }
 
 async fn connect(app: &AppHandle, shared: &Arc<Shared>) -> Option<Connection> {
-    let connection = Connection::session().await.ok()?;
+    let connection = crate::bus::session().await.ok()?;
     let server = connection.object_server();
-    server.at(PATH, Root(app.clone())).await.ok()?;
-    server
+    let _ = server.at(PATH, Root(app.clone())).await;
+    let _ = server
         .at(
             PATH,
             Player {
@@ -400,8 +400,7 @@ async fn connect(app: &AppHandle, shared: &Arc<Shared>) -> Option<Connection> {
                 shared: shared.clone(),
             },
         )
-        .await
-        .ok()?;
+        .await;
     Some(connection)
 }
 

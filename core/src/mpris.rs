@@ -1,7 +1,5 @@
 use crate::scrobble::{Snapshot, Track};
 use std::collections::HashMap;
-use std::sync::OnceLock;
-use tokio::sync::Mutex;
 use zbus::proxy::{Builder, CacheProperties};
 use zbus::zvariant::OwnedValue;
 use zbus::{Connection, Proxy};
@@ -38,14 +36,7 @@ pub struct Player {
 }
 
 async fn session() -> zbus::Result<Connection> {
-    static CONNECTION: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
-    let mut guard = CONNECTION.get_or_init(|| Mutex::new(None)).lock().await;
-    if let Some(connection) = guard.as_ref() {
-        return Ok(connection.clone());
-    }
-    let connection = Connection::session().await?;
-    *guard = Some(connection.clone());
-    Ok(connection)
+    crate::bus::session().await
 }
 
 pub async fn control(bus: &str, method: &str) -> zbus::Result<()> {

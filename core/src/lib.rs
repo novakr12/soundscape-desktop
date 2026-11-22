@@ -1,7 +1,9 @@
 pub mod autostart;
+pub mod bus;
 pub mod config;
 pub mod discord;
 pub mod fixes;
+pub mod font;
 pub mod friends;
 pub mod host;
 pub mod instance;
@@ -29,6 +31,7 @@ pub mod settings_page;
 pub mod setup;
 pub mod state;
 pub mod submit;
+pub mod theme;
 pub mod tidy;
 pub mod today;
 pub mod tray;
@@ -40,25 +43,16 @@ use host::{async_runtime, AppHandle, Host, Manager};
 use std::path::PathBuf;
 use url::Url;
 
+pub use soundscape_protocol::{
+    allowed_keep_window, config_dir, config_dir_from, IDENTIFIER, KEEP_WINDOW_ALWAYS,
+    KEEP_WINDOW_CHOICES, KEEP_WINDOW_SECONDS,
+};
 pub use state::AppState;
 
 pub const MAIN: &str = "main";
 pub const SETUP: &str = "setup";
-pub const IDENTIFIER: &str = "io.github.novakr12.SoundscapeDesktop";
 pub const MEMORY_LIMIT_MB: u32 = 500;
 pub const MEMORY_LIMITS_MB: [u32; 4] = [0, 400, 500, 700];
-
-pub const KEEP_WINDOW_SECONDS: i64 = 60;
-pub const KEEP_WINDOW_ALWAYS: i64 = -1;
-pub const KEEP_WINDOW_CHOICES: [i64; 5] = [0, 60, 300, 900, KEEP_WINDOW_ALWAYS];
-
-pub fn allowed_keep_window(seconds: i64) -> i64 {
-    if KEEP_WINDOW_CHOICES.contains(&seconds) {
-        seconds
-    } else {
-        KEEP_WINDOW_SECONDS
-    }
-}
 
 pub fn allowed_memory_limit(limit_mb: u32) -> u32 {
     if MEMORY_LIMITS_MB.contains(&limit_mb) {
@@ -66,20 +60,6 @@ pub fn allowed_memory_limit(limit_mb: u32) -> u32 {
     } else {
         MEMORY_LIMIT_MB
     }
-}
-
-pub fn config_dir_from(config_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
-    config_home
-        .filter(|dir| dir.is_absolute())
-        .or_else(|| home.map(|home| home.join(".config")))
-        .map(|dir| dir.join(IDENTIFIER))
-}
-
-pub fn config_dir() -> Option<PathBuf> {
-    config_dir_from(
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
-    )
 }
 
 pub fn launch(host: Box<dyn Host>, dir: PathBuf) -> AppHandle {
@@ -97,7 +77,7 @@ pub fn launch(host: Box<dyn Host>, dir: PathBuf) -> AppHandle {
     async_runtime::spawn(yearscape::run(app.clone()));
     async_runtime::spawn(updates::run(app.clone()));
     async_runtime::spawn(settings_page::run(app.clone()));
-    discord::run(app.clone());
+    async_runtime::spawn(discord::run(app.clone()));
     async_runtime::spawn(recap::run(app.clone()));
     async_runtime::spawn(media::run(app.clone()));
     async_runtime::spawn(search::run(app.clone()));
@@ -150,6 +130,7 @@ pub fn open_main(app: &AppHandle, start: Url) -> host::Result<()> {
 }
 
 pub fn open_settings(app: &AppHandle) -> host::Result<()> {
+    settings_page::wake();
     match app.state::<AppState>().server() {
         Some(server) => match settings_page::page_address(&server) {
             Some(page) => open_main(app, page),

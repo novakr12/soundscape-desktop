@@ -73,7 +73,7 @@ async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
 
 async fn ask_portal(on: bool) -> Result<bool, String> {
     static REQUEST_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let connection = zbus::Connection::session()
+    let connection = crate::bus::session()
         .await
         .map_err(|error| error.to_string())?;
     let seq = REQUEST_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

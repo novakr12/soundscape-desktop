@@ -4,6 +4,7 @@ use resvg::usvg;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const SHUFFLE: &str = r#"<path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H20" /><path d="M3 17h3.5c1.3 0 2.3-.4 3.1-1.2M13.4 8.2c.8-.8 1.8-1.2 3.1-1.2H20" /><path d="M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" />"#;
 const PREVIOUS: &str = r#"<rect x="5" y="5" width="2.5" height="14" rx="1" /><path d="M19 6.2v11.6a1 1 0 0 1-1.55.83L9.2 13.1a1.3 1.3 0 0 1 0-2.2l8.25-5.53A1 1 0 0 1 19 6.2z" />"#;
@@ -211,119 +212,195 @@ pub fn circle(canvas: &mut Pixmap, center: (f32, f32), radius: f32, color: Color
     }
 }
 
-pub type Face = FontRef<'static>;
+pub struct Face {
+    path: PathBuf,
+    index: u32,
+    mmap: Arc<memmap2::Mmap>,
+}
+
+impl Face {
+    fn as_font(&self) -> Option<FontRef<'_>> {
+        FontRef::try_from_slice_and_index(&self.mmap, self.index).ok()
+    }
+}
 
 pub struct Fonts {
     pub regular: Vec<Face>,
     pub bold: Vec<Face>,
+    fallbacks_loaded: bool,
 }
 
-fn read_font(path: &Path) -> Option<&'static [u8]> {
-    let bytes: Vec<u8> = std::fs::read(path).ok()?;
-    Some(Box::leak(bytes.into_boxed_slice()))
+const PRIMARY_FAMILIES: [&str; 5] = [
+    "Cantarell",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Inter",
+];
+
+const FALLBACK_FAMILIES: [&str; 4] = [
+    "Noto Sans CJK JP",
+    "Noto Sans CJK SC",
+    "Droid Sans Fallback",
+    "DejaVu Sans",
+];
+
+fn read_font(path: &Path) -> Option<Arc<memmap2::Mmap>> {
+    let file = std::fs::File::open(path).ok()?;
+    // Safety: system font files on disk are immutable for the lifetime of the mini player window.
+    let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
+    Some(Arc::new(mmap))
+}
+
+fn open_face(
+    database: &fontdb::Database,
+    id: fontdb::ID,
+    files: &mut HashMap<PathBuf, Option<Arc<memmap2::Mmap>>>,
+) -> Option<Face> {
+    let face = database.face(id)?;
+    let fontdb::Source::File(path) = &face.source else {
+        return None;
+    };
+    let mmap = files
+        .entry(path.clone())
+        .or_insert_with(|| read_font(path))
+        .clone()?;
+    FontRef::try_from_slice_and_index(&mmap, face.index).ok()?;
+    Some(Face {
+        path: path.clone(),
+        index: face.index,
+        mmap,
+    })
+}
+
+fn append_unique(target: &mut Vec<Face>, face: Face) {
+    if !target
+        .iter()
+        .any(|known| known.path == face.path && known.index == face.index)
+    {
+        target.push(face);
+    }
 }
 
 impl Fonts {
     pub fn load() -> Fonts {
         let mut database = fontdb::Database::new();
         database.load_system_fonts();
-        let desktop = crate::font::desktop();
+        let desktop = soundscape_core::font::desktop();
         let mut families: Vec<fontdb::Family> = Vec::new();
         if let Some(name) = desktop.as_deref() {
             families.push(fontdb::Family::Name(name));
         }
-        for name in [
-            "Cantarell",
-            "Noto Sans",
-            "DejaVu Sans",
-            "Liberation Sans",
-            "Inter",
-        ] {
+        for name in PRIMARY_FAMILIES {
             families.push(fontdb::Family::Name(name));
         }
-        let fallbacks = [
-            "Noto Sans CJK JP",
-            "Noto Sans CJK SC",
-            "Droid Sans Fallback",
-            "DejaVu Sans",
-        ];
-        let mut files: HashMap<PathBuf, Option<&'static [u8]>> = HashMap::new();
-        let mut open = |id: fontdb::ID| -> Option<Face> {
-            let face = database.face(id)?;
-            let fontdb::Source::File(path) = &face.source else {
-                return None;
-            };
-            let data = (*files.entry(path.clone()).or_insert_with(|| read_font(path)))?;
-            FontRef::try_from_slice_and_index(data, face.index).ok()
-        };
+        let mut files: HashMap<PathBuf, Option<Arc<memmap2::Mmap>>> = HashMap::new();
         let mut pick = |weight: fontdb::Weight| {
             let mut found: Vec<Face> = Vec::new();
-            let mut chosen: Vec<fontdb::ID> = Vec::new();
-            let mut ids = Vec::new();
-            ids.push(database.query(&fontdb::Query {
-                families: &families,
-                weight,
-                ..fontdb::Query::default()
-            }));
-            for name in fallbacks {
-                ids.push(database.query(&fontdb::Query {
-                    families: &[fontdb::Family::Name(name)],
+            let id = database
+                .query(&fontdb::Query {
+                    families: &families,
                     weight,
                     ..fontdb::Query::default()
-                }));
-            }
-            if ids.iter().all(Option::is_none) {
-                ids.push(database.faces().next().map(|face| face.id));
-            }
-            for id in ids.into_iter().flatten() {
-                if chosen.contains(&id) {
-                    continue;
-                }
-                chosen.push(id);
-                if let Some(face) = open(id) {
-                    found.push(face);
-                }
+                })
+                .or_else(|| database.faces().next().map(|face| face.id));
+            if let Some(id) = id
+                && let Some(face) = open_face(&database, id, &mut files)
+            {
+                append_unique(&mut found, face);
             }
             found
         };
         let regular = pick(fontdb::Weight::NORMAL);
         let bold = pick(fontdb::Weight::BOLD);
-        Fonts { regular, bold }
+        Fonts {
+            regular,
+            bold,
+            fallbacks_loaded: false,
+        }
+    }
+
+    fn has_glyph(&self, ch: char) -> bool {
+        self.regular
+            .iter()
+            .filter_map(Face::as_font)
+            .any(|font| font.glyph_id(ch).0 != 0)
+    }
+
+    pub fn ensure_fallbacks_for(&mut self, text: &str) {
+        if self.fallbacks_loaded
+            || text
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .all(|ch| self.has_glyph(ch))
+        {
+            return;
+        }
+        self.fallbacks_loaded = true;
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        let mut files: HashMap<PathBuf, Option<Arc<memmap2::Mmap>>> = HashMap::new();
+        for weight in [fontdb::Weight::NORMAL, fontdb::Weight::BOLD] {
+            for name in FALLBACK_FAMILIES {
+                if let Some(id) = database.query(&fontdb::Query {
+                    families: &[fontdb::Family::Name(name)],
+                    weight,
+                    ..fontdb::Query::default()
+                }) && let Some(face) = open_face(&database, id, &mut files)
+                {
+                    let target = if weight == fontdb::Weight::BOLD {
+                        &mut self.bold
+                    } else {
+                        &mut self.regular
+                    };
+                    append_unique(target, face);
+                }
+            }
+        }
     }
 }
 
 struct Glyph<'a> {
-    font: &'a Face,
+    font: FontRef<'a>,
     id: ab_glyph::GlyphId,
     x: f32,
 }
 
-fn em(font: &Face, size: f32) -> PxScale {
+fn em(font: &FontRef<'_>, size: f32) -> PxScale {
     let units = font.units_per_em().unwrap_or(1000.0);
     PxScale::from(size * font.height_unscaled() / units)
 }
 
 fn lay_out<'a>(fonts: &'a [Face], text: &str, size: f32) -> (Vec<Glyph<'a>>, f32) {
+    let refs: Vec<FontRef<'a>> = fonts.iter().filter_map(Face::as_font).collect();
     let mut glyphs = Vec::new();
     let mut x = 0.0;
     let mut previous: Option<(usize, ab_glyph::GlyphId)> = None;
     for letter in text.chars() {
-        let chosen = fonts
+        let chosen = refs
             .iter()
             .position(|font| font.glyph_id(letter).0 != 0)
             .unwrap_or(0);
-        let Some(font) = fonts.get(chosen) else {
+        let Some(font) = refs.get(chosen).cloned() else {
             break;
         };
-        let scaled = font.as_scaled(em(font, size));
         let id = font.glyph_id(letter);
-        if let Some((before, before_id)) = previous
-            && before == chosen
-        {
-            x += scaled.kern(before_id, id);
-        }
-        glyphs.push(Glyph { font, id, x });
-        x += scaled.h_advance(id);
+        let glyph_x = {
+            let scaled = font.as_scaled(em(&font, size));
+            if let Some((before, before_id)) = previous
+                && before == chosen
+            {
+                x += scaled.kern(before_id, id);
+            }
+            let glyph_x = x;
+            x += scaled.h_advance(id);
+            glyph_x
+        };
+        glyphs.push(Glyph {
+            font,
+            id,
+            x: glyph_x,
+        });
         previous = Some((chosen, id));
     }
     (glyphs, x)
@@ -378,7 +455,7 @@ pub fn text(
     for glyph in glyphs {
         let placed = glyph
             .id
-            .with_scale_and_position(em(glyph.font, size), ab_glyph::point(at.0 + glyph.x, at.1));
+            .with_scale_and_position(em(&glyph.font, size), ab_glyph::point(at.0 + glyph.x, at.1));
         if let Some(outline) = glyph.font.outline_glyph(placed) {
             let bounds = outline.px_bounds();
             outline.draw(|x, y, coverage| {
@@ -395,10 +472,10 @@ pub fn text(
 }
 
 pub fn baseline(fonts: &[Face], size: f32, top: f32, line: f32) -> f32 {
-    let Some(font) = fonts.first() else {
+    let Some(font) = fonts.iter().find_map(Face::as_font) else {
         return top + line * 0.75;
     };
-    let scaled = font.as_scaled(em(font, size));
+    let scaled = font.as_scaled(em(&font, size));
     let height = scaled.ascent() - scaled.descent();
     top + (line - height) / 2.0 + scaled.ascent()
 }

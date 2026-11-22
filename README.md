@@ -63,7 +63,7 @@ flatpak-builder --user --install-deps-from=flathub --install --force-clean flatp
 
 ## Releasing
 
-Set the version in `Cargo.toml` and `core/Cargo.toml`, run `cargo update -w`, add a `<release>` to the top of the metainfo's `<releases>`, then push a matching tag (`git tag v0.10.0 && git push origin v0.10.0`). The release workflow builds the Flatpak and publishes it with the notes from the metainfo.
+Set the version in `Cargo.toml`, `core/Cargo.toml`, `protocol/Cargo.toml`, and `window/Cargo.toml`, run `cargo update -w`, add a `<release>` to the top of the metainfo's `<releases>`, then push a matching tag (`git tag v0.10.0 && git push origin v0.10.0`). The release workflow builds the Flatpak and publishes it with the notes from the metainfo.
 
 ## License
 

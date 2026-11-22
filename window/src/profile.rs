@@ -1,6 +1,7 @@
-use soundscape_core::config::Config;
+use soundscape_protocol::Start;
 use std::path::PathBuf;
-use url::Url;
+
+pub use soundscape_protocol::wants;
 
 pub struct Profile {
     pub cpu_rendering: bool,
@@ -14,13 +15,6 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
-pub fn server_from(given: Option<&str>, saved: Option<&str>) -> Option<Url> {
-    given
-        .or(saved)
-        .and_then(|text| Url::parse(text.trim()).ok())
-        .filter(|url| matches!(url.scheme(), "http" | "https"))
-}
-
 const OLD_STORAGE: &str = "soundscape-servo";
 
 fn data_dir(data_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
@@ -30,7 +24,7 @@ fn data_dir(data_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf
 }
 
 pub fn storage_dir(data_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
-    data_dir(data_home, home).map(|dir| dir.join(soundscape_core::IDENTIFIER).join("servo"))
+    data_dir(data_home, home).map(|dir| dir.join(soundscape_protocol::IDENTIFIER).join("servo"))
 }
 
 pub fn move_old_storage(data_home: Option<PathBuf>, home: Option<PathBuf>) {
@@ -49,33 +43,15 @@ pub fn move_old_storage(data_home: Option<PathBuf>, home: Option<PathBuf>) {
     let _ = std::fs::rename(&old, &new);
 }
 
-pub fn wants(value: Option<&str>) -> bool {
-    matches!(value.map(str::trim), Some("1" | "true" | "yes"))
-}
-
-pub fn given() -> Option<Url> {
-    server_from(given_server().as_deref(), None)
-}
-
-pub fn given_server() -> Option<String> {
-    std::env::args()
-        .skip(1)
-        .find(|arg| !arg.starts_with("--"))
-        .or_else(|| std::env::var("SOUNDSCAPE_SERVER").ok())
-}
-
-pub fn load() -> Profile {
-    let config_dir = soundscape_core::config_dir();
-    let saved = config_dir.as_deref().map(Config::load).unwrap_or_default();
+pub fn from_start(start: &Start) -> Profile {
     let data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     move_old_storage(data_home.clone(), home());
     let storage = storage_dir(data_home, home());
     Profile {
-        cpu_rendering: saved.cpu_rendering,
-        faster_scripts: saved.faster_scripts,
+        cpu_rendering: start.cpu_rendering,
+        faster_scripts: start.faster_scripts,
         theme: crate::theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref())
-            .or_else(crate::theme::current)
-            .unwrap_or(servo::Theme::Light),
+            .unwrap_or_else(|| crate::theme::from_dark(start.dark)),
         storage,
         show_fps: wants(std::env::var("SOUNDSCAPE_SHOW_FPS").ok().as_deref()),
     }
@@ -84,6 +60,7 @@ pub fn load() -> Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soundscape_protocol::server_from;
 
     #[test]
     fn prefers_the_given_server() {

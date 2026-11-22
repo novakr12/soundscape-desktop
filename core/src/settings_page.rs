@@ -3,12 +3,19 @@ use crate::{settings, AppState, MAIN};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::Duration;
+use tokio::sync::Notify;
 use url::Url;
 
 const EVERY: Duration = Duration::from_millis(500);
+const IDLE_EVERY: Duration = Duration::from_secs(10);
 const MOST_AT_ONCE: usize = 20;
 pub const PATH: &str = "/settings";
 pub const SECTION: &str = "this-app";
+static WAKE: Notify = Notify::const_new();
+
+pub fn wake() {
+    WAKE.notify_one();
+}
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(tag = "do", rename_all = "kebab-case")]
@@ -89,6 +96,7 @@ pub fn page_address(server: &Url) -> Option<Url> {
 }
 
 pub fn open(app: &AppHandle) {
+    wake();
     let state = app.state::<AppState>();
     let config = state.config();
     let page = state
@@ -192,6 +200,14 @@ async fn perform(app: &AppHandle, command: Command) -> Result<(), String> {
 pub async fn run(app: AppHandle) {
     let mut last: Option<(String, String)> = None;
     loop {
+        if !on_settings_page(&app) {
+            last = None;
+            tokio::select! {
+                _ = WAKE.notified() => {}
+                _ = tokio::time::sleep(IDLE_EVERY) => {}
+            }
+            continue;
+        }
         tokio::time::sleep(EVERY).await;
         if !on_settings_page(&app) {
             last = None;

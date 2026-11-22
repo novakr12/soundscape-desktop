@@ -9,10 +9,24 @@
   window.soundscapeCanvasCovers = true;
   if (!collect) return;
   let timer = 0;
-  const gone = (node) =>
-    node instanceof Element && (node.matches("canvas.cover-canvas") || node.querySelector("canvas.cover-canvas") !== null);
+  const gone = (node) => {
+    if (!(node instanceof Element)) return false;
+    if (node.localName === "canvas") return node.classList.contains("cover-canvas");
+    return node.firstElementChild !== null && node.querySelector("canvas.cover-canvas") !== null;
+  };
   new MutationObserver((records) => {
-    if (timer || !records.some((record) => [...record.removedNodes].some(gone))) return;
+    if (timer) return;
+    let found = false;
+    for (const record of records) {
+      for (const node of record.removedNodes) {
+        if (gone(node)) {
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+    }
+    if (!found) return;
     timer = setTimeout(() => {
       timer = 0;
       collect();

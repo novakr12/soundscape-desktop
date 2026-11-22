@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
 
-pub const ASKED: &str = "soundscape-native ";
+pub use soundscape_protocol::NATIVE_ASKED as ASKED;
 pub const KIND: &str = "desktop";
 pub const DEFAULT_VOLUME: f64 = 0.8;
 const EVERY: Duration = Duration::from_secs(1);
@@ -345,14 +345,30 @@ fn apply(app: &AppHandle, page: PageSettings) {
     with_player(app, |player| player.send(fresh.command()));
 }
 
+static LAST_REPORT: Mutex<Option<String>> = Mutex::new(None);
+static RUN_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+const IDLE_EVERY: Duration = Duration::from_secs(5);
+
+fn reset_report() {
+    *LAST_REPORT.lock().expect("report lock") = None;
+}
+
 pub fn report(app: &AppHandle) {
     if !wanted(app) {
+        reset_report();
         return;
     }
     let Some(snapshot) = settled(app) else {
         return;
     };
     let json = report_json(&device_id(app), &device_name(), snapshot.as_ref(), volume());
+    {
+        let mut last = LAST_REPORT.lock().expect("report lock");
+        if last.as_deref() == Some(json.as_str()) {
+            return;
+        }
+        *last = Some(json.clone());
+    }
     app.host().eval(MAIN, report_script(&json));
 }
 
@@ -495,22 +511,6 @@ impl EventReader {
     }
 }
 
-const LIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
-
-fn live_client() -> reqwest::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(15))
-                .read_timeout(LIVE_IDLE_TIMEOUT)
-                .user_agent(concat!("SoundscapeDesktop/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .expect("HTTP client")
-        })
-        .clone()
-}
-
 async fn listen_once(app: &AppHandle) {
     let Some((server, token)) = crate::server::credentials(app) else {
         return;
@@ -518,7 +518,7 @@ async fn listen_once(app: &AppHandle) {
     let Ok(address) = crate::server::address(&server, "/api/devices/live") else {
         return;
     };
-    let Ok(mut response) = live_client()
+    let Ok(mut response) = crate::server::client()
         .get(address)
         .header("authorization", format!("Token {token}"))
         .header("accept", "text/event-stream")
@@ -686,7 +686,10 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
         with_player(app, |player| player.send(command));
     };
     match asked {
-        Asked::Hello => {}
+        Asked::Hello => {
+            reset_report();
+            RUN_WAKE.notify_one();
+        }
         Asked::Play => send(Command::Play),
         Asked::Pause => send(Command::Pause),
         Asked::Toggle => send(Command::Toggle),
@@ -902,7 +905,10 @@ pub async fn run(app: AppHandle) {
             told = now;
             report_to_server(&app).await;
         }
-        tokio::time::sleep(EVERY).await;
+        tokio::select! {
+            _ = tokio::time::sleep(if active(&app) || wanted(&app) { EVERY } else { IDLE_EVERY }) => {}
+            _ = RUN_WAKE.notified() => {}
+        }
         since_heartbeat += EVERY;
         if active(&app) {
             report(&app);

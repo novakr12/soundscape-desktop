@@ -115,14 +115,23 @@ fn run(app: AppHandle, sender: mpsc::Sender<Option<EventLoopProxy<Event>>>) {
     };
     let proxy = event_loop.create_proxy();
     let _ = sender.send(Some(proxy.clone()));
-    let dark = match crate::theme::chosen(std::env::var("SOUNDSCAPE_THEME").ok().as_deref()) {
-        Some(theme) => theme == servo::Theme::Dark,
+    let dark = match soundscape_core::theme::chosen_dark(
+        std::env::var("SOUNDSCAPE_THEME").ok().as_deref(),
+    ) {
+        Some(dark) => dark,
         None => {
             let watcher = proxy.clone();
-            crate::theme::watch(move |theme| {
-                let _ = watcher.send_event(Event::Dark(theme == servo::Theme::Dark));
+            let mut rx = soundscape_core::theme::subscribe();
+            async_runtime::spawn(async move {
+                while rx.changed().await.is_ok() {
+                    if let Some(dark) = *rx.borrow_and_update()
+                        && watcher.send_event(Event::Dark(dark)).is_err()
+                    {
+                        break;
+                    }
+                }
             });
-            crate::theme::current() == Some(servo::Theme::Dark)
+            async_runtime::block_on(soundscape_core::theme::current_dark()).unwrap_or(false)
         }
     };
     let mut player = Player {
@@ -214,6 +223,7 @@ impl Player {
         self.problem = None;
         self.next_tick = None;
         OPEN.store(true, Ordering::Relaxed);
+        soundscape_core::mini::wake();
         let app = self.app.clone();
         async_runtime::spawn(async move { mini::refresh(&app).await });
     }
@@ -224,6 +234,15 @@ impl Player {
         self.next_tick = None;
         self.canvas = None;
         self.shown = None;
+        self.fonts = None;
+        self.icons = Icons::default();
+        self.cover = None;
+        self.spots.clear();
+        self.spots.shrink_to_fit();
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        unsafe {
+            libc::malloc_trim(0);
+        }
     }
 
     fn redraw(&self) {
@@ -378,8 +397,10 @@ impl Player {
             return;
         };
         let mut icons = std::mem::take(&mut self.icons);
-        let spots = draw(&mut canvas, &mut icons, self, scale);
+        let mut fonts = self.fonts.take();
+        let spots = draw(&mut canvas, &mut icons, fonts.as_mut(), self, scale);
         self.icons = icons;
+        self.fonts = fonts;
         if let Some(shown) = self.shown.as_mut()
             && let Ok(mut buffer) = shown.surface.buffer_mut()
         {
@@ -525,6 +546,7 @@ impl ApplicationHandler<Event> for Player {
 fn draw(
     canvas: &mut Pixmap,
     icons: &mut Icons,
+    fonts: Option<&mut Fonts>,
     player: &Player,
     scale: f32,
 ) -> Vec<(Spot, Rect, bool)> {
@@ -612,7 +634,7 @@ fn draw(
         );
     }
 
-    let Some(fonts) = player.fonts.as_ref() else {
+    let Some(fonts) = fonts else {
         return spots;
     };
     let left = PAD + COVER + 12.0;
@@ -623,6 +645,13 @@ fn draw(
     } else {
         "Nothing playing"
     };
+    let (second, tint) = match &player.problem {
+        Some(problem) => (problem.clone(), palette.error),
+        None if active => (format!("{} · {}", view.artist, view.source), palette.muted),
+        None => ("Start a song in any player.".into(), palette.muted),
+    };
+    fonts.ensure_fallbacks_for(title);
+    fonts.ensure_fallbacks_for(&second);
     let title = fitted(&fonts.bold, title, k(16.0), k(room));
     text(
         canvas,
@@ -632,11 +661,6 @@ fn draw(
         (k(left), k(baseline(&fonts.bold, 16.0, top, 22.0))),
         palette.text,
     );
-    let (second, tint) = match &player.problem {
-        Some(problem) => (problem.clone(), palette.error),
-        None if active => (format!("{} · {}", view.artist, view.source), palette.muted),
-        None => ("Start a song in any player.".into(), palette.muted),
-    };
     let second = fitted(&fonts.regular, &second, k(15.0), k(room));
     text(
         canvas,

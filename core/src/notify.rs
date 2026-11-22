@@ -27,7 +27,7 @@ pub enum Click {
     Downloads,
 }
 
-static BUS: OnceCell<Connection> = OnceCell::const_new();
+static LISTENING: OnceCell<()> = OnceCell::const_new();
 static WAITING: Mutex<Vec<(u32, Click)>> = Mutex::new(Vec::new());
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -137,19 +137,21 @@ async fn listen(app: AppHandle, connection: Connection) -> zbus::Result<()> {
     Ok(())
 }
 
-async fn bus(app: &AppHandle) -> zbus::Result<&'static Connection> {
-    BUS.get_or_try_init(|| async {
-        let connection = Connection::session().await?;
-        let listener = connection.clone();
-        let app = app.clone();
-        crate::host::async_runtime::spawn(async move {
-            if let Err(error) = listen(app, listener).await {
-                eprintln!("Couldn't follow clicks on notifications: {error}");
-            }
-        });
-        Ok(connection)
-    })
-    .await
+async fn bus(app: &AppHandle) -> zbus::Result<Connection> {
+    let connection = crate::bus::session().await?;
+    LISTENING
+        .get_or_try_init(|| async {
+            let listener = connection.clone();
+            let app = app.clone();
+            crate::host::async_runtime::spawn(async move {
+                if let Err(error) = listen(app, listener).await {
+                    eprintln!("Couldn't follow clicks on notifications: {error}");
+                }
+            });
+            Ok::<_, zbus::Error>(())
+        })
+        .await?;
+    Ok(connection)
 }
 
 async fn send(app: &AppHandle, title: &str, body: &str, click: Click) -> zbus::Result<()> {

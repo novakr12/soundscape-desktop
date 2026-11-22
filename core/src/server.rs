@@ -8,7 +8,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use url::Url;
 
-pub const APP_SCHEME: &str = "soundscape-desktop";
+pub use soundscape_protocol::server::{classify, Navigation};
+pub use soundscape_protocol::{APP_SCHEME, CONNECTED_PATH};
 const TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Deserialize)]
@@ -44,7 +45,10 @@ pub fn client() -> reqwest::Client {
     CLIENT
         .get_or_init(|| {
             reqwest::Client::builder()
-                .timeout(TIMEOUT)
+                .connect_timeout(TIMEOUT)
+                .read_timeout(Duration::from_secs(90))
+                .pool_max_idle_per_host(2)
+                .pool_idle_timeout(Duration::from_secs(30))
                 .user_agent(concat!("SoundscapeDesktop/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .expect("HTTP client")
@@ -78,6 +82,7 @@ pub async fn answer(
     token: &str,
 ) -> Result<reqwest::Response, Failure> {
     let response = request
+        .timeout(TIMEOUT)
         .header("authorization", format!("Token {token}"))
         .send()
         .await
@@ -123,12 +128,17 @@ pub async fn check_server(server: &Url) -> Result<(), String> {
     let address = server
         .join("/api/info")
         .map_err(|error| error.to_string())?;
-    let response = client().get(address).send().await.map_err(|_| {
-        format!(
-            "Couldn't reach {}. Check the address and that the server is running.",
-            server.as_str().trim_end_matches('/')
-        )
-    })?;
+    let response = client()
+        .get(address)
+        .timeout(TIMEOUT)
+        .send()
+        .await
+        .map_err(|_| {
+            format!(
+                "Couldn't reach {}. Check the address and that the server is running.",
+                server.as_str().trim_end_matches('/')
+            )
+        })?;
     if !response.status().is_success() {
         return Err("This server answered, but it isn't Soundscape, or it needs an update.".into());
     }
@@ -142,6 +152,7 @@ pub async fn revoke_token(server: &Url, token: &str) {
     if let Ok(address) = server.join("/api/token") {
         let _ = client()
             .delete(address)
+            .timeout(TIMEOUT)
             .header("authorization", format!("Token {token}"))
             .send()
             .await;
@@ -163,64 +174,6 @@ pub fn device_name() -> String {
         "Desktop app".into()
     } else {
         format!("Desktop app on {host}")
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Navigation {
-    Allow,
-    AppSettings,
-    Connected { token: String, user: String },
-    External,
-    Block,
-}
-
-pub const CONNECTED_PATH: &str = "/desktop/connected";
-
-fn connected(pairs: url::form_urlencoded::Parse<'_>) -> Option<Navigation> {
-    let pairs: std::collections::HashMap<_, _> = pairs.into_owned().collect();
-    match (pairs.get("token"), pairs.get("user")) {
-        (Some(token), Some(user)) if !token.is_empty() && !user.is_empty() => {
-            Some(Navigation::Connected {
-                token: token.clone(),
-                user: user.clone(),
-            })
-        }
-        _ => None,
-    }
-}
-
-pub fn classify(server: Option<&Url>, target: &Url) -> Navigation {
-    if target.scheme() == APP_SCHEME {
-        if target.host_str() == Some("settings") {
-            return Navigation::AppSettings;
-        }
-        if target.host_str() != Some("connected") {
-            return Navigation::Block;
-        }
-        return connected(target.query_pairs()).unwrap_or(Navigation::Block);
-    }
-    if server.is_some_and(|server| server.origin() == target.origin())
-        && target.path() == CONNECTED_PATH
-    {
-        if let Some(found) = target
-            .fragment()
-            .and_then(|fragment| connected(url::form_urlencoded::parse(fragment.as_bytes())))
-        {
-            return found;
-        }
-    }
-    match target.scheme() {
-        "about" | "data" | "blob" => Navigation::Allow,
-        "http" | "https" => {
-            if server.is_some_and(|server| server.origin() == target.origin()) {
-                Navigation::Allow
-            } else {
-                Navigation::External
-            }
-        }
-        "mailto" => Navigation::External,
-        _ => Navigation::Block,
     }
 }
 

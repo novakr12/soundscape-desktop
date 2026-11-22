@@ -135,12 +135,15 @@ pub async fn run(app: AppHandle) {
         let queue = Queue::new(&state.dir);
 
         if connection.is_none() {
-            connection = zbus::Connection::session().await.ok();
+            connection = crate::bus::session().await.ok();
         }
         let found = match &connection {
             Some(bus) => match mpris::players(bus).await {
                 Ok(found) => found,
                 Err(_) => {
+                    if bus.is_closed() {
+                        crate::bus::reset(bus).await;
+                    }
                     connection = None;
                     Vec::new()
                 }

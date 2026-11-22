@@ -112,8 +112,35 @@
 
   const fixTree = (root) => {
     if (root.nodeType !== 1) return;
-    fix(root);
-    for (const element of root.querySelectorAll("*")) fix(element);
+    if (root.namespaceURI === SVG) {
+      fix(root);
+      for (const element of root.querySelectorAll("*")) fix(element);
+      return;
+    }
+    for (const element of root.querySelectorAll("svg, svg *")) fix(element);
+  };
+
+  const dropCopies = (svg) => {
+    const list = copies.get(svg);
+    if (list) {
+      for (const each of list) each.remove();
+      copies.delete(svg);
+    }
+    drawn.delete(svg);
+    pending.delete(svg);
+  };
+
+  const cleanupRemoved = (node) => {
+    if (node.nodeType !== 1) return;
+    if (node.namespaceURI === SVG && node.localName === "svg") {
+      if (!node.hasAttribute(COPY)) dropCopies(node);
+      return;
+    }
+    if (node.firstElementChild) {
+      for (const svg of node.querySelectorAll("svg")) {
+        if (!svg.hasAttribute(COPY)) dropCopies(svg);
+      }
+    }
   };
 
   const outer = (node) => {
@@ -234,6 +261,7 @@
         if (change.target.namespaceURI === SVG) touched(change.target);
       } else if (change.type === "childList") {
         if (change.target.nodeType === 1 && change.target.closest?.(`[${COPY}]`)) continue;
+        for (const removed of change.removedNodes) cleanupRemoved(removed);
         for (const added of change.addedNodes) {
           if (added.nodeType === 1 && added.hasAttribute(COPY)) continue;
           fixTree(added);

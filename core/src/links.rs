@@ -3,34 +3,14 @@ use std::collections::HashMap;
 use url::Url;
 use zbus::zvariant::Value;
 
-pub const SAME_WINDOW: &str = concat!(
-    r#"(() => {
-  if (window.top !== window) return;
-  Object.defineProperty(window, "soundscapeDesktop", { value: true });
-  Object.defineProperty(window, "soundscapeDesktopVersion", { value: ""#,
-    env!("CARGO_PKG_VERSION"),
-    r#"" });
-  document.addEventListener(
-    "click",
-    (event) => {
-      const link = event.target instanceof Element ? event.target.closest("a[href][target]") : null;
-      if (link && link.target !== "_self") link.target = "_self";
-    },
-    true,
-  );
-  window.open = (address) => {
-    if (address) window.location.assign(new URL(String(address), window.location.href).href);
-    return null;
-  };
-})();"#
-);
+pub use soundscape_protocol::SAME_WINDOW;
 
 pub fn openable(target: &Url) -> bool {
     matches!(target.scheme(), "http" | "https" | "mailto")
 }
 
 async fn through_portal(target: &str) -> zbus::Result<()> {
-    let connection = zbus::Connection::session().await?;
+    let connection = crate::bus::session().await?;
     let options: HashMap<&str, Value<'_>> = HashMap::new();
     connection
         .call_method(

@@ -248,7 +248,12 @@ impl Krunner {
         self.0.open_hit(&id);
     }
 
-    fn teardown(&self) {}
+    fn teardown(&self) {
+        if let Ok(mut known) = self.0.found.lock() {
+            known.clear();
+            known.shrink_to_fit();
+        }
+    }
 }
 
 async fn serve(app: AppHandle) -> zbus::Result<Connection> {
@@ -256,7 +261,7 @@ async fn serve(app: AppHandle) -> zbus::Result<Connection> {
         app,
         found: Arc::new(Mutex::new(HashMap::new())),
     };
-    let connection = Connection::session().await?;
+    let connection = crate::bus::session().await?;
     connection
         .object_server()
         .at(PATH, Gnome(search.clone()))

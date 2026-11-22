@@ -65,6 +65,7 @@ pub fn menu_text(version: &str) -> String {
 async fn latest() -> Option<Release> {
     crate::server::client()
         .get(LATEST)
+        .timeout(std::time::Duration::from_secs(10))
         .header("accept", "application/vnd.github+json")
         .send()
         .await

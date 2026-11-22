@@ -21,7 +21,7 @@ pub enum Claim {
 }
 
 pub async fn claim(show: Wanted) -> Claim {
-    let Ok(connection) = Connection::session().await else {
+    let Ok(connection) = crate::bus::session().await else {
         return Claim::First(None);
     };
     if connection

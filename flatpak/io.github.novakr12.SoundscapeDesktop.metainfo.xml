@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.11.0" date="2026-11-22">
+      <description>
+        <ul>
+          <li>Lower background memory usage: the web window now runs as its own process, so the background daemon no longer loads the browser engine when the window is closed</li>
+          <li>Reduced memory usage while open through tighter browser, media and thread limits, a shared D-Bus connection and HTTP client, and freeing mini player buffers when hidden</li>
+          <li>Lighter mini player font loading using memory-mapped fonts with lazy fallback for CJK text</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.10.16" date="2026-11-21">
       <description>
         <ul>

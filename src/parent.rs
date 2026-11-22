@@ -1,7 +1,9 @@
-use crate::ipc::{self, FromWindow, Start, ToWindow};
-use soundscape_core::host::{AppHandle, Host, Manager, Reply, Result, Running, WindowOptions};
+use soundscape_core::host::{
+    AppHandle, Host, Manager, Reply, Result, Running, WindowOptions, async_runtime,
+};
 use soundscape_core::mini::MINI;
 use soundscape_core::{AppState, MAIN, SETUP};
+use soundscape_protocol::{self as ipc, FromWindow, Start, ToWindow, WINDOW_NAME, given_server};
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -11,6 +13,35 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 const STOP_WAIT: Duration = Duration::from_secs(1);
+
+fn watch_appearance(host: WindowHost) {
+    static WATCHING: OnceLock<()> = OnceLock::new();
+    WATCHING.get_or_init(|| {
+        if soundscape_core::theme::chosen_dark(std::env::var("SOUNDSCAPE_THEME").ok().as_deref())
+            .is_none()
+        {
+            let theme_host = host.clone();
+            let mut rx = soundscape_core::theme::subscribe();
+            async_runtime::spawn(async move {
+                while rx.changed().await.is_ok() {
+                    if let Some(dark) = *rx.borrow_and_update() {
+                        theme_host.tell(&ToWindow::Theme { dark });
+                    }
+                }
+            });
+        }
+        if std::env::var_os("SOUNDSCAPE_FONT").is_none() {
+            let mut rx = soundscape_core::font::subscribe();
+            async_runtime::spawn(async move {
+                while rx.changed().await.is_ok() {
+                    if let Some(family) = rx.borrow_and_update().clone() {
+                        host.tell(&ToWindow::Font { family });
+                    }
+                }
+            });
+        }
+    });
+}
 
 struct Window {
     input: ChildStdin,
@@ -73,7 +104,7 @@ impl WindowHost {
     fn server_text(&self) -> Option<String> {
         self.app()
             .and_then(|app| app.state::<AppState>().server())
-            .or_else(crate::profile::given)
+            .or_else(given_server)
             .map(String::from)
     }
 
@@ -112,8 +143,13 @@ impl WindowHost {
         let config = app.state::<AppState>().config();
         let url = url
             .or_else(|| self.inner.lock().expect("window lock").next_url.take())
-            .or_else(crate::profile::given)
+            .or_else(given_server)
             .unwrap_or_else(|| soundscape_core::start_page(&app));
+        let dark =
+            soundscape_core::theme::chosen_dark(std::env::var("SOUNDSCAPE_THEME").ok().as_deref())
+                .or_else(|| async_runtime::block_on(soundscape_core::theme::current_dark()))
+                .unwrap_or(false);
+        let font = soundscape_core::font::desktop();
         let start = Start {
             url: url.to_string(),
             server: self.server_text(),
@@ -131,12 +167,23 @@ impl WindowHost {
                     .keep_window
                     .unwrap_or(soundscape_core::KEEP_WINDOW_SECONDS),
             ),
+            cpu_rendering: config.cpu_rendering,
+            faster_scripts: config.faster_scripts,
+            dark,
+            font,
         };
         let Ok(me) = std::env::current_exe() else {
             return;
         };
-        let spawned = Command::new(me)
-            .arg(ipc::WINDOW_FLAG)
+        let exe = {
+            let sibling = me.with_file_name(WINDOW_NAME);
+            if sibling.is_file() {
+                sibling
+            } else {
+                std::path::PathBuf::from(WINDOW_NAME)
+            }
+        };
+        let spawned = Command::new(exe)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -177,6 +224,7 @@ impl WindowHost {
         let running = self.running.clone();
         let host_app = app.clone();
         std::thread::spawn(move || listen(host_app, inner, running, output, generation));
+        watch_appearance(self.clone());
     }
 
     fn open_mini_window(&self) -> bool {
@@ -271,8 +319,12 @@ fn heard(
             }
         }
         FromWindow::Url { url } => {
-            if let Ok(url) = Url::parse(&url) {
-                inner.lock().expect("window lock").url = Some(url);
+            if let Ok(parsed) = Url::parse(&url) {
+                let server = app.state::<AppState>().server();
+                if soundscape_core::settings_page::is_settings_page(server.as_ref(), &parsed) {
+                    soundscape_core::settings_page::wake();
+                }
+                inner.lock().expect("window lock").url = Some(parsed);
             }
         }
         FromWindow::Hidden { hidden } => inner.lock().expect("window lock").hidden = hidden,

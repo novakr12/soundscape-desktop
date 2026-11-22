@@ -1,13 +1,19 @@
 use crate::host::{async_runtime, AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::scrobble::Track;
 use crate::AppState;
-use std::sync::Mutex;
+use std::io::Read;
 use std::time::Duration;
+use tokio::sync::Notify;
 
 pub const MINI: &str = "mini";
 const LARGEST_COVER: u64 = 3 * 1024 * 1024;
 const EVERY: Duration = Duration::from_secs(1);
 pub const UNKNOWN_ALBUM: &str = "Unknown album";
+static WAKE: Notify = Notify::const_new();
+
+pub fn wake() {
+    WAKE.notify_one();
+}
 
 #[derive(Debug, PartialEq)]
 pub struct Asked {
@@ -40,7 +46,11 @@ pub fn act(app: &AppHandle, asked: Asked) {
 
 pub async fn run(app: AppHandle) {
     loop {
-        tokio::time::sleep(EVERY).await;
+        if !shown(&app) {
+            WAKE.notified().await;
+        } else {
+            tokio::time::sleep(EVERY).await;
+        }
         refresh(&app).await;
     }
 }
@@ -74,28 +84,6 @@ pub struct MiniView {
     pub can_seek: bool,
 }
 
-const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-pub fn base64(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
-
 pub fn unbase64(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
     let mut bits = 0u32;
@@ -120,6 +108,25 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+fn local_cover_path(art: &str) -> Option<std::path::PathBuf> {
+    let url = url::Url::parse(art).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+    let path = url.to_file_path().ok()?;
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > LARGEST_COVER {
+        return None;
+    }
+    Some(path)
+}
+
+fn read_local_picture(art: &str) -> Option<Vec<u8>> {
+    let path = local_cover_path(art)?;
+    let bytes = std::fs::read(&path).ok()?;
+    (bytes.len() as u64 <= LARGEST_COVER && image_type(&bytes).is_some()).then_some(bytes)
+}
+
 pub async fn picture(app: &AppHandle, art: &str) -> Option<Vec<u8>> {
     if let Some(data) = art.strip_prefix("data:") {
         let (kind, encoded) = data.split_once(',')?;
@@ -127,6 +134,9 @@ pub async fn picture(app: &AppHandle, art: &str) -> Option<Vec<u8>> {
             .ends_with(";base64")
             .then(|| unbase64(encoded))
             .flatten();
+    }
+    if art.starts_with("file://") {
+        return read_local_picture(art);
     }
     let address = url::Url::parse(art).ok()?;
     if !matches!(address.scheme(), "http" | "https") || address.as_str().len() > 4096 {
@@ -137,7 +147,7 @@ pub async fn picture(app: &AppHandle, art: &str) -> Option<Vec<u8>> {
         Some((server, token)) if server.origin() == address.origin() => {
             crate::server::answer(request, &token).await.ok()?
         }
-        _ => request.send().await.ok()?,
+        _ => request.timeout(Duration::from_secs(10)).send().await.ok()?,
     };
     if !response.status().is_success()
         || response
@@ -160,32 +170,15 @@ fn image_type(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-static COVER: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
-
 pub fn cover(art: &str) -> Option<String> {
     if art.starts_with("https://") || art.starts_with("http://") {
         return Some(art.to_string());
     }
-    let path = url::Url::parse(art)
-        .ok()
-        .filter(|url| url.scheme() == "file")?
-        .to_file_path()
-        .ok()?;
-    let mut cached = COVER.lock().expect("cover lock");
-    if let Some((known, data)) = &*cached {
-        if known == art {
-            return data.clone();
-        }
-    }
-    let data = std::fs::metadata(&path)
-        .ok()
-        .filter(|meta| meta.is_file() && meta.len() <= LARGEST_COVER)
-        .and_then(|_| std::fs::read(&path).ok())
-        .and_then(|bytes| {
-            image_type(&bytes).map(|kind| format!("data:{kind};base64,{}", base64(&bytes)))
-        });
-    *cached = Some((art.to_string(), data.clone()));
-    data
+    let path = local_cover_path(art)?;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut header = [0u8; 12];
+    let n = file.read(&mut header).ok()?;
+    image_type(&header[..n]).map(|_| art.to_string())
 }
 
 pub fn shows_preview(preview: Option<&crate::media::Preview>, player_playing: bool) -> bool {
@@ -361,23 +354,13 @@ mod tests {
     }
 
     #[test]
-    fn encodes_covers_as_base64() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64(&[0xFF, 0xD8, 0x00]), "/9gA");
-        for sample in [
-            &b""[..],
-            b"f",
-            b"fo",
-            b"foo",
-            b"foobar",
-            &[0xFF, 0xD8, 0x00, 0x10],
-        ] {
-            assert_eq!(unbase64(&base64(sample)).as_deref(), Some(sample));
-        }
+    fn decodes_base64_data_urls() {
+        assert_eq!(unbase64("").as_deref(), Some(&b""[..]));
+        assert_eq!(unbase64("Zg==").as_deref(), Some(&b"f"[..]));
+        assert_eq!(unbase64("Zm8=").as_deref(), Some(&b"fo"[..]));
+        assert_eq!(unbase64("Zm9v").as_deref(), Some(&b"foo"[..]));
+        assert_eq!(unbase64("Zm9vYmFy").as_deref(), Some(&b"foobar"[..]));
+        assert_eq!(unbase64("/9gA").as_deref(), Some(&[0xFF, 0xD8, 0x00][..]));
         assert_eq!(unbase64("not*base64"), None);
     }
 
@@ -390,18 +373,19 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("soundscape-cover-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let png = dir.join("cover.png");
-        std::fs::write(&png, [0x89, b'P', b'N', b'G', 1, 2, 3]).unwrap();
+        let bytes = [0x89, b'P', b'N', b'G', 1, 2, 3];
+        std::fs::write(&png, bytes).unwrap();
         let url = url::Url::from_file_path(&png).unwrap();
+        assert_eq!(cover(url.as_str()).as_deref(), Some(url.as_str()));
         assert_eq!(
-            cover(url.as_str()).as_deref(),
-            Some("data:image/png;base64,iVBORwECAw==")
+            read_local_picture(url.as_str()).as_deref(),
+            Some(&bytes[..])
         );
         let text = dir.join("notes.txt");
         std::fs::write(&text, "not an image").unwrap();
-        assert_eq!(
-            cover(url::Url::from_file_path(&text).unwrap().as_str()),
-            None
-        );
+        let text_url = url::Url::from_file_path(&text).unwrap();
+        assert_eq!(cover(text_url.as_str()), None);
+        assert_eq!(read_local_picture(text_url.as_str()), None);
         assert_eq!(cover("ftp://example.com/a.jpg"), None);
         std::fs::remove_dir_all(dir).unwrap();
     }

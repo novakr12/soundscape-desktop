@@ -1,8 +1,10 @@
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::io::Read;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
+use tokio::time::timeout;
 use url::Url;
 
 const LONGEST_HEAD: usize = 16 * 1024;
@@ -16,14 +18,12 @@ pub struct Relay {
 struct RelayInner {
     port: u16,
     secret: String,
-    stop: Arc<AtomicBool>,
+    stop: Arc<Notify>,
 }
 
 impl Drop for RelayInner {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
-        let _ = TcpStream::connect_timeout(&addr, Duration::from_millis(100));
+        self.stop.notify_waiters();
     }
 }
 
@@ -137,26 +137,16 @@ pub fn response_head(status: u16, kind: &str, range: Option<&str>, length: Optio
     head
 }
 
-fn client() -> reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .read_timeout(Duration::from_secs(30))
-                .user_agent(concat!("SoundscapeDesktop/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .expect("HTTP client")
-        })
-        .clone()
-}
-
-fn read_head(stream: &mut TcpStream) -> Option<String> {
-    let mut reader = BufReader::new(stream.try_clone().ok()?.take(LONGEST_HEAD as u64 + 1));
+async fn read_head(stream: &mut TcpStream) -> Option<String> {
+    let mut reader = BufReader::new(stream.take(LONGEST_HEAD as u64 + 1));
     let mut head = String::new();
     loop {
         let mut line = String::new();
-        if reader.read_line(&mut line).ok()? == 0 {
+        let read = timeout(Duration::from_secs(10), reader.read_line(&mut line))
+            .await
+            .ok()?
+            .ok()?;
+        if read == 0 {
             return None;
         }
         head.push_str(&line);
@@ -169,20 +159,24 @@ fn read_head(stream: &mut TcpStream) -> Option<String> {
     }
 }
 
-fn fail(stream: &mut TcpStream, status: u16) {
-    let _ = stream.write_all(response_head(status, "text/plain", None, Some(0)).as_bytes());
+async fn fail(stream: &mut TcpStream, status: u16) {
+    let _ = stream
+        .write_all(response_head(status, "text/plain", None, Some(0)).as_bytes())
+        .await;
 }
 
-fn serve(mut stream: TcpStream, server: Url, token: String, secret: String) {
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+async fn serve(mut stream: TcpStream, server: Url, token: String, secret: String) {
     let Some(asked) = read_head(&mut stream)
+        .await
         .as_deref()
         .and_then(|head| parse_head(head, &secret))
     else {
-        return fail(&mut stream, 404);
+        fail(&mut stream, 404).await;
+        return;
     };
     let Ok(mut target) = server.join("/") else {
-        return fail(&mut stream, 502);
+        fail(&mut stream, 502).await;
+        return;
     };
     if let Ok(mut segments) = target.path_segments_mut() {
         segments
@@ -193,71 +187,79 @@ fn serve(mut stream: TcpStream, server: Url, token: String, secret: String) {
     }
     let whole = asked.range.is_none();
     let range = asked.range.unwrap_or_else(|| "bytes=0-".to_string());
-    crate::host::async_runtime::block_on(async move {
-        let upstream = client()
-            .get(target)
-            .header("authorization", format!("Token {token}"))
-            .header("range", range)
-            .send()
-            .await;
-        let Ok(mut upstream) = upstream else {
-            return fail(&mut stream, 502);
-        };
-        let status = upstream.status().as_u16();
-        if status != 200 && status != 206 {
-            return fail(&mut stream, if status == 416 { 416 } else { 404 });
-        }
-        let header = |name: &str| {
-            upstream
-                .headers()
-                .get(name)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string)
-        };
-        let kind = header("content-type").unwrap_or_else(|| "application/octet-stream".into());
-        let range = header("content-range").filter(|_| status == 206);
-        let head = match range.as_deref().and_then(content_range) {
-            Some((0, _, total)) if whole => response_head(200, &kind, None, Some(total)),
-            _ => response_head(status, &kind, range.as_deref(), upstream.content_length()),
-        };
-        if stream.write_all(head.as_bytes()).is_err() {
+    let upstream = crate::server::client()
+        .get(target)
+        .header("authorization", format!("Token {token}"))
+        .header("range", range)
+        .send()
+        .await;
+    let Ok(mut upstream) = upstream else {
+        fail(&mut stream, 502).await;
+        return;
+    };
+    let status = upstream.status().as_u16();
+    if status != 200 && status != 206 {
+        fail(&mut stream, if status == 416 { 416 } else { 404 }).await;
+        return;
+    }
+    let header = |name: &str| {
+        upstream
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    };
+    let kind = header("content-type").unwrap_or_else(|| "application/octet-stream".into());
+    let range = header("content-range").filter(|_| status == 206);
+    let head = match range.as_deref().and_then(content_range) {
+        Some((0, _, total)) if whole => response_head(200, &kind, None, Some(total)),
+        _ => response_head(status, &kind, range.as_deref(), upstream.content_length()),
+    };
+    if stream.write_all(head.as_bytes()).await.is_err() {
+        return;
+    }
+    while let Ok(Some(chunk)) = upstream.chunk().await {
+        if stream.write_all(&chunk).await.is_err() {
             return;
         }
-        while let Ok(Some(chunk)) = upstream.chunk().await {
-            if stream.write_all(&chunk).is_err() {
-                return;
-            }
-        }
-    });
+    }
 }
 
 impl Relay {
     pub fn start(server: Url, token: String) -> Result<Relay, String> {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
-        let secret = new_secret()?;
-        let expected = secret.clone();
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| error.to_string())?;
         let port = listener
             .local_addr()
             .map_err(|error| error.to_string())?
             .port();
-        let stop = Arc::new(AtomicBool::new(false));
+        let secret = new_secret()?;
+        let expected = secret.clone();
+        let stop = Arc::new(Notify::new());
         let stopped = stop.clone();
-        std::thread::Builder::new()
-            .name("soundscape-relay".into())
-            .spawn(move || {
-                for stream in listener.incoming().flatten() {
-                    if stopped.load(Ordering::Acquire) {
-                        break;
+        let _guard = crate::host::async_runtime::runtime().enter();
+        let listener = TcpListener::from_std(listener).map_err(|error| error.to_string())?;
+        crate::host::async_runtime::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = stopped.notified() => break,
+                    accepted = listener.accept() => {
+                        let Ok((stream, _)) = accepted else {
+                            break;
+                        };
+                        let server = server.clone();
+                        let token = token.clone();
+                        let secret = expected.clone();
+                        tokio::spawn(async move {
+                            serve(stream, server, token, secret).await;
+                        });
                     }
-                    let server = server.clone();
-                    let token = token.clone();
-                    let secret = expected.clone();
-                    let _ = std::thread::Builder::new()
-                        .name("soundscape-stream".into())
-                        .spawn(move || serve(stream, server, token, secret));
                 }
-            })
-            .map_err(|error| error.to_string())?;
+            }
+        });
         Ok(Relay {
             inner: Arc::new(RelayInner { port, secret, stop }),
         })

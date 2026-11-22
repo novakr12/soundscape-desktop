@@ -2,10 +2,11 @@ use crate::host::{AppHandle, Manager};
 use crate::AppState;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
+use tokio::time::{sleep, timeout};
 
 const EVERY: Duration = Duration::from_secs(3);
 const RETRY_AFTER: Duration = Duration::from_secs(30);
@@ -195,7 +196,7 @@ struct CoverLink {
 const COVER_RETRY_AFTER: Duration = Duration::from_secs(60);
 const MAX_FRAME: usize = 1 << 20;
 
-fn look_up(
+async fn look_up(
     app: &AppHandle,
     playing: &Playing,
     known: &mut HashMap<Song, Looked>,
@@ -220,7 +221,7 @@ fn look_up(
         if !recently_failed {
             if let Some((server, token)) = credentials {
                 let song = &playing.song;
-                match crate::host::async_runtime::block_on(crate::server::get_json::<CoverLink>(
+                match crate::server::get_json::<CoverLink>(
                     &server,
                     &token,
                     "/api/cover-link",
@@ -228,7 +229,9 @@ fn look_up(
                         ("artist", song.artist.as_str()),
                         ("title", song.title.as_str()),
                     ],
-                )) {
+                )
+                .await
+                {
                     Ok(link) => {
                         asked = Some(link);
                         cacheable = true;
@@ -258,9 +261,13 @@ fn look_up(
     looked
 }
 
-fn read_frame(stream: &mut impl Read) -> std::io::Result<()> {
+async fn read_frame<R: tokio::io::AsyncRead + Unpin>(stream: &mut R) -> std::io::Result<()> {
     let mut header = [0u8; 8];
-    stream.read_exact(&mut header)?;
+    timeout(Duration::from_secs(5), stream.read_exact(&mut header))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "Discord frame timeout")
+        })??;
     let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
     if length > MAX_FRAME {
         return Err(std::io::Error::new(
@@ -269,19 +276,22 @@ fn read_frame(stream: &mut impl Read) -> std::io::Result<()> {
         ));
     }
     let mut body = vec![0u8; length];
-    stream.read_exact(&mut body)
+    timeout(Duration::from_secs(5), stream.read_exact(&mut body))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "Discord body timeout"))??;
+    Ok(())
 }
 
-fn connect(app_id: &str) -> Option<UnixStream> {
+async fn connect(app_id: &str) -> Option<UnixStream> {
     let runtime = std::env::var("XDG_RUNTIME_DIR").ok();
     let temp = std::env::var("TMPDIR").ok();
     for path in socket_paths(runtime.as_deref(), temp.as_deref()) {
-        let Ok(mut stream) = UnixStream::connect(&path) else {
+        let Ok(mut stream) = UnixStream::connect(&path).await else {
             continue;
         };
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let hello = frame(HANDSHAKE, &json!({ "v": 1, "client_id": app_id }));
-        if stream.write_all(&hello).is_ok() && read_frame(&mut stream).is_ok() {
+        let wrote = timeout(Duration::from_secs(5), stream.write_all(&hello)).await;
+        if matches!(wrote, Ok(Ok(()))) && read_frame(&mut stream).await.is_ok() {
             return Some(stream);
         }
     }
@@ -302,66 +312,79 @@ fn wanted(app: &AppHandle) -> Option<String> {
         .filter(|id| config.discord && valid_app_id(id))
 }
 
-pub fn run(app: AppHandle) {
-    std::thread::spawn(move || {
-        let mut stream: Option<(String, UnixStream)> = None;
-        let mut shown: Option<Option<Shown>> = None;
-        let mut looked: HashMap<Song, Looked> = HashMap::new();
-        let mut failed: HashMap<Song, std::time::Instant> = HashMap::new();
-        let mut nonce = 0u64;
-        loop {
-            let Some(app_id) = wanted(&app) else {
-                stream = None;
-                shown = None;
-                std::thread::sleep(EVERY);
-                continue;
-            };
-            if stream.as_ref().is_some_and(|(id, _)| *id != app_id) {
-                stream = None;
+pub async fn run(app: AppHandle) {
+    let mut stream: Option<(String, UnixStream)> = None;
+    let mut shown: Option<Option<Shown>> = None;
+    let mut looked: HashMap<Song, Looked> = HashMap::new();
+    let mut failed: HashMap<Song, std::time::Instant> = HashMap::new();
+    let mut nonce = 0u64;
+    loop {
+        let Some(app_id) = wanted(&app) else {
+            stream = None;
+            shown = None;
+            if !looked.is_empty() {
+                looked.clear();
+                looked.shrink_to_fit();
             }
-            if stream.is_none() {
-                match connect(&app_id) {
-                    Some(connected) => {
-                        stream = Some((app_id.clone(), connected));
-                        shown = None;
-                    }
-                    None => {
-                        std::thread::sleep(RETRY_AFTER);
-                        continue;
-                    }
+            if !failed.is_empty() {
+                failed.clear();
+                failed.shrink_to_fit();
+            }
+            sleep(EVERY).await;
+            continue;
+        };
+        if stream.as_ref().is_some_and(|(id, _)| *id != app_id) {
+            stream = None;
+        }
+        if stream.is_none() {
+            match connect(&app_id).await {
+                Some(connected) => {
+                    stream = Some((app_id.clone(), connected));
+                    shown = None;
+                }
+                None => {
+                    sleep(RETRY_AFTER).await;
+                    continue;
                 }
             }
-            let next = current(&app).map(|playing| {
+        }
+        let next = match current(&app) {
+            Some(playing) => {
                 let (start_ms, end_ms) = timing(now_ms(), playing.position, playing.length);
-                let found = look_up(&app, &playing, &mut looked, &mut failed);
-                Shown {
+                let found = look_up(&app, &playing, &mut looked, &mut failed).await;
+                Some(Shown {
                     album: album_label(playing.song.album.as_deref(), found.album.as_deref()),
                     image: found.image,
                     song: playing.song,
                     start_ms,
                     end_ms,
-                }
-            });
-            let changed = match &shown {
-                None => true,
-                Some(before) => needs_update(before.as_ref(), next.as_ref()),
-            };
-            if changed {
-                nonce += 1;
-                let message = frame(FRAME, &activity(next.as_ref(), std::process::id(), nonce));
-                let sent = stream.as_mut().is_some_and(|(_, socket)| {
-                    socket.write_all(&message).is_ok() && read_frame(socket).is_ok()
-                });
-                if sent {
-                    shown = Some(next);
-                } else {
-                    stream = None;
-                    continue;
-                }
+                })
             }
-            std::thread::sleep(EVERY);
+            None => None,
+        };
+        let changed = match &shown {
+            None => true,
+            Some(before) => needs_update(before.as_ref(), next.as_ref()),
+        };
+        if changed {
+            nonce += 1;
+            let message = frame(FRAME, &activity(next.as_ref(), std::process::id(), nonce));
+            let sent = match stream.as_mut() {
+                Some((_, socket)) => {
+                    let wrote = timeout(Duration::from_secs(5), socket.write_all(&message)).await;
+                    matches!(wrote, Ok(Ok(()))) && read_frame(socket).await.is_ok()
+                }
+                None => false,
+            };
+            if sent {
+                shown = Some(next);
+            } else {
+                stream = None;
+                continue;
+            }
         }
-    });
+        sleep(EVERY).await;
+    }
 }
 
 #[cfg(test)]
@@ -395,11 +418,19 @@ mod tests {
         assert_eq!(&bytes[0..4], &1u32.to_le_bytes());
         assert_eq!(&bytes[4..8], &7u32.to_le_bytes());
         assert_eq!(&bytes[8..], br#"{"a":1}"#);
-        assert!(read_frame(&mut std::io::Cursor::new(&bytes)).is_ok());
+        assert!(
+            crate::host::async_runtime::block_on(read_frame(&mut std::io::Cursor::new(
+                bytes.as_slice()
+            )))
+            .is_ok()
+        );
         let mut huge = Vec::new();
         huge.extend_from_slice(&1u32.to_le_bytes());
         huge.extend_from_slice(&((MAX_FRAME as u32) + 1).to_le_bytes());
-        let err = read_frame(&mut std::io::Cursor::new(&huge)).unwrap_err();
+        let err = crate::host::async_runtime::block_on(read_frame(&mut std::io::Cursor::new(
+            huge.as_slice(),
+        )))
+        .unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 

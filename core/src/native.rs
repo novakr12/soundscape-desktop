@@ -15,8 +15,15 @@ const RESTART_AFTER_SECONDS: f64 = 3.0;
 const SHORTEST_SONG_SECONDS: f64 = 30.0;
 const LONGEST_WAIT_SECONDS: f64 = 240.0;
 const LONGEST_STEP_SECONDS: f64 = 2.0;
-const RELEASE_AFTER: Duration = Duration::from_secs(5 * 60);
+const RELEASE_AFTER: Duration = Duration::from_secs(2 * 60);
 const MOST_FAILURES_IN_A_ROW: u32 = 5;
+
+fn trim_heap() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 pub struct Gain {
@@ -231,14 +238,13 @@ pub fn shuffle_tracks(tracks: &mut [Track], seed: u64) {
     }
 }
 
-pub fn restore_order(original: &[Track], upcoming: Vec<Track>) -> Vec<Track> {
+pub fn restore_order(original: &[(String, Option<String>)], upcoming: Vec<Track>) -> Vec<Track> {
     let mut left: Vec<Option<Track>> = upcoming.into_iter().map(Some).collect();
     let mut out = Vec::with_capacity(left.len());
-    for wanted in original {
+    for (track_id, song_id) in original {
         let found = left.iter_mut().find(|slot| {
-            slot.as_ref().is_some_and(|track| {
-                track.track_id == wanted.track_id && track.song_id == wanted.song_id
-            })
+            slot.as_ref()
+                .is_some_and(|track| track.track_id == *track_id && track.song_id == *song_id)
         });
         if let Some(track) = found.and_then(Option::take) {
             out.push(track);
@@ -279,7 +285,7 @@ struct Queue {
     at: usize,
     repeat: String,
     coming: Option<usize>,
-    unshuffled: Option<Vec<Track>>,
+    unshuffled: Option<Vec<(String, Option<String>)>>,
 }
 
 impl Queue {
@@ -291,7 +297,12 @@ impl Queue {
         let from = self.shuffle_from().min(self.tracks.len());
         match (on, self.unshuffled.take()) {
             (true, None) => {
-                self.unshuffled = Some(self.tracks[from..].to_vec());
+                self.unshuffled = Some(
+                    self.tracks[from..]
+                        .iter()
+                        .map(|track| (track.track_id.clone(), track.song_id.clone()))
+                        .collect(),
+                );
                 shuffle_tracks(&mut self.tracks[from..], seed());
             }
             (false, Some(original)) => {
@@ -349,6 +360,9 @@ fn make_playbin(
     let playbin = gst::ElementFactory::make("playbin")
         .build()
         .map_err(|_| "GStreamer's playbin is missing".to_string())?;
+    playbin.set_property_from_str("flags", "audio+soft-volume");
+    playbin.set_property("buffer-size", 2i32 * 1024 * 1024);
+    playbin.set_property("buffer-duration", 10_000_000_000i64);
     if let Some(sink) = audio_sink() {
         playbin.set_property("audio-sink", &sink);
     }
@@ -706,10 +720,11 @@ impl Engine {
                 let mut queue = self.queue.lock().expect("queue lock");
                 let at = insert_at(queue.at, queue.tracks.len(), next);
                 if let Some(original) = queue.unshuffled.as_mut() {
+                    let entry = (track.track_id.clone(), track.song_id.clone());
                     if next {
-                        original.insert(0, (*track).clone());
+                        original.insert(0, entry);
                     } else {
-                        original.push((*track).clone());
+                        original.push(entry);
                     }
                 }
                 queue.tracks.insert(at, *track);
@@ -738,6 +753,7 @@ impl Engine {
             }
             Command::Stop => {
                 let _ = self.playbin.set_state(gst::State::Null);
+                trim_heap();
                 return false;
             }
         }
@@ -849,6 +865,7 @@ impl Engine {
             self.resume_time = self.position();
             let _ = self.playbin.set_state(gst::State::Null);
             self.released = true;
+            trim_heap();
         }
     }
 
@@ -975,31 +992,70 @@ pub fn start(
             engine.load(handover.position, handover.time);
             loop {
                 let wait = if engine.fade.is_some() || engine.outgoing.is_some() {
-                    FADE_TICK
+                    Some(FADE_TICK)
+                } else if engine.want_playing
+                    || engine.seek_when_ready.is_some()
+                    || engine.seek_target.get().is_some()
+                {
+                    Some(TICK)
+                } else if engine.released {
+                    None
                 } else {
-                    TICK
+                    let remaining = engine.paused_since.map_or(RELEASE_AFTER, |since| {
+                        RELEASE_AFTER.saturating_sub(since.elapsed())
+                    });
+                    Some(remaining.clamp(Duration::from_millis(250), Duration::from_secs(1)))
                 };
-                match receive.recv_timeout(wait) {
-                    Ok(command) => {
-                        if !engine.handle(command) {
+                let received = match wait {
+                    Some(timeout) => match receive.recv_timeout(timeout) {
+                        Ok(command) => Some(command),
+                        Err(RecvTimeoutError::Timeout) => None,
+                        Err(RecvTimeoutError::Disconnected) => {
+                            engine.drop_outgoing();
+                            let _ = engine.playbin.set_state(gst::State::Null);
+                            trim_heap();
                             break;
                         }
-                    }
-                    Err(RecvTimeoutError::Timeout) => {}
-                    Err(RecvTimeoutError::Disconnected) => {
-                        engine.drop_outgoing();
-                        let _ = engine.playbin.set_state(gst::State::Null);
+                    },
+                    None => match receive.recv() {
+                        Ok(command) => Some(command),
+                        Err(_) => {
+                            engine.drop_outgoing();
+                            let _ = engine.playbin.set_state(gst::State::Null);
+                            trim_heap();
+                            break;
+                        }
+                    },
+                };
+                let was_command = received.is_some();
+                if let Some(command) = received {
+                    if !engine.handle(command) {
                         break;
                     }
                 }
-                engine.step_fade();
-                engine.step_outgoing();
-                engine.crossfade_soon();
-                engine.messages();
-                engine.seek_when_ready();
-                engine.listen();
-                engine.release_when_quiet();
-                engine.publish();
+                let prev_released = engine.released;
+                if engine.want_playing
+                    || engine.fade.is_some()
+                    || engine.outgoing.is_some()
+                    || engine.seek_when_ready.is_some()
+                    || !engine.released
+                {
+                    engine.step_fade();
+                    engine.step_outgoing();
+                    engine.crossfade_soon();
+                    engine.messages();
+                    engine.seek_when_ready();
+                    engine.listen();
+                    engine.release_when_quiet();
+                }
+                if was_command
+                    || engine.want_playing
+                    || engine.fade.is_some()
+                    || engine.outgoing.is_some()
+                    || engine.released != prev_released
+                {
+                    engine.publish();
+                }
             }
         })
         .map_err(|error| error.to_string())?;
@@ -1181,7 +1237,10 @@ mod tests {
 
     #[test]
     fn puts_songs_back_in_order_with_new_ones_last() {
-        let original = named(&["c", "d", "e"]);
+        let original: Vec<(String, Option<String>)> = ["c", "d", "e"]
+            .into_iter()
+            .map(|id| (id.to_string(), Some(format!("nd-{id}"))))
+            .collect();
         let upcoming = named(&["x", "e", "c"]);
         assert_eq!(ids(&restore_order(&original, upcoming)), ["c", "e", "x"]);
     }

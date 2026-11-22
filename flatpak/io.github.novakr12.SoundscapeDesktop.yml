@@ -29,8 +29,9 @@ modules:
         CARGO_NET_OFFLINE: 'true'
         MOZJS_ARCHIVE: /run/build/soundscape-desktop/libmozjs-x86_64-unknown-linux-gnu.tar.gz
     build-commands:
-      - cargo build --release --locked --offline
+      - cargo build --workspace --release --locked --offline
       - install -Dm755 target/release/soundscape-desktop /app/bin/soundscape-desktop
+      - install -Dm755 target/release/soundscape-window /app/bin/soundscape-window
       - install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.desktop /app/share/applications/io.github.novakr12.SoundscapeDesktop.desktop
       - install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.metainfo.xml /app/share/metainfo/io.github.novakr12.SoundscapeDesktop.metainfo.xml
       - install -Dm644 flatpak/io.github.novakr12.SoundscapeDesktop.search-provider.ini /app/share/gnome-shell/search-providers/io.github.novakr12.SoundscapeDesktop.search-provider.ini

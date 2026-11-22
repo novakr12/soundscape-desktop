@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 pub const SOFTWARE: &str = "LIBGL_ALWAYS_SOFTWARE";
 pub const EGL_VENDORS: &str = "__EGL_VENDOR_LIBRARY_FILENAMES";
+pub const LP_NUM_THREADS: &str = "LP_NUM_THREADS";
 const MESA_VENDOR: &str = "50_mesa.json";
 const NVIDIA_VENDOR: &str = "10_nvidia.json";
 const NVIDIA_DRIVER: &str = "/proc/driver/nvidia/version";
@@ -77,6 +78,7 @@ pub fn to_set(
     let mut wanted = Vec::new();
     if enabled {
         wanted.push((SOFTWARE, "1".to_string()));
+        wanted.push((LP_NUM_THREADS, "2".to_string()));
         if let Some(path) = mesa {
             wanted.push((EGL_VENDORS, path.to_string_lossy().into_owned()));
         }
@@ -115,6 +117,7 @@ mod tests {
             to_set(true, |_| false, mesa.clone(), None),
             vec![
                 (SOFTWARE, "1".to_string()),
+                (LP_NUM_THREADS, "2".to_string()),
                 (
                     EGL_VENDORS,
                     "/usr/share/glvnd/egl_vendor.d/50_mesa.json".to_string()
@@ -123,12 +126,18 @@ mod tests {
         );
         assert_eq!(
             to_set(true, |_| false, None, None),
-            vec![(SOFTWARE, "1".to_string())]
+            vec![
+                (SOFTWARE, "1".to_string()),
+                (LP_NUM_THREADS, "2".to_string()),
+            ]
         );
         assert!(to_set(false, |_| false, mesa.clone(), None).is_empty());
         assert_eq!(
             to_set(true, |name| name == EGL_VENDORS, mesa, None),
-            vec![(SOFTWARE, "1".to_string())]
+            vec![
+                (SOFTWARE, "1".to_string()),
+                (LP_NUM_THREADS, "2".to_string()),
+            ]
         );
     }
 
@@ -179,6 +188,7 @@ mod tests {
             to_set(true, |_| false, mesa, nvidia),
             vec![
                 (SOFTWARE, "1".to_string()),
+                (LP_NUM_THREADS, "2".to_string()),
                 (
                     EGL_VENDORS,
                     "/usr/share/glvnd/egl_vendor.d/50_mesa.json".to_string()

@@ -1,4 +1,5 @@
 use crate::submit::Listen;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -9,7 +10,15 @@ use std::sync::Mutex;
 pub const MAX_WAITING: usize = 20_000;
 
 static LOCK: Mutex<()> = Mutex::new(());
+static CACHED_LEN: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn set_cached_len(path: &Path, len: usize) {
+    let mut cache = CACHED_LEN.lock().expect("queue len lock");
+    cache
+        .get_or_insert_with(HashMap::new)
+        .insert(path.to_path_buf(), len);
+}
 
 pub struct Queue {
     path: PathBuf,
@@ -38,7 +47,16 @@ impl Queue {
     }
 
     pub fn len(&self) -> usize {
-        self.all().len()
+        let _guard = LOCK.lock().expect("queue lock");
+        {
+            let cache = CACHED_LEN.lock().expect("queue len lock");
+            if let Some(len) = cache.as_ref().and_then(|map| map.get(&self.path).copied()) {
+                return len;
+            }
+        }
+        let len = self.read_all().len();
+        set_cached_len(&self.path, len);
+        len
     }
 
     pub fn is_empty(&self) -> bool {
@@ -47,10 +65,14 @@ impl Queue {
 
     fn write_locked(&self, listens: &[Listen]) -> std::io::Result<()> {
         if listens.is_empty() {
-            return match fs::remove_file(&self.path) {
+            let res = match fs::remove_file(&self.path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
                 _ => Ok(()),
             };
+            if res.is_ok() {
+                set_cached_len(&self.path, 0);
+            }
+            return res;
         }
         if let Some(dir) = self.path.parent() {
             fs::create_dir_all(dir)?;
@@ -72,7 +94,9 @@ impl Queue {
             file.sync_all()?;
             fs::rename(&temporary, &self.path)
         })();
-        if written.is_err() {
+        if written.is_ok() {
+            set_cached_len(&self.path, listens.len());
+        } else {
             let _ = fs::remove_file(&temporary);
         }
         written

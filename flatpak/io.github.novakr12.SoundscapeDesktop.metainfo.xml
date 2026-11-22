@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.11.3" date="2026-11-22">
+      <description>
+        <ul>
+          <li>The memory threshold for loading pages fresh now counts only private memory, ignoring shared GPU driver mappings</li>
+          <li>Pressing Esc now closes the Ctrl+K quick finder and confirmation dialogs, and the finder draws cleanly above page elements</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.2" date="2026-11-22">
       <description>
         <ul>

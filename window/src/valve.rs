@@ -33,7 +33,10 @@ pub fn should_park(hidden_for: Option<Duration>, parked: bool, wait: Duration) -
 }
 
 pub fn resident_mb_with_page_size(statm: &str, page_bytes: u64) -> Option<u32> {
-    let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+    let mut parts = statm.split_whitespace().skip(1);
+    let resident: u64 = parts.next()?.parse().ok()?;
+    let shared: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let pages = resident.saturating_sub(shared);
     Some((pages.saturating_mul(page_bytes) / 1024 / 1024) as u32)
 }
 
@@ -60,12 +63,16 @@ mod tests {
     #[test]
     fn reads_its_own_memory() {
         assert_eq!(
-            resident_mb_with_page_size("1000000 153600 2000 1 0 3000 0", 4096),
+            resident_mb_with_page_size("1000000 153600 0 1 0 3000 0", 4096),
             Some(600)
         );
         assert_eq!(
-            resident_mb_with_page_size("1000000 153600 2000 1 0 3000 0", 16384),
-            Some(2400)
+            resident_mb_with_page_size("1000000 153600 25600 1 0 3000 0", 4096),
+            Some(500)
+        );
+        assert_eq!(
+            resident_mb_with_page_size("1000000 153600 25600 1 0 3000 0", 16384),
+            Some(2000)
         );
         assert_eq!(resident_mb("nonsense"), None);
         assert_eq!(resident_mb(""), None);

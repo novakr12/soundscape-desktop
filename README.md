@@ -43,7 +43,7 @@ The window uses your desktop's interface font and remembers its size. Settings a
 You need Rust, Python 3, a C/C++ compiler and the development files for GStreamer, fonts, D-Bus and your graphics stack. On Fedora:
 
 ```
-sudo dnf install gcc gcc-c++ clang cmake m4 gperf python3 dbus-devel freetype-devel fontconfig-devel harfbuzz-devel libunwind-devel mesa-libEGL-devel wayland-devel libxkbcommon-devel libX11-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-bad-free-devel
+sudo dnf install gcc gcc-c++ clang cmake m4 gperf python3 dbus-devel freetype-devel fontconfig-devel harfbuzz-devel libunwind-devel mesa-libEGL-devel wayland-devel libxkbcommon-devel libX11-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-bad-free-devel gstreamer1-plugins-good
 ```
 
 The Ubuntu packages are listed in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Then:

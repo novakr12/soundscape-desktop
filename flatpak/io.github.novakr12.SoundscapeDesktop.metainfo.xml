@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.11.4" date="2026-11-22">
+      <description>
+        <ul>
+          <li>A real-time audio spectrum visualizer in the player bar and the mini player that reacts to the music, with its style, bounciness and bands picked in Settings</li>
+          <li>A scrollbar on the right edge of the window shows where you are on long pages and lets you click or drag to jump</li>
+          <li>Scrolling the mouse wheel over volume and seek bars now adjusts them directly</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.3" date="2026-11-22">
       <description>
         <ul>

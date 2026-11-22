@@ -1,10 +1,14 @@
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use resvg::tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Rect, Transform};
 use resvg::usvg;
+use soundscape_core::native::{SPECTRUM_REST, Style};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+const BAR_WIDTH: f32 = 2.0;
+const BAR_GAP: f32 = 1.25;
 
 const SHUFFLE: &str = r#"<path d="M3 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1.1 1.7 2.3 2.7 4.3 2.7H20" /><path d="M3 17h3.5c1.3 0 2.3-.4 3.1-1.2M13.4 8.2c.8-.8 1.8-1.2 3.1-1.2H20" /><path d="M17.5 4.5 20 7l-2.5 2.5M17.5 14.5 20 17l-2.5 2.5" />"#;
 const PREVIOUS: &str = r#"<rect x="5" y="5" width="2.5" height="14" rx="1" /><path d="M19 6.2v11.6a1 1 0 0 1-1.55.83L9.2 13.1a1.3 1.3 0 0 1 0-2.2l8.25-5.53A1 1 0 0 1 19 6.2z" />"#;
@@ -212,6 +216,49 @@ pub fn circle(canvas: &mut Pixmap, center: (f32, f32), radius: f32, color: Color
     }
 }
 
+pub fn visualizer_levels(playing: bool, spectrum: Option<&[f32]>, bars: usize) -> Vec<f32> {
+    let heard = spectrum.filter(|_| playing).unwrap_or_default();
+    (0..bars)
+        .map(|at| {
+            heard
+                .get(at)
+                .map_or(SPECTRUM_REST, |level| level.clamp(SPECTRUM_REST, 1.0))
+        })
+        .collect()
+}
+
+pub fn visualizer_width(bars: usize) -> f32 {
+    bars as f32 * (BAR_WIDTH + BAR_GAP)
+}
+
+pub fn visualizer(
+    canvas: &mut Pixmap,
+    at: (f32, f32),
+    height: f32,
+    scale: f32,
+    style: Style,
+    levels: &[f32],
+    color: Color,
+) {
+    let (left, bottom) = at;
+    let width = BAR_WIDTH * scale;
+    for (i, level) in levels.iter().enumerate() {
+        let x = left + i as f32 * (BAR_WIDTH + BAR_GAP) * scale;
+        let tall = (height * level).max(width);
+        let (y, tall) = match style {
+            Style::Bars => (bottom - tall, tall),
+            Style::Wave => (bottom - (height + tall) / 2.0, tall),
+            Style::Dots => {
+                let lift = (level - SPECTRUM_REST) / (1.0 - SPECTRUM_REST);
+                (bottom - width - lift * (height - width), width)
+            }
+        };
+        if let Some(rect) = Rect::from_xywh(x, y, width, tall) {
+            fill(canvas, rect, width / 2.0, color);
+        }
+    }
+}
+
 pub struct Face {
     path: PathBuf,
     index: u32,
@@ -247,7 +294,6 @@ const FALLBACK_FAMILIES: [&str; 4] = [
 
 fn read_font(path: &Path) -> Option<Arc<memmap2::Mmap>> {
     let file = std::fs::File::open(path).ok()?;
-    // Safety: system font files on disk are immutable for the lifetime of the mini player window.
     let mmap = unsafe { memmap2::Mmap::map(&file).ok()? };
     Some(Arc::new(mmap))
 }
@@ -549,5 +595,34 @@ mod tests {
             18.0,
         );
         assert_eq!(icons.trees.len(), 2);
+    }
+
+    #[test]
+    fn animates_visualizer_bars_only_while_playing() {
+        assert_eq!(visualizer_levels(false, None, 8), [0.15; 8]);
+        assert_eq!(visualizer_levels(true, None, 12), [0.15; 12]);
+        let custom = [0.3, 0.4, 0.5, 0.6];
+        assert_eq!(visualizer_levels(true, Some(&custom), 4), custom);
+        assert_eq!(visualizer_levels(false, Some(&custom), 4), [0.15; 4]);
+    }
+
+    #[test]
+    fn draws_each_visualizer_style_in_its_own_place() {
+        let rows = |style: Style| {
+            let mut canvas = Pixmap::new(20, 40).unwrap();
+            let color = Color::from_rgba8(255, 255, 255, 255);
+            visualizer(&mut canvas, (2.0, 35.0), 30.0, 2.0, style, &[0.5], color);
+            let lit: Vec<u32> = (0..40)
+                .filter(|&y| (0..20).any(|x| canvas.pixel(x, y).unwrap().alpha() > 127))
+                .collect();
+            (lit[0], lit[lit.len() - 1])
+        };
+        let (bars, wave, dots) = (rows(Style::Bars), rows(Style::Wave), rows(Style::Dots));
+        assert_eq!(bars.1, 34, "bars stand on the bottom");
+        assert!(
+            (wave.0 + wave.1).abs_diff(39) <= 1,
+            "a wave is centred: {wave:?}"
+        );
+        assert!(dots.1 - dots.0 < 5 && dots.1 < 30, "a dot jumps: {dots:?}");
     }
 }

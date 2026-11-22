@@ -46,6 +46,7 @@ pub struct SettingsView {
     pub memory_limit: u32,
     pub keep_window: i64,
     pub smooth_scrolling: bool,
+    pub visualizer: bool,
     pub discord_app_id: Option<String>,
     pub keep_running: bool,
     pub autostart: bool,
@@ -122,6 +123,7 @@ pub fn view(app: &AppHandle) -> SettingsView {
             config.keep_window.unwrap_or(crate::KEEP_WINDOW_SECONDS),
         ),
         smooth_scrolling: config.smooth_scrolling,
+        visualizer: config.visualizer,
         discord_app_id: config.discord_app_id.clone(),
         keep_running: config.keep_running,
         autostart: config.autostart,
@@ -193,6 +195,11 @@ pub async fn set_option(app: AppHandle, name: String, value: bool) -> Result<Set
             if let Some(window) = app.get_webview_window(crate::MAIN) {
                 crate::rendering::smooth_scrolling(&window, value);
             }
+        }
+        "visualizer" => {
+            state.update(|config| config.visualizer = value);
+            crate::native_link::set_visualizer(&app, value);
+            crate::mini::wake();
         }
         "discord" => {
             state.update(|config| config.discord = value);

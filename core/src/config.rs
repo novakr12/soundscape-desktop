@@ -83,6 +83,8 @@ pub struct Config {
     pub autoplay: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub faster_scripts: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub visualizer: bool,
 }
 
 pub const PAUSE_SECONDS: i64 = 60 * 60;
@@ -142,6 +144,7 @@ impl Default for Config {
             keep_window: None,
             autoplay: false,
             faster_scripts: false,
+            visualizer: true,
         }
     }
 }

@@ -90,3 +90,46 @@ input[type="checkbox"]:disabled {
   cursor: default;
   opacity: 0.5;
 }
+
+#soundscape-scrollbar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  z-index: 2147483640;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+#soundscape-scrollbar[data-active] {
+  pointer-events: auto;
+  opacity: 1;
+}
+
+#soundscape-scrollbar[data-hover],
+#soundscape-scrollbar[data-dragging] {
+  background: color-mix(in srgb, var(--muted, #888888) 10%, transparent);
+}
+
+#soundscape-scrollbar-thumb {
+  position: absolute;
+  right: 2px;
+  width: 6px;
+  min-height: 36px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted, #888888) 48%, transparent);
+  cursor: pointer;
+}
+
+#soundscape-scrollbar[data-hover] #soundscape-scrollbar-thumb {
+  width: 8px;
+  background: color-mix(in srgb, var(--muted, #888888) 72%, transparent);
+}
+
+#soundscape-scrollbar[data-dragging] #soundscape-scrollbar-thumb {
+  width: 8px;
+  background: var(--accent, #1db954);
+}
+

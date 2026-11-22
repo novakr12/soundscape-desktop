@@ -8,6 +8,7 @@ mod keys;
 mod memory;
 mod pickers;
 mod profile;
+mod scroll;
 mod software;
 mod theme;
 mod valve;
@@ -128,6 +129,7 @@ struct Shell {
     proxy: EventLoopProxy<Wake>,
     held: Cell<ModifiersState>,
     pointer: Cell<PhysicalPosition<f64>>,
+    over_slider: Cell<bool>,
 }
 
 fn notice() -> Url {
@@ -841,6 +843,10 @@ impl WebViewDelegate for Shell {
             }
             return;
         }
+        if let Some(over) = scroll::over_slider(&self.nonce, &message) {
+            self.over_slider.set(over);
+            return;
+        }
         let Some(picked) = pickers::picked(&self.nonce, &message) else {
             if self.debug {
                 eprintln!("page {level:?}: {message}");
@@ -996,6 +1002,7 @@ impl App {
             clipboard::page_script(&nonce),
             None,
         )));
+        scripts.add_script(Rc::new(UserScript::new(scroll::page_script(&nonce), None)));
         scripts.add_script(Rc::new(UserScript::new(FORM_ENTER.into(), None)));
         scripts.add_script(Rc::new(UserScript::new(COVERS.into(), None)));
         scripts.add_script(Rc::new(UserScript::new(VALVE.into(), None)));
@@ -1074,6 +1081,7 @@ impl App {
             proxy: proxy.clone(),
             held: Cell::new(ModifiersState::empty()),
             pointer: Cell::new(PhysicalPosition::new(0.0, 0.0)),
+            over_slider: Cell::new(false),
         });
         ME.with(|me| *me.borrow_mut() = Rc::downgrade(&shell));
         let first = Url::parse(&start.url).unwrap_or_else(|_| notice());
@@ -1319,6 +1327,7 @@ impl App {
                 shell.send(InputEvent::MouseMove(MouseMoveEvent::new(shell.point())));
             }
             WindowEvent::CursorLeft { .. } => {
+                shell.over_slider.set(false);
                 shell.send(InputEvent::MouseLeftViewport(
                     MouseLeftViewportEvent::default(),
                 ));
@@ -1357,6 +1366,7 @@ impl App {
                     eprintln!("wheel {delta:?} {phase:?}");
                 }
                 if shell.smooth.get()
+                    && !shell.over_slider.get()
                     && matches!(delta, MouseScrollDelta::PixelDelta(..))
                     && !shell.held.get().control_key()
                 {
@@ -1383,6 +1393,7 @@ impl App {
                     return;
                 }
                 if shell.smooth.get()
+                    && !shell.over_slider.get()
                     && matches!(delta, MouseScrollDelta::LineDelta(..))
                     && !shell.held.get().control_key()
                 {

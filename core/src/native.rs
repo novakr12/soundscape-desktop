@@ -3,6 +3,7 @@ use crate::relay::Relay;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use serde::Deserialize;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -10,7 +11,14 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 const TICK: Duration = Duration::from_millis(250);
+pub const SPECTRUM_TICK: Duration = Duration::from_millis(45);
 const FADE_TICK: Duration = Duration::from_millis(20);
+const SPECTRUM_BAR_CHOICES: [usize; 4] = [4, 6, 8, 12];
+const SPECTRUM_BARS: usize = 8;
+pub const SPECTRUM_REST: f32 = 0.15;
+const SPECTRUM_RAW_BANDS: u32 = 128;
+const SPECTRUM_THRESHOLD_DB: i32 = -70;
+const SPECTRUM_LEAD_LIMIT: gst::ClockTime = gst::ClockTime::from_seconds(5);
 const RESTART_AFTER_SECONDS: f64 = 3.0;
 const SHORTEST_SONG_SECONDS: f64 = 30.0;
 const LONGEST_WAIT_SECONDS: f64 = 240.0;
@@ -67,6 +75,189 @@ pub struct Handover {
     pub crossfade: f64,
     #[serde(default)]
     pub shuffle: bool,
+    #[serde(skip)]
+    pub visualizer: Visualizer,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Style {
+    Wave,
+    Dots,
+    #[default]
+    #[serde(other)]
+    Bars,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Bounce {
+    Gentle,
+    Normal,
+    Extreme,
+    #[default]
+    #[serde(other)]
+    Lively,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Visualizer {
+    pub on: bool,
+    pub style: Style,
+    pub bounce: Bounce,
+    pub bars: usize,
+}
+
+impl Visualizer {
+    pub const DEFAULT: Visualizer = Visualizer {
+        on: true,
+        style: Style::Bars,
+        bounce: Bounce::Lively,
+        bars: SPECTRUM_BARS,
+    };
+
+    pub fn new(on: bool, style: Style, bounce: Bounce, bars: usize) -> Visualizer {
+        Visualizer {
+            on,
+            style,
+            bounce,
+            bars: if SPECTRUM_BAR_CHOICES.contains(&bars) {
+                bars
+            } else {
+                SPECTRUM_BARS
+            },
+        }
+    }
+}
+
+impl Default for Visualizer {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+fn band_edges(bars: usize) -> &'static [usize] {
+    match bars {
+        4 => &[0, 2, 7, 25, 128],
+        6 => &[0, 2, 4, 9, 20, 48, 128],
+        12 => &[0, 1, 2, 3, 5, 7, 10, 14, 21, 32, 48, 76, 128],
+        _ => &[0, 1, 2, 4, 7, 13, 25, 52, 128],
+    }
+}
+
+fn bounce_profile(bounce: Bounce) -> (f32, f32, f32) {
+    match bounce {
+        Bounce::Gentle => (1.9, 3.0, 0.72),
+        Bounce::Normal => (1.65, 0.0, 0.62),
+        Bounce::Lively => (1.45, -3.0, 0.50),
+        Bounce::Extreme => (1.2, -7.0, 0.35),
+    }
+}
+
+pub fn normalize_spectrum_db(
+    magnitudes: &[f32],
+    previous: Option<&[f32]>,
+    bars: usize,
+    bounce: Bounce,
+) -> Vec<f32> {
+    let edges = band_edges(bars);
+    let band_count = edges.len() - 1;
+    let mut out = vec![SPECTRUM_REST; band_count];
+    if magnitudes.is_empty() {
+        return out;
+    }
+    let (exponent, ceil_offset, decay) = bounce_profile(bounce);
+    let count = magnitudes.len();
+    for (i, slot) in out.iter_mut().enumerate() {
+        let (start, end) = if count >= 16 {
+            let s = (edges[i] * count / 128).min(count - 1);
+            let e = (edges[i + 1] * count / 128).max(s + 1).min(count);
+            (s, e)
+        } else {
+            let s = (i * count / band_count).min(count - 1);
+            let e = ((i + 1) * count / band_count).max(s + 1).min(count);
+            (s, e)
+        };
+        let mut peak_db = SPECTRUM_THRESHOLD_DB as f32;
+        let mut sum_linear = 0.0f32;
+        for &db in &magnitudes[start..end] {
+            if db > peak_db {
+                peak_db = db;
+            }
+            sum_linear += 10.0f32.powf(db / 20.0);
+        }
+        let avg_db = 20.0 * (sum_linear / (end - start) as f32).max(1e-6).log10();
+        let effective_db = peak_db * 0.75 + avg_db * 0.25;
+        let share = if band_count > 1 {
+            i as f32 / (band_count - 1) as f32
+        } else {
+            0.0
+        };
+        let floor = -46.0 - share * 15.0;
+        let ceil = -14.0 - share * 15.0 + ceil_offset;
+        let norm = ((effective_db - floor) / (ceil - floor)).clamp(0.0, 1.0);
+        let curved = norm.powf(exponent);
+        let target = (0.15 + 0.85 * curved).clamp(0.15, 1.0);
+        let prev = previous.and_then(|p| p.get(i).copied()).unwrap_or(0.15);
+        let next = if target >= prev {
+            target
+        } else {
+            (prev * decay + target * (1.0 - decay)).max(0.15)
+        };
+        *slot = if next < 0.165 { 0.15 } else { next };
+    }
+    out
+}
+
+fn read_spectrum(structure: &gst::StructureRef) -> Option<(gst::ClockTime, Vec<f32>)> {
+    if structure.name() != "spectrum" {
+        return None;
+    }
+    let at = structure.get::<gst::ClockTime>("running-time").ok()?;
+    Some((at, read_spectrum_magnitudes(structure)?))
+}
+
+fn due_spectrum(
+    ahead: &mut VecDeque<(gst::ClockTime, Vec<f32>)>,
+    now: gst::ClockTime,
+) -> Option<Vec<f32>> {
+    ahead.retain(|(at, _)| *at <= now + SPECTRUM_LEAD_LIMIT);
+    let mut due = None;
+    while ahead.front().is_some_and(|(at, _)| *at <= now) {
+        due = ahead.pop_front().map(|(_, mags)| mags);
+    }
+    due
+}
+
+pub fn read_spectrum_magnitudes(structure: &gst::StructureRef) -> Option<Vec<f32>> {
+    let value = structure.value("magnitude").ok()?;
+    if let Ok(list) = value.get::<gst::List>() {
+        let mags: Vec<f32> = list
+            .iter()
+            .filter_map(|item| {
+                item.get::<f32>()
+                    .ok()
+                    .or_else(|| item.get::<f64>().ok().map(|v| v as f32))
+            })
+            .collect();
+        if !mags.is_empty() {
+            return Some(mags);
+        }
+    }
+    if let Ok(array) = value.get::<gst::Array>() {
+        let mags: Vec<f32> = array
+            .iter()
+            .filter_map(|item| {
+                item.get::<f32>()
+                    .ok()
+                    .or_else(|| item.get::<f64>().ok().map(|v| v as f32))
+            })
+            .collect();
+        if !mags.is_empty() {
+            return Some(mags);
+        }
+    }
+    None
 }
 
 const SEEK_ARRIVED: f64 = 1.0;
@@ -203,6 +394,7 @@ pub enum Command {
         muted: bool,
         levelling: bool,
         crossfade: f64,
+        visualizer: Visualizer,
     },
     Stop,
 }
@@ -317,6 +509,7 @@ impl Queue {
 struct Shown {
     preview: Option<Preview>,
     snapshot: Option<Snapshot>,
+    spectrum: Option<Vec<f32>>,
 }
 
 pub struct Player {
@@ -335,6 +528,10 @@ impl Player {
 
     pub fn snapshot(&self) -> Option<Snapshot> {
         self.shown.lock().expect("shown lock").snapshot.clone()
+    }
+
+    pub fn spectrum(&self) -> Option<Vec<f32>> {
+        self.shown.lock().expect("shown lock").spectrum.clone()
     }
 }
 
@@ -356,7 +553,8 @@ struct Outgoing {
 fn make_playbin(
     queue: &Arc<Mutex<Queue>>,
     relay: &Relay,
-) -> Result<(gst::Element, Arc<AtomicBool>), String> {
+    visualizer: bool,
+) -> Result<(gst::Element, Arc<AtomicBool>, Option<gst::Element>), String> {
     let playbin = gst::ElementFactory::make("playbin")
         .build()
         .map_err(|_| "GStreamer's playbin is missing".to_string())?;
@@ -365,6 +563,14 @@ fn make_playbin(
     playbin.set_property("buffer-duration", 10_000_000_000i64);
     if let Some(sink) = audio_sink() {
         playbin.set_property("audio-sink", &sink);
+    }
+    let spectrum = gst::ElementFactory::make("spectrum").build().ok();
+    if let Some(ref spec) = spectrum {
+        spec.set_property("bands", SPECTRUM_RAW_BANDS);
+        spec.set_property("threshold", SPECTRUM_THRESHOLD_DB);
+        spec.set_property("interval", 45_000_000u64);
+        spec.set_property("post-messages", visualizer);
+        playbin.set_property("audio-filter", spec);
     }
     if let Ok(fake) = gst::ElementFactory::make("fakesink").build() {
         playbin.set_property("video-sink", &fake);
@@ -393,11 +599,15 @@ fn make_playbin(
         }
         None
     });
-    Ok((playbin, active))
+    Ok((playbin, active, spectrum))
 }
 
 struct Engine {
     playbin: gst::Element,
+    spectrum_element: Option<gst::Element>,
+    visualizer: Visualizer,
+    heard_ahead: VecDeque<(gst::ClockTime, Vec<f32>)>,
+    levels: Vec<f32>,
     seek_target: std::cell::Cell<Option<(f64, Instant)>>,
     last_shown: std::cell::Cell<f64>,
     active: Arc<AtomicBool>,
@@ -453,11 +663,15 @@ impl Engine {
             }
             next
         };
-        let Ok((fresh, active)) = make_playbin(&self.queue, &self.relay) else {
+        let Ok((fresh, active, spectrum)) =
+            make_playbin(&self.queue, &self.relay, self.visualizer.on)
+        else {
             return;
         };
         self.active.store(false, Ordering::Relaxed);
         let old = std::mem::replace(&mut self.playbin, fresh);
+        self.spectrum_element = spectrum;
+        self.heard_ahead.clear();
         self.active = active;
         let from = old.property::<f64>("volume");
         let length = Duration::from_secs_f64(self.crossfade);
@@ -557,6 +771,7 @@ impl Engine {
             return;
         };
         let _ = self.playbin.set_state(gst::State::Null);
+        self.heard_ahead.clear();
         self.playbin.set_property("uri", uri.as_str());
         self.seek_when_ready = (time > 0.5).then_some(time);
         self.released = false;
@@ -621,6 +836,7 @@ impl Engine {
         {
             self.seek_when_ready = Some(seconds);
         }
+        self.heard_ahead.clear();
         self.seek_target.set(Some((seconds, Instant::now())));
         self.last = None;
     }
@@ -735,11 +951,23 @@ impl Engine {
                 muted,
                 levelling,
                 crossfade,
+                visualizer,
             } => {
                 self.volume = volume.clamp(0.0, 1.0);
                 self.muted = muted;
                 self.levelling = levelling;
                 self.crossfade = crossfade.max(0.0);
+                if self.visualizer != visualizer {
+                    self.visualizer = visualizer;
+                    if let Some(ref spec) = self.spectrum_element {
+                        spec.set_property("post-messages", visualizer.on);
+                    }
+                    self.levels.clear();
+                    if !visualizer.on {
+                        self.heard_ahead.clear();
+                    }
+                    self.show_spectrum();
+                }
                 self.apply_volume();
             }
             Command::Jump(ahead) => {
@@ -812,9 +1040,37 @@ impl Engine {
                         }
                     }
                 }
+                gst::MessageView::Element(element) if self.visualizer.on => {
+                    if let Some(heard) = element.structure().and_then(read_spectrum) {
+                        self.heard_ahead.push_back(heard);
+                    }
+                }
                 _ => {}
             }
         }
+    }
+
+    fn show_spectrum(&mut self) {
+        let live = self.visualizer.on
+            && self.spectrum_element.is_some()
+            && self.want_playing
+            && !self.released;
+        if live {
+            if let Some(mags) = self
+                .playbin
+                .current_running_time()
+                .and_then(|now| due_spectrum(&mut self.heard_ahead, now))
+            {
+                self.levels = normalize_spectrum_db(
+                    &mags,
+                    Some(&self.levels),
+                    self.visualizer.bars,
+                    self.visualizer.bounce,
+                );
+            }
+            self.levels.resize(self.visualizer.bars, SPECTRUM_REST);
+        }
+        self.shown.lock().expect("shown lock").spectrum = live.then(|| self.levels.clone());
     }
 
     fn seek_when_ready(&mut self) {
@@ -878,12 +1134,13 @@ impl Engine {
             .filter(|_| queue.repeat != "one")
             .and_then(|at| queue.tracks.get(at));
         let position = self.position();
+        let playing = self.want_playing && !self.released;
         let preview = Preview {
             title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
             cover: cover_for(&self.server, track),
-            playing: self.want_playing && !self.released,
+            playing,
             position,
             length: self.stream_length().or(track.duration),
             has_next: next_index(
@@ -906,7 +1163,7 @@ impl Engine {
         };
         let snapshot = Snapshot {
             track: track.clone(),
-            playing: self.want_playing && !self.released,
+            playing,
             time: position,
             duration: self.stream_length().or(track.duration),
             volume: self.volume,
@@ -952,15 +1209,20 @@ pub fn start(
         first.set_shuffle(true);
     }
     let queue = Arc::new(Mutex::new(first));
-    let (playbin, active) = make_playbin(&queue, &relay)?;
+    let (playbin, active, spectrum_element) = make_playbin(&queue, &relay, handover.visualizer.on)?;
 
     let shown = Arc::new(Mutex::new(Shown {
         preview: None,
         snapshot: None,
+        spectrum: None,
     }));
     let (commands, receive) = channel::<Command>();
     let mut engine = Engine {
         playbin,
+        spectrum_element,
+        visualizer: handover.visualizer,
+        heard_ahead: VecDeque::new(),
+        levels: Vec::new(),
         active,
         outgoing: None,
         crossfade: handover.crossfade.max(0.0),
@@ -993,6 +1255,8 @@ pub fn start(
             loop {
                 let wait = if engine.fade.is_some() || engine.outgoing.is_some() {
                     Some(FADE_TICK)
+                } else if engine.want_playing && engine.visualizer.on {
+                    Some(SPECTRUM_TICK)
                 } else if engine.want_playing
                     || engine.seek_when_ready.is_some()
                     || engine.seek_target.get().is_some()
@@ -1034,6 +1298,7 @@ pub fn start(
                     }
                 }
                 let prev_released = engine.released;
+                let was_playing = engine.want_playing;
                 if engine.want_playing
                     || engine.fade.is_some()
                     || engine.outgoing.is_some()
@@ -1049,6 +1314,7 @@ pub fn start(
                     engine.release_when_quiet();
                 }
                 if was_command
+                    || was_playing
                     || engine.want_playing
                     || engine.fade.is_some()
                     || engine.outgoing.is_some()
@@ -1056,6 +1322,7 @@ pub fn start(
                 {
                     engine.publish();
                 }
+                engine.show_spectrum();
             }
         })
         .map_err(|error| error.to_string())?;
@@ -1295,5 +1562,74 @@ mod tests {
             (Some(0.0), false)
         );
         assert_eq!(shown_position(None, Some(42.0)), (Some(42.0), false));
+    }
+
+    #[test]
+    fn shows_each_reading_when_it_is_heard() {
+        let ms = gst::ClockTime::from_mseconds;
+        let mut ahead = VecDeque::from([
+            (ms(90_000), vec![9.0]),
+            (ms(100), vec![1.0]),
+            (ms(145), vec![2.0]),
+            (ms(300), vec![3.0]),
+        ]);
+        assert_eq!(due_spectrum(&mut ahead, ms(50)), None);
+        assert_eq!(ahead.len(), 3, "a reading from before a seek has to go");
+        assert_eq!(due_spectrum(&mut ahead, ms(150)), Some(vec![2.0]));
+        assert_eq!(due_spectrum(&mut ahead, ms(200)), None);
+        assert_eq!(due_spectrum(&mut ahead, ms(300)), Some(vec![3.0]));
+    }
+
+    #[test]
+    fn reads_and_normalizes_spectrum_messages_from_gstreamer() {
+        let _ = gst::init();
+        let silent = vec![-70.0f32; 128];
+        let shape = |mags: &[f32], previous: Option<&[f32]>| {
+            normalize_spectrum_db(mags, previous, 8, Bounce::Lively)
+        };
+        assert_eq!(shape(&silent, None), [SPECTRUM_REST; 8]);
+        for bars in SPECTRUM_BAR_CHOICES {
+            assert_eq!(
+                normalize_spectrum_db(&silent, None, bars, Bounce::Normal).len(),
+                bars
+            );
+        }
+
+        let mut bass_hit = vec![-70.0f32; 128];
+        bass_hit[0] = -6.0;
+        let bars = shape(&bass_hit, None);
+        assert!(bars[0] > 0.85, "bass bar was {}", bars[0]);
+        assert_eq!(bars[7], 0.15);
+        let decayed = shape(&silent, Some(&bars));
+        assert!(decayed[0] < bars[0] && decayed[0] > 0.15);
+
+        let Ok(pipeline) = gst::parse::launch(
+            "audiotestsrc num-buffers=5 wave=sine freq=440 ! spectrum bands=128 threshold=-70 interval=10000000 post-messages=true ! fakesink",
+        ) else {
+            return;
+        };
+        let _ = pipeline.set_state(gst::State::Playing);
+        let mut received = None;
+        if let Some(bus) = pipeline.bus() {
+            for _ in 0..30 {
+                let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(50)) else {
+                    break;
+                };
+                if let gst::MessageView::Element(element) = msg.view() {
+                    if let Some((_, mags)) = element.structure().and_then(read_spectrum) {
+                        received = Some(mags);
+                        break;
+                    }
+                }
+            }
+        }
+        let _ = pipeline.set_state(gst::State::Null);
+        let mags = received.expect("GStreamer spectrum element should emit magnitude list");
+        assert_eq!(mags.len(), 128);
+        let normalized = shape(&mags, None);
+        assert!(
+            normalized.iter().any(|&v| v > 0.4),
+            "440Hz sine wave should raise a spectrum bar: {normalized:?}"
+        );
     }
 }

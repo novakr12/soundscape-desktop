@@ -1,6 +1,6 @@
 use crate::mini_draw::{
     Fonts, Icon, Icons, baseline, centered, circle, clock, colors, cover_pixmap, faded, fill,
-    fitted, rounded, text,
+    fitted, rounded, text, visualizer, visualizer_levels, visualizer_width,
 };
 use resvg::tiny_skia::{
     FillRule, FilterQuality, Paint, Pattern, Pixmap, Rect, SpreadMode, Transform,
@@ -33,6 +33,7 @@ const SEEK_ARRIVED_MS: u64 = 1500;
 const SEEK_GIVE_UP: Duration = Duration::from_secs(4);
 const TOGGLE_GIVE_UP: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(250);
+const VISUALIZER_PAD: f32 = 5.0;
 
 enum Event {
     Open,
@@ -637,9 +638,26 @@ fn draw(
     let Some(fonts) = fonts else {
         return spots;
     };
-    let left = PAD + COVER + 12.0;
-    let room = WIDTH - left - PAD - if shown_love { BUTTON + 8.0 } else { 0.0 };
+    let base_left = PAD + COVER + 12.0;
     let top = PAD + (COVER - 44.0) / 2.0;
+    let mut left = base_left;
+    if let Some(look) = view.visualizer.filter(|_| active) {
+        visualizer(
+            canvas,
+            (k(base_left), k(top + 18.0)),
+            k(15.0),
+            scale,
+            look.style,
+            &visualizer_levels(view.playing, view.spectrum.as_deref(), look.bars),
+            if view.playing {
+                palette.accent
+            } else {
+                faded(palette.muted, 0.45)
+            },
+        );
+        left += visualizer_width(look.bars) + VISUALIZER_PAD;
+    }
+    let room = WIDTH - left - PAD - if shown_love { BUTTON + 8.0 } else { 0.0 };
     let title = if active {
         view.title.as_str()
     } else {
@@ -661,13 +679,17 @@ fn draw(
         (k(left), k(baseline(&fonts.bold, 16.0, top, 22.0))),
         palette.text,
     );
-    let second = fitted(&fonts.regular, &second, k(15.0), k(room));
+    let second_room = WIDTH - base_left - PAD - if shown_love { BUTTON + 8.0 } else { 0.0 };
+    let second = fitted(&fonts.regular, &second, k(15.0), k(second_room));
     text(
         canvas,
         &fonts.regular,
         &second,
         k(15.0),
-        (k(left), k(baseline(&fonts.regular, 15.0, top + 22.0, 22.0))),
+        (
+            k(base_left),
+            k(baseline(&fonts.regular, 15.0, top + 22.0, 22.0)),
+        ),
         tint,
     );
 

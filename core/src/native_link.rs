@@ -1,6 +1,6 @@
 use crate::host::{async_runtime, AppHandle, Manager};
 use crate::media::Preview;
-use crate::native::{self, Command, Handover, Player, Snapshot, Track};
+use crate::native::{self, Bounce, Command, Handover, Player, Snapshot, Style, Track, Visualizer};
 use crate::{AppState, MAIN};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -33,6 +33,14 @@ pub struct PageSettings {
     pub levelling: bool,
     #[serde(default)]
     pub crossfade: f64,
+    #[serde(default = "yes")]
+    pub visualizer: bool,
+    #[serde(default)]
+    pub visualizer_style: Style,
+    #[serde(default)]
+    pub visualizer_bounce: Bounce,
+    #[serde(default)]
+    pub visualizer_bars: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,6 +49,7 @@ pub struct Settings {
     pub muted: bool,
     pub levelling: bool,
     pub crossfade: f64,
+    pub visualizer: Visualizer,
 }
 
 impl Settings {
@@ -49,6 +58,7 @@ impl Settings {
         muted: false,
         levelling: true,
         crossfade: 0.0,
+        visualizer: Visualizer::DEFAULT,
     };
 
     pub fn with(self, page: PageSettings) -> Settings {
@@ -64,6 +74,12 @@ impl Settings {
             } else {
                 0.0
             },
+            visualizer: Visualizer::new(
+                page.visualizer,
+                page.visualizer_style,
+                page.visualizer_bounce,
+                page.visualizer_bars,
+            ),
         }
     }
 
@@ -73,6 +89,7 @@ impl Settings {
             muted: self.muted,
             levelling: self.levelling,
             crossfade: self.crossfade,
+            visualizer: self.visualizer,
         }
     }
 }
@@ -247,6 +264,10 @@ pub fn page_script(id: &str, name: &str) -> String {
         muted: volume?.muted === true,
         levelling: options?.levelling !== false,
         crossfade: typeof options?.crossfade === "number" ? options.crossfade : 0,
+        visualizer: options?.visualizer !== false,
+        visualizer_style: typeof options?.visualizerStyle === "string" ? options.visualizerStyle : "bars",
+        visualizer_bounce: typeof options?.visualizerBounce === "string" ? options.visualizerBounce : "lively",
+        visualizer_bars: [4, 6, 8, 12].includes(options?.visualizerBars) ? options.visualizerBars : 8,
       }};
     }} catch {{
       return null;
@@ -333,16 +354,54 @@ fn volume() -> f64 {
 }
 
 fn apply(app: &AppHandle, page: PageSettings) {
-    let fresh = {
+    let (fresh, changed) = {
         let mut stored = SETTINGS.lock().expect("settings lock");
         let fresh = stored.with(page);
-        if *stored == fresh {
-            return;
-        }
+        let changed = *stored != fresh;
         *stored = fresh;
-        fresh
+        (fresh, changed)
+    };
+    let state = app.state::<AppState>();
+    if state.config().visualizer != fresh.visualizer.on {
+        state.update(|config| config.visualizer = fresh.visualizer.on);
+    }
+    if changed {
+        with_player(app, |player| player.send(fresh.command()));
+        crate::mini::wake();
+    }
+}
+
+pub fn set_visualizer(app: &AppHandle, on: bool) {
+    let fresh = {
+        let mut stored = SETTINGS.lock().expect("settings lock");
+        stored.visualizer.on = on;
+        *stored
     };
     with_player(app, |player| player.send(fresh.command()));
+}
+
+pub fn visualizer(app: &AppHandle) -> Option<Visualizer> {
+    let shown = settings().visualizer;
+    (shown.on && active(app)).then_some(shown)
+}
+
+pub fn spectrum(app: &AppHandle) -> Option<Vec<f32>> {
+    with_player(app, Player::spectrum).flatten()
+}
+
+pub fn spectrum_script(bars: Option<&[f32]>) -> String {
+    let detail = match bars {
+        Some(bars) => Value::from(
+            bars.iter()
+                .map(|v| ((*v as f64) * 1000.0).round() / 1000.0)
+                .collect::<Vec<_>>(),
+        )
+        .to_string(),
+        None => "null".into(),
+    };
+    format!(
+        "window.dispatchEvent(new CustomEvent(\"soundscape-spectrum\", {{ detail: {detail} }})), undefined"
+    )
 }
 
 static LAST_REPORT: Mutex<Option<String>> = Mutex::new(None);
@@ -612,6 +671,7 @@ fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playin
         repeat,
         crossfade: settings().crossfade,
         shuffle,
+        visualizer: settings().visualizer,
     };
     let state = app.state::<AppState>();
     let mut current = state.native.lock().expect("native lock");
@@ -865,6 +925,7 @@ async fn keep_going(app: AppHandle, body: Value) {
 const MAX_ASKED: usize = 500;
 
 pub async fn run(app: AppHandle) {
+    async_runtime::spawn(stream_spectrum(app.clone()));
     let mut since_heartbeat = HEARTBEAT;
     let mut told = None;
     let mut asked: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -913,6 +974,31 @@ pub async fn run(app: AppHandle) {
         if active(&app) {
             report(&app);
         }
+    }
+}
+
+async fn stream_spectrum(app: AppHandle) {
+    const WAITING: Duration = Duration::from_millis(250);
+    let mut last: Option<Vec<f32>> = None;
+    loop {
+        let now = spectrum(&app);
+        if now != last {
+            if now.is_some() != last.is_some() {
+                crate::mini::wake();
+            }
+            if app.host().is_visible(MAIN) {
+                app.host().eval(MAIN, spectrum_script(now.as_deref()));
+            }
+            last = now;
+        }
+        let wait = if last.is_some() {
+            native::SPECTRUM_TICK
+        } else if active(&app) {
+            WAITING
+        } else {
+            EVERY
+        };
+        tokio::time::sleep(wait).await;
     }
 }
 

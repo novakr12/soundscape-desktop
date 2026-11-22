@@ -49,7 +49,15 @@ pub async fn run(app: AppHandle) {
         if !shown(&app) {
             WAKE.notified().await;
         } else {
-            tokio::time::sleep(EVERY).await;
+            let wait = if crate::native_link::spectrum(&app).is_some() {
+                crate::native::SPECTRUM_TICK
+            } else {
+                EVERY
+            };
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = WAKE.notified() => {}
+            }
         }
         refresh(&app).await;
     }
@@ -82,6 +90,8 @@ pub struct MiniView {
     pub shuffle: Option<bool>,
     pub repeat: Option<String>,
     pub can_seek: bool,
+    pub visualizer: Option<crate::native::Visualizer>,
+    pub spectrum: Option<Vec<f32>>,
 }
 
 pub fn unbase64(text: &str) -> Option<Vec<u8>> {
@@ -195,7 +205,8 @@ fn preview_shown(state: &AppState) -> Option<crate::media::Preview> {
 
 pub fn view(app: &AppHandle) -> MiniView {
     let state = app.state::<AppState>();
-    if let Some(preview) = preview_shown(&state) {
+    if let Some(polled) = preview_shown(&state) {
+        let preview = crate::native_link::preview(app).unwrap_or(polled);
         return MiniView {
             kind: "preview",
             title: preview.title,
@@ -215,6 +226,8 @@ pub fn view(app: &AppHandle) -> MiniView {
             shuffle: preview.shuffle,
             repeat: preview.repeat,
             can_seek: preview.length.is_some(),
+            visualizer: crate::native_link::visualizer(app),
+            spectrum: crate::native_link::spectrum(app),
             ..MiniView::default()
         };
     }

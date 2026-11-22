@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.11.2" date="2026-11-22">
+      <description>
+        <ul>
+          <li>Copying text, tokens and share links now works reliably on Wayland and X11</li>
+          <li>Text and password boxes on Connect, Login, Sign up and Settings now span the full form width</li>
+          <li>Clickable song, artist and album links in the player bar now work for unplayed Navidrome tracks</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.1" date="2026-11-22">
       <description>
         <ul>

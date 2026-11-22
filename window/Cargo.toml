@@ -1,6 +1,6 @@
 [package]
 name = "soundscape-window"
-version = "0.11.1"
+version = "0.11.2"
 edition = "2024"
 publish = false
 
@@ -8,6 +8,7 @@ publish = false
 servo = { version = "=0.8.0", default-features = false, features = ["bundled", "clipboard", "js_jit", "media-gstreamer"] }
 servo-base = "=0.8.0"
 servo-allocator = { version = "=0.8.0", features = ["use-jemalloc"] }
+wayland-client = { version = "0.31", features = ["system"] }
 winit = "0.30.13"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12", "logging"] }
 url = "2"

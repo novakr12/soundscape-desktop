@@ -1,5 +1,6 @@
 extern crate servo_allocator;
 
+mod clipboard;
 mod font;
 mod glide;
 mod host;
@@ -100,6 +101,7 @@ struct Shell {
     maximized: Cell<bool>,
     servo: Servo,
     context: Rc<WindowRenderingContext>,
+    clipboard: Option<Rc<clipboard::WaylandClipboard>>,
     webview: RefCell<Option<WebView>>,
     openers: RefCell<Vec<WebView>>,
     select: RefCell<Option<SelectElement>>,
@@ -479,6 +481,9 @@ impl Shell {
         self.waiting.borrow_mut().clear();
         self.openers.borrow_mut().clear();
         self.webview.borrow_mut().take();
+        if let Some(clipboard) = self.clipboard.as_ref() {
+            clipboard.shutdown();
+        }
     }
 
     fn webview(&self) -> Option<WebView> {
@@ -683,6 +688,13 @@ impl Shell {
             data,
         })));
     }
+
+    fn is_server_page(&self, webview: &WebView) -> bool {
+        match (self.server(), webview.url()) {
+            (Some(server), Some(current)) => current.origin() == server.origin(),
+            _ => false,
+        }
+    }
 }
 
 impl WebViewDelegate for Shell {
@@ -817,12 +829,15 @@ impl WebViewDelegate for Shell {
         message: String,
     ) {
         if message.starts_with(soundscape_protocol::NATIVE_ASKED) {
-            let from_server = match (self.server(), webview.url()) {
-                (Some(server), Some(current)) => current.origin() == server.origin(),
-                _ => false,
-            };
-            if from_server {
+            if self.is_server_page(&webview) {
                 self.link.send(FromWindow::Page { message });
+            }
+            return;
+        }
+        if let Some(text) = clipboard::copied(&self.nonce, &message) {
+            if self.is_server_page(&webview) {
+                let delegate = webview.clipboard_delegate();
+                delegate.set_text(webview, text);
             }
             return;
         }
@@ -926,17 +941,20 @@ impl App {
             .create_window(attributes(saved_size, start.maximized))
             .expect("window");
         let display = event_loop.display_handle().expect("display");
+        let raw_display = display.as_raw();
         let handle = window.window_handle().expect("window handle");
         let context = Rc::new(
             WindowRenderingContext::new(display, handle, window.inner_size()).expect("drawing"),
         );
         let _ = context.make_current();
+        let clipboard = clipboard::WaylandClipboard::new(raw_display);
         let mut opts = Opts::default();
         if let Some(dir) = &profile.storage {
             let _ = std::fs::create_dir_all(dir);
             opts.config_dir = Some(dir.clone());
         }
         let preferences = servo::Preferences {
+            dom_async_clipboard_enabled: true,
             dom_gamepad_enabled: false,
             dom_webxr_enabled: false,
             dom_webxr_glwindow_enabled: false,
@@ -972,7 +990,12 @@ impl App {
             .event_loop_waker(Box::new(Waker(proxy.clone())))
             .build();
         servo.setup_logging();
+        let nonce = nonce();
         let scripts = Rc::new(UserContentManager::new(&servo));
+        scripts.add_script(Rc::new(UserScript::new(
+            clipboard::page_script(&nonce),
+            None,
+        )));
         scripts.add_script(Rc::new(UserScript::new(FORM_ENTER.into(), None)));
         scripts.add_script(Rc::new(UserScript::new(COVERS.into(), None)));
         scripts.add_script(Rc::new(UserScript::new(VALVE.into(), None)));
@@ -1024,6 +1047,7 @@ impl App {
             maximized: Cell::new(start.maximized),
             servo,
             context,
+            clipboard: clipboard.clone(),
             webview: RefCell::new(None),
             openers: RefCell::new(Vec::new()),
             select: RefCell::new(None),
@@ -1045,7 +1069,7 @@ impl App {
             glide: RefCell::new(glide::Glide::default()),
             fling: RefCell::new(glide::Fling::default()),
             link: launched.link.clone(),
-            nonce: nonce(),
+            nonce,
             debug: profile::wants(std::env::var("SOUNDSCAPE_DEBUG").ok().as_deref()),
             proxy: proxy.clone(),
             held: Cell::new(ModifiersState::empty()),
@@ -1054,14 +1078,17 @@ impl App {
         ME.with(|me| *me.borrow_mut() = Rc::downgrade(&shell));
         let first = Url::parse(&start.url).unwrap_or_else(|_| notice());
         shell.link.url(&first);
-        let webview = WebViewBuilder::new(&shell.servo, shell.context.clone())
+        let mut builder = WebViewBuilder::new(&shell.servo, shell.context.clone())
             .url(first)
             .hidpi_scale_factor(Scale::new(
                 shell.window().map_or(1.0, |window| window.scale_factor()) as f32,
             ))
             .user_content_manager(scripts)
-            .delegate(shell.clone())
-            .build();
+            .delegate(shell.clone());
+        if let Some(clipboard) = clipboard {
+            builder = builder.clipboard_delegate(clipboard);
+        }
+        let webview = builder.build();
         webview.set_focused(true);
         *shell.webview.borrow_mut() = Some(webview.clone());
         webview.notify_theme_change(profile.theme);
@@ -1251,6 +1278,8 @@ impl App {
                 webview.set_focused(focused);
                 if focused {
                     shell.shown();
+                } else if let Some(clipboard) = shell.clipboard.as_ref() {
+                    clipboard.poke();
                 }
             }
             WindowEvent::Occluded(hidden) => {

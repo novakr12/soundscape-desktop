@@ -192,6 +192,12 @@ pub fn wheel(delta: MouseScrollDelta, scale: f64) -> (f64, f64) {
     }
 }
 
+pub fn history_script(back: bool, forward: bool) -> String {
+    format!(
+        "window.soundscapeDesktopHistory={{back:{back},forward:{forward}}};window.dispatchEvent(new CustomEvent(\"soundscape-desktop-history\",{{detail:window.soundscapeDesktopHistory}}));"
+    )
+}
+
 fn nonce() -> String {
     let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -204,6 +210,13 @@ impl Shell {
     fn push_valve(&self) {
         if let Some(webview) = self.webview() {
             webview.evaluate_javascript(valve::flag_script(self.armed.get()), |_| {});
+            self.push_history(webview.can_go_back(), webview.can_go_forward());
+        }
+    }
+
+    fn push_history(&self, back: bool, forward: bool) {
+        if let Some(webview) = self.webview() {
+            webview.evaluate_javascript(history_script(back, forward), |_| {});
         }
     }
 
@@ -711,6 +724,14 @@ impl WebViewDelegate for Shell {
 
     fn notify_url_changed(&self, _: WebView, url: Url) {
         self.link.url(&url);
+    }
+
+    fn notify_history_changed(&self, _: WebView, entries: Vec<Url>, current: usize) {
+        let back = current > 0;
+        let forward = current
+            .checked_add(1)
+            .is_some_and(|next| next < entries.len());
+        self.push_history(back, forward);
     }
 
     fn request_create_new(&self, _: WebView, request: CreateNewWebViewRequest) {
@@ -1516,5 +1537,17 @@ mod tests {
             button(WinitButton::Other(7)),
             MouseButton::Other(7)
         ));
+    }
+
+    #[test]
+    fn tells_the_page_when_back_and_forward_are_ready() {
+        assert_eq!(
+            history_script(true, false),
+            "window.soundscapeDesktopHistory={back:true,forward:false};window.dispatchEvent(new CustomEvent(\"soundscape-desktop-history\",{detail:window.soundscapeDesktopHistory}));"
+        );
+        assert_eq!(
+            history_script(false, true),
+            "window.soundscapeDesktopHistory={back:false,forward:true};window.dispatchEvent(new CustomEvent(\"soundscape-desktop-history\",{detail:window.soundscapeDesktopHistory}));"
+        );
     }
 }

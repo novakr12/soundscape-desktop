@@ -98,6 +98,15 @@
   </supports>
 
   <releases>
+    <release version="0.11.1" date="2026-11-22">
+      <description>
+        <ul>
+          <li>Back, forward and home buttons now work and show up correctly in dark mode</li>
+          <li>Artist pages show every album and song from your Navidrome library, not just ones you've played</li>
+          <li>Playing from an artist page now works for collaborations like "Artist • Other Artist"</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.0" date="2026-11-22">
       <description>
         <ul>

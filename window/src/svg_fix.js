@@ -14,12 +14,17 @@
   const COPY = "data-soundscape-copy";
   const GAP_MS = 16;
   const KEEP_MS = 80;
+  const CURRENT_COLOR = /\bcurrentcolor\b/i;
+  const CURRENT_COLOR_ALL = /\bcurrentcolor\b/gi;
+  const WATCHED_ATTRS = new Set(["aria-current", "aria-pressed", "class", "style"]);
   const copies = new WeakMap();
   // Recharts hover overlays cause constant SVG re-rasterization on pointer moves in Servo.
   const HOVER = ".recharts-tooltip-cursor, .recharts-active-dot, .recharts-active-bar";
   const drawn = new WeakMap();
 
   const SKIPPED = new Set([NUDGE, "style", "font-family"]);
+
+  const needsResolve = (value) => Boolean(value) && (value.includes("var(") || CURRENT_COLOR.test(value));
 
   // Fingerprint meaningful SVG structure so unrelated/internal attribute tweaks do not re-clone.
   const content = (svg) => {
@@ -62,13 +67,17 @@
     return own || getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   };
 
-  // Iteratively expand nested CSS custom properties (`var(--x, fallback)`) into concrete values.
+  // Iteratively expand nested CSS custom properties (`var(--x, fallback)`) and `currentColor` into concrete values.
   const resolve = (text, element) => {
     let value = text;
     for (let round = 0; round < 8 && value.includes("var("); round += 1) {
       value = value.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*))?\)/g, (_, name, fallback) => {
         return variable(name, element) || (fallback ?? "").trim() || "currentColor";
       });
+    }
+    if (CURRENT_COLOR.test(value)) {
+      const color = getComputedStyle(element).color || getComputedStyle(document.documentElement).color;
+      if (color) value = value.replace(CURRENT_COLOR_ALL, color);
     }
     return value;
   };
@@ -91,19 +100,27 @@
       }
       stamp(element, token);
     }
+    let updated = false;
     for (const name of PAINTS) {
       const value = element.getAttribute(name);
-      if (!value || !value.includes("var(")) continue;
+      if (!needsResolve(value)) continue;
       let kept = originals.get(element);
       if (!kept) {
         kept = {};
         originals.set(element, kept);
       }
       kept[name] = value;
+      const next = resolve(value, element);
+      if (next === value) continue;
       resolving = true;
-      element.setAttribute(name, resolve(value, element));
-      resolving = false;
+      try {
+        element.setAttribute(name, next);
+      } finally {
+        resolving = false;
+      }
+      updated = true;
     }
+    if (updated && element.localName !== "svg") touched(element);
   };
 
   const stamp = (text, token) => {
@@ -157,6 +174,7 @@
   const hydrated = (element) => Object.keys(element).some((key) => key.startsWith("__reactFiber"));
 
   const holder = (svg) => {
+    if (svg.closest("button, a") && !svg.closest(".logo")) return null;
     const parent = svg.parentElement;
     if (!parent || !svg.isConnected || !hydrated(parent)) return null;
     if (getComputedStyle(parent).position !== "static") return parent;
@@ -259,6 +277,13 @@
         if (change.attributeName === "font-family" && change.target.localName === "text") continue;
         if (!resolving && change.target.namespaceURI === SVG) fix(change.target);
         if (change.target.namespaceURI === SVG) touched(change.target);
+        else if (
+          change.target.nodeType === 1 &&
+          WATCHED_ATTRS.has(change.attributeName) &&
+          change.target.querySelector?.("svg")
+        ) {
+          refreshTree(change.target);
+        }
       } else if (change.type === "childList") {
         if (change.target.nodeType === 1 && change.target.closest?.(`[${COPY}]`)) continue;
         for (const removed of change.removedNodes) cleanupRemoved(removed);
@@ -273,19 +298,34 @@
     }
   });
 
-  // Re-evaluate saved `var(--...)` paint attributes when the OS dark/light theme changes.
-  const refresh = () => {
-    for (const element of document.querySelectorAll("svg, svg *")) {
-      const kept = originals.get(element);
-      if (!kept) continue;
-      for (const [name, value] of Object.entries(kept)) {
-        resolving = true;
-        element.setAttribute(name, resolve(value, element));
-        resolving = false;
+  // Re-evaluate saved `var(--...)` and `currentColor` paint attributes when styles or theme change.
+  const refreshTree = (root) => {
+    if (!root || root.nodeType !== 1) return;
+    const elements = root.namespaceURI === SVG ? [root, ...root.querySelectorAll("*")] : root.querySelectorAll("svg, svg *");
+    for (const element of elements) {
+      let kept = originals.get(element);
+      if (!kept) {
+        fix(element);
+        kept = originals.get(element);
+        if (!kept) continue;
       }
-      touched(element);
+      let updated = false;
+      for (const [name, value] of Object.entries(kept)) {
+        const next = resolve(value, element);
+        if (next === element.getAttribute(name)) continue;
+        resolving = true;
+        try {
+          element.setAttribute(name, next);
+        } finally {
+          resolving = false;
+        }
+        updated = true;
+      }
+      if (updated) touched(element);
     }
   };
+
+  const refresh = () => refreshTree(document.documentElement);
 
   const start = () => {
     fixTree(document.documentElement);
@@ -296,6 +336,12 @@
       characterData: true,
     });
     matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => setTimeout(refresh, 0));
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", () => setTimeout(refresh, 0), { once: true });
+    }
+    if (document.readyState !== "complete") {
+      window.addEventListener("load", () => setTimeout(refresh, 0), { once: true });
+    }
   };
 
   if (document.documentElement) start();

@@ -30,6 +30,7 @@ pub const SAME_WINDOW: &str = concat!(
   Object.defineProperty(window, "soundscapeDesktopVersion", { value: ""#,
     env!("CARGO_PKG_VERSION"),
     r#"" });
+  window.dispatchEvent(new Event("soundscape-desktop-ready"));
   document.addEventListener(
     "click",
     (event) => {

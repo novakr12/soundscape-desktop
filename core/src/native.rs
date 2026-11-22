@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 const TICK: Duration = Duration::from_millis(250);
-pub const SPECTRUM_TICK: Duration = Duration::from_millis(45);
+pub const SPECTRUM_TICK: Duration = Duration::from_millis(15);
+pub const SPECTRUM_EVERY: Duration = Duration::from_millis(30);
 const FADE_TICK: Duration = Duration::from_millis(20);
 const SPECTRUM_BAR_CHOICES: [usize; 4] = [4, 6, 8, 12];
 const SPECTRUM_BARS: usize = 8;
@@ -147,10 +148,10 @@ fn band_edges(bars: usize) -> &'static [usize] {
 
 fn bounce_profile(bounce: Bounce) -> (f32, f32, f32) {
     match bounce {
-        Bounce::Gentle => (1.9, 3.0, 0.72),
-        Bounce::Normal => (1.65, 1.0, 0.62),
-        Bounce::Lively => (1.45, -0.5, 0.50),
-        Bounce::Extreme => (1.2, -3.0, 0.35),
+        Bounce::Gentle => (1.9, 3.0, 0.80),
+        Bounce::Normal => (1.65, 1.0, 0.73),
+        Bounce::Lively => (1.45, -0.5, 0.63),
+        Bounce::Extreme => (1.2, -3.0, 0.50),
     }
 }
 
@@ -568,7 +569,7 @@ fn make_playbin(
     if let Some(ref spec) = spectrum {
         spec.set_property("bands", SPECTRUM_RAW_BANDS);
         spec.set_property("threshold", SPECTRUM_THRESHOLD_DB);
-        spec.set_property("interval", 45_000_000u64);
+        spec.set_property("interval", SPECTRUM_EVERY.as_nanos() as u64);
         spec.set_property("post-messages", visualizer);
         playbin.set_property("audio-filter", spec);
     }

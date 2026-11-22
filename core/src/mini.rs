@@ -50,7 +50,7 @@ pub async fn run(app: AppHandle) {
             WAKE.notified().await;
         } else {
             let wait = if crate::native_link::spectrum(&app).is_some() {
-                crate::native::SPECTRUM_TICK
+                crate::native::SPECTRUM_EVERY
             } else {
                 EVERY
             };

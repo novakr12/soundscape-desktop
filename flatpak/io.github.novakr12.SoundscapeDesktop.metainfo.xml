@@ -98,6 +98,13 @@
   </supports>
 
   <releases>
+    <release version="0.11.6" date="2026-11-22">
+      <description>
+        <ul>
+          <li>The visualizer updates more often, so the bars move more smoothly</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.5" date="2026-11-22">
       <description>
         <ul>

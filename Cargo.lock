@@ -7945,7 +7945,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-core"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "futures-util",
  "gethostname",
@@ -7965,7 +7965,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-desktop"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "ab_glyph",
  "fontdb",
@@ -7985,7 +7985,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-protocol"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -7994,7 +7994,7 @@ dependencies = [
 
 [[package]]
 name = "soundscape-window"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "euclid",
  "libc",

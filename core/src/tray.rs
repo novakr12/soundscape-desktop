@@ -181,7 +181,7 @@ pub struct Picture {
     pub rgba: Vec<u8>,
 }
 
-fn picture(bytes: &[u8]) -> Option<Picture> {
+fn picture(bytes: &[u8], accent: Option<u32>) -> Option<Picture> {
     let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().ok()?;
     let mut pixels = vec![0; reader.output_buffer_size()?];
@@ -190,6 +190,9 @@ fn picture(bytes: &[u8]) -> Option<Picture> {
         return None;
     }
     pixels.truncate(frame.buffer_size());
+    if let Some(accent) = accent {
+        soundscape_protocol::tint(&mut pixels, accent);
+    }
     Some(Picture {
         width: frame.width,
         height: frame.height,
@@ -197,12 +200,12 @@ fn picture(bytes: &[u8]) -> Option<Picture> {
     })
 }
 
-pub fn window_picture() -> Option<Picture> {
-    picture(LARGE_ICON)
+pub fn window_picture(accent: Option<u32>) -> Option<Picture> {
+    picture(LARGE_ICON, accent)
 }
 
-fn icon(bytes: &[u8]) -> Option<Icon> {
-    let shown = picture(bytes)?;
+fn icon(bytes: &[u8], accent: Option<u32>) -> Option<Icon> {
+    let shown = picture(bytes, accent)?;
     Some(Icon {
         width: shown.width as i32,
         height: shown.height as i32,
@@ -216,11 +219,24 @@ fn icon(bytes: &[u8]) -> Option<Icon> {
     })
 }
 
-pub fn icons() -> Vec<Icon> {
+pub fn icons(accent: Option<u32>) -> Vec<Icon> {
     [SMALL_ICON, LARGE_ICON]
         .into_iter()
-        .filter_map(icon)
+        .filter_map(|bytes| icon(bytes, accent))
         .collect()
+}
+
+pub fn recolor(accent: Option<u32>) {
+    let Some(handle) = HANDLE.get() else {
+        return;
+    };
+    let handle = handle.clone();
+    let fresh = icons(accent);
+    async_runtime::spawn(async move {
+        handle
+            .update(move |tray: &mut SoundscapeTray| tray.icons = fresh)
+            .await;
+    });
 }
 
 fn item(label: impl Into<String>, id: &str, enabled: bool) -> MenuItem<SoundscapeTray> {
@@ -399,7 +415,7 @@ pub fn create(app: &AppHandle) {
     let tray = SoundscapeTray {
         app: app.clone(),
         view: view(app),
-        icons: icons(),
+        icons: icons(app.state::<AppState>().config().icon_accent),
     };
     async_runtime::spawn(async move {
         let spawned = tray
@@ -722,7 +738,7 @@ mod tests {
 
     #[test]
     fn draws_the_icon_from_the_bundled_pictures() {
-        let shown = icons();
+        let shown = icons(None);
         assert_eq!(shown.len(), 2);
         assert_eq!((shown[0].width, shown[0].height), (32, 32));
         assert_eq!(shown[0].data.len(), 32 * 32 * 4);

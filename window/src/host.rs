@@ -21,6 +21,7 @@ pub enum Call {
     KeepWindow(i64),
     Theme(bool),
     Font(Option<String>),
+    Icon(Option<u32>),
     Exit,
 }
 
@@ -55,6 +56,7 @@ pub fn call_for(message: ToWindow, out: &Out) -> Option<Call> {
         ToWindow::KeepWindow { seconds } => Call::KeepWindow(seconds),
         ToWindow::Theme { dark } => Call::Theme(dark),
         ToWindow::Font { family } => Call::Font(family),
+        ToWindow::Icon { accent } => Call::Icon(accent),
         ToWindow::Exit => Call::Exit,
     })
 }

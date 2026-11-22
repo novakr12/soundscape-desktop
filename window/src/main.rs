@@ -94,6 +94,7 @@ struct Shell {
     lingering: Cell<Option<std::time::Instant>>,
     scripts: Rc<UserContentManager>,
     theme: Cell<Theme>,
+    icon: Cell<Option<u32>>,
     desktop_font: RefCell<Option<String>>,
     font_script: RefCell<Rc<UserScript>>,
     native_code: RefCell<Option<String>>,
@@ -348,6 +349,12 @@ impl Shell {
                     self.change_font(family);
                 }
             }
+            host::Call::Icon(accent) => {
+                self.icon.set(accent);
+                if let Some(window) = self.window() {
+                    window.set_window_icon(window_icon(accent));
+                }
+            }
             host::Call::Exit => self.quit(event_loop),
         }
     }
@@ -535,9 +542,11 @@ impl Shell {
     fn show_window(&self, event_loop: &ActiveEventLoop) {
         self.set_hidden(false);
         if self.window().is_none() {
-            let Ok(window) =
-                event_loop.create_window(attributes(Some(self.size.get()), self.maximized.get()))
-            else {
+            let Ok(window) = event_loop.create_window(attributes(
+                Some(self.size.get()),
+                self.maximized.get(),
+                self.icon.get(),
+            )) else {
                 return;
             };
             let Ok(handle) = window.window_handle() else {
@@ -944,7 +953,7 @@ impl App {
             .filter(|(width, height)| *width >= 200 && *height >= 200)
             .map(|(width, height)| PhysicalSize::new(width, height));
         let window = event_loop
-            .create_window(attributes(saved_size, start.maximized))
+            .create_window(attributes(saved_size, start.maximized, start.icon))
             .expect("window");
         let display = event_loop.display_handle().expect("display");
         let raw_display = display.as_raw();
@@ -1046,6 +1055,7 @@ impl App {
             lingering: Cell::new(None),
             scripts: scripts.clone(),
             theme: Cell::new(profile.theme),
+            icon: Cell::new(start.icon),
             desktop_font: RefCell::new(desktop_font),
             font_script: RefCell::new(font_script),
             native_code: RefCell::new(native_code),
@@ -1416,7 +1426,11 @@ impl App {
     }
 }
 
-fn attributes(size: Option<PhysicalSize<u32>>, maximized: bool) -> WindowAttributes {
+fn attributes(
+    size: Option<PhysicalSize<u32>>,
+    maximized: bool,
+    icon: Option<u32>,
+) -> WindowAttributes {
     let attributes = Window::default_attributes()
         .with_title("Soundscape")
         .with_min_inner_size(LogicalSize::new(380.0, 480.0));
@@ -1427,7 +1441,7 @@ fn attributes(size: Option<PhysicalSize<u32>>, maximized: bool) -> WindowAttribu
     };
     attributes
         .with_maximized(maximized)
-        .with_window_icon(window_icon())
+        .with_window_icon(window_icon(icon))
 }
 
 fn named(attributes: WindowAttributes, instance: &str) -> WindowAttributes {
@@ -1435,7 +1449,7 @@ fn named(attributes: WindowAttributes, instance: &str) -> WindowAttributes {
     WindowAttributesExtX11::with_name(attributes, APP_ID, instance)
 }
 
-fn window_icon() -> Option<Icon> {
+fn window_icon(accent: Option<u32>) -> Option<Icon> {
     let decoder = png::Decoder::new(std::io::Cursor::new(ICON_PNG));
     let mut reader = decoder.read_info().ok()?;
     let mut pixels = vec![0; reader.output_buffer_size()?];
@@ -1444,6 +1458,9 @@ fn window_icon() -> Option<Icon> {
         return None;
     }
     pixels.truncate(frame.buffer_size());
+    if let Some(accent) = accent {
+        soundscape_protocol::tint(&mut pixels, accent);
+    }
     Icon::from_rgba(pixels, frame.width, frame.height).ok()
 }
 

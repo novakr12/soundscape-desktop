@@ -223,6 +223,8 @@ pub struct Start {
     pub dark: bool,
     #[serde(default)]
     pub font: Option<String>,
+    #[serde(default)]
+    pub icon: Option<u32>,
 }
 
 fn standard_keep_window() -> i64 {
@@ -247,6 +249,7 @@ pub enum ToWindow {
     KeepWindow { seconds: i64 },
     Theme { dark: bool },
     Font { family: Option<String> },
+    Icon { accent: Option<u32> },
     Exit,
 }
 
@@ -300,6 +303,51 @@ pub fn read<T: for<'a> Deserialize<'a>>(input: &mut impl BufRead) -> Option<Opti
     match input.read_line(&mut line) {
         Ok(0) | Err(_) => None,
         Ok(_) => Some(serde_json::from_str(line.trim_end()).ok()),
+    }
+}
+
+fn hsl([red, green, blue]: [u8; 3]) -> (f32, f32, f32) {
+    let [red, green, blue] = [red, green, blue].map(|channel| f32::from(channel) / 255.0);
+    let high = red.max(green).max(blue);
+    let low = red.min(green).min(blue);
+    let lightness = (high + low) / 2.0;
+    let spread = high - low;
+    if spread == 0.0 {
+        return (0.0, 0.0, lightness);
+    }
+    let saturation = spread / (1.0 - (2.0 * lightness - 1.0).abs());
+    let hue = if high == red {
+        ((green - blue) / spread).rem_euclid(6.0)
+    } else if high == green {
+        (blue - red) / spread + 2.0
+    } else {
+        (red - green) / spread + 4.0
+    };
+    (hue * 60.0, saturation, lightness)
+}
+
+fn rgb(hue: f32, saturation: f32, lightness: f32) -> [u8; 3] {
+    let chroma = (1.0 - (2.0 * lightness - 1.0).abs()) * saturation;
+    let part = chroma * (1.0 - ((hue / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let [red, green, blue] = match (hue / 60.0) as u32 {
+        0 => [chroma, part, 0.0],
+        1 => [part, chroma, 0.0],
+        2 => [0.0, chroma, part],
+        3 => [0.0, part, chroma],
+        4 => [part, 0.0, chroma],
+        _ => [chroma, 0.0, part],
+    };
+    let low = lightness - chroma / 2.0;
+    [red, green, blue].map(|channel| ((channel + low) * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
+pub fn tint(rgba: &mut [u8], accent: u32) {
+    let (hue, saturation, _) = hsl([(accent >> 16) as u8, (accent >> 8) as u8, accent as u8]);
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        let (own_hue, own_saturation, lightness) = hsl([pixel[0], pixel[1], pixel[2]]);
+        if own_saturation > 0.2 && (90.0..=200.0).contains(&own_hue) {
+            pixel[..3].copy_from_slice(&rgb(hue, own_saturation * saturation, lightness));
+        }
     }
 }
 
@@ -366,6 +414,7 @@ mod tests {
             faster_scripts: false,
             dark: true,
             font: Some("Inter".into()),
+            icon: Some(0x8b5cf6),
         };
         let mut wire = Vec::new();
         send(&mut wire, &ToWindow::Start(start.clone()));
@@ -374,6 +423,22 @@ mod tests {
             read::<ToWindow>(&mut input),
             Some(Some(ToWindow::Start(start)))
         );
+    }
+
+    #[test]
+    fn tints_only_the_green_of_the_icon() {
+        let mut pixels = [
+            0x00, 0xff, 0x66, 255, 0x0a, 0x0e, 0x14, 255, 0xff, 0xff, 0xff, 40, 0x05, 0xb8, 0x51,
+            128,
+        ];
+        tint(&mut pixels, 0x3b82f6);
+        let (hue, _, lightness) = hsl([pixels[0], pixels[1], pixels[2]]);
+        assert!((hue - 217.0).abs() < 2.0, "{hue}");
+        assert!((lightness - 0.5).abs() < 0.01);
+        assert_eq!(pixels[4..12], [0x0a, 0x0e, 0x14, 255, 0xff, 0xff, 0xff, 40]);
+        assert!(pixels[14] > pixels[13] && pixels[13] > pixels[12]);
+        assert_eq!(pixels[15], 128);
+        assert_eq!(rgb(150.0, 0.0, 0.5), [128, 128, 128]);
     }
 
     #[test]

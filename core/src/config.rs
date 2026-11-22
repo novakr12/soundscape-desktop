@@ -85,6 +85,8 @@ pub struct Config {
     pub faster_scripts: bool,
     #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub visualizer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_accent: Option<u32>,
 }
 
 pub const PAUSE_SECONDS: i64 = 60 * 60;
@@ -145,6 +147,7 @@ impl Default for Config {
             autoplay: false,
             faster_scripts: false,
             visualizer: true,
+            icon_accent: None,
         }
     }
 }

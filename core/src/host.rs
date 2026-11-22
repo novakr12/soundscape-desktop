@@ -49,6 +49,7 @@ pub trait Host: Send + Sync {
     fn exit(&self, code: i32);
     fn mini_view(&self, view: &crate::mini::MiniView);
     fn mini_problem(&self, problem: &str);
+    fn icon(&self, _accent: Option<u32>) {}
 }
 
 pub mod async_runtime {

@@ -15,8 +15,8 @@ pub fn named(attributes: WindowAttributes, instance: &str) -> WindowAttributes {
     WindowAttributesExtX11::with_name(attributes, APP_ID, instance)
 }
 
-pub fn window_icon() -> Option<Icon> {
-    soundscape_core::tray::window_picture()
+pub fn window_icon(accent: Option<u32>) -> Option<Icon> {
+    soundscape_core::tray::window_picture(accent)
         .and_then(|shown| Icon::from_rgba(shown.rgba, shown.width, shown.height).ok())
 }
 

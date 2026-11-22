@@ -171,6 +171,7 @@ impl WindowHost {
             faster_scripts: config.faster_scripts,
             dark,
             font,
+            icon: config.icon_accent,
         };
         let Ok(me) = std::env::current_exe() else {
             return;
@@ -550,5 +551,9 @@ impl Host for WindowHost {
 
     fn mini_problem(&self, problem: &str) {
         crate::mini_window::problem(problem);
+    }
+
+    fn icon(&self, accent: Option<u32>) {
+        self.tell(&ToWindow::Icon { accent });
     }
 }

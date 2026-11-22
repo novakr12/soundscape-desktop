@@ -98,6 +98,13 @@
   </supports>
 
   <releases>
+    <release version="0.11.8" date="2026-11-23">
+      <description>
+        <ul>
+          <li>The window, tray and mini player icons can take the accent color, turned on in Settings</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.7" date="2026-11-22">
       <description>
         <ul>

@@ -202,7 +202,7 @@ impl Player {
             .with_inner_size(LogicalSize::new(WIDTH, HEIGHT))
             .with_resizable(false)
             .with_window_level(WindowLevel::AlwaysOnTop)
-            .with_window_icon(crate::window_icon());
+            .with_window_icon(crate::window_icon(self.view.icon));
         let Ok(window) = event_loop.create_window(crate::named(attributes, "mini")) else {
             return;
         };
@@ -254,6 +254,11 @@ impl Player {
 
     fn take_view(&mut self, view: MiniView) {
         let mut view = view;
+        if view.icon != self.view.icon
+            && let Some(shown) = &self.shown
+        {
+            shown.window.set_window_icon(crate::window_icon(view.icon));
+        }
         let art = view.art.clone();
         if view.title != self.view.title || view.kind != self.view.kind {
             self.seek_hold = None;

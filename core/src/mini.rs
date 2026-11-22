@@ -93,6 +93,7 @@ pub struct MiniView {
     pub visualizer: Option<crate::native::Visualizer>,
     pub spectrum: Option<Vec<f32>>,
     pub accent: Option<u32>,
+    pub icon: Option<u32>,
 }
 
 pub fn unbase64(text: &str) -> Option<Vec<u8>> {
@@ -283,6 +284,7 @@ async fn with_modes(app: &AppHandle, mut view: MiniView) -> MiniView {
 pub async fn get_mini(app: AppHandle) -> MiniView {
     MiniView {
         accent: Some(crate::native_link::accent()),
+        icon: app.state::<AppState>().config().icon_accent,
         ..with_modes(&app, view(&app)).await
     }
 }

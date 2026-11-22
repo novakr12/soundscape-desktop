@@ -44,6 +44,8 @@ pub struct PageSettings {
     pub visualizer_bars: usize,
     #[serde(default, deserialize_with = "hex_color")]
     pub accent: Option<u32>,
+    #[serde(default)]
+    pub accent_icon: bool,
 }
 
 fn hex_color<'de, D: serde::Deserializer<'de>>(found: D) -> Result<Option<u32>, D::Error> {
@@ -284,6 +286,7 @@ pub fn page_script(id: &str, name: &str) -> String {
         visualizer_bounce: typeof options?.visualizerBounce === "string" ? options.visualizerBounce : "lively",
         visualizer_bars: [4, 6, 8, 12].includes(options?.visualizerBars) ? options.visualizerBars : 8,
         accent: typeof options?.accent === "string" ? options.accent : null,
+        accent_icon: options?.accentIcon === true,
       }};
     }} catch {{
       return null;
@@ -381,6 +384,13 @@ fn apply(app: &AppHandle, page: PageSettings) {
     if state.config().visualizer != fresh.visualizer.on {
         state.update(|config| config.visualizer = fresh.visualizer.on);
     }
+    let icon = icon_accent(page.accent_icon, fresh.accent);
+    if state.config().icon_accent != icon {
+        state.update(|config| config.icon_accent = icon);
+        crate::tray::recolor(icon);
+        app.host().icon(icon);
+        crate::mini::wake();
+    }
     if changed {
         with_player(app, |player| player.send(fresh.command()));
         crate::mini::wake();
@@ -394,6 +404,10 @@ pub fn set_visualizer(app: &AppHandle, on: bool) {
         *stored
     };
     with_player(app, |player| player.send(fresh.command()));
+}
+
+pub fn icon_accent(wanted: bool, accent: u32) -> Option<u32> {
+    (wanted && accent != DEFAULT_ACCENT).then_some(accent)
 }
 
 pub fn accent() -> u32 {
@@ -1179,6 +1193,11 @@ mod tests {
         assert_eq!(accent(r#"{"accent":"purple"}"#), DEFAULT_ACCENT);
         assert_eq!(accent(r##"{"accent":"#12345"}"##), DEFAULT_ACCENT);
         assert_eq!(accent(r#"{"accent":null}"#), DEFAULT_ACCENT);
+        assert_eq!(icon_accent(true, 0x8b5cf6), Some(0x8b5cf6));
+        assert_eq!(icon_accent(false, 0x8b5cf6), None);
+        assert_eq!(icon_accent(true, DEFAULT_ACCENT), None);
+        let page: PageSettings = serde_json::from_str(r#"{"accent_icon":true}"#).unwrap();
+        assert!(page.accent_icon);
     }
 
     #[test]

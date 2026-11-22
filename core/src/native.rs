@@ -148,9 +148,9 @@ fn band_edges(bars: usize) -> &'static [usize] {
 fn bounce_profile(bounce: Bounce) -> (f32, f32, f32) {
     match bounce {
         Bounce::Gentle => (1.9, 3.0, 0.72),
-        Bounce::Normal => (1.65, 0.0, 0.62),
-        Bounce::Lively => (1.45, -3.0, 0.50),
-        Bounce::Extreme => (1.2, -7.0, 0.35),
+        Bounce::Normal => (1.65, 1.0, 0.62),
+        Bounce::Lively => (1.45, -0.5, 0.50),
+        Bounce::Extreme => (1.2, -3.0, 0.35),
     }
 }
 
@@ -194,7 +194,7 @@ pub fn normalize_spectrum_db(
             0.0
         };
         let floor = -46.0 - share * 15.0;
-        let ceil = -14.0 - share * 15.0 + ceil_offset;
+        let ceil = -10.0 - share * 17.0 + ceil_offset;
         let norm = ((effective_db - floor) / (ceil - floor)).clamp(0.0, 1.0);
         let curved = norm.powf(exponent);
         let target = (0.15 + 0.85 * curved).clamp(0.15, 1.0);
@@ -1600,6 +1600,17 @@ mod tests {
         let bars = shape(&bass_hit, None);
         assert!(bars[0] > 0.85, "bass bar was {}", bars[0]);
         assert_eq!(bars[7], 0.15);
+        let mut loud = silent.clone();
+        loud[0] = -15.0;
+        for bounce in [
+            Bounce::Gentle,
+            Bounce::Normal,
+            Bounce::Lively,
+            Bounce::Extreme,
+        ] {
+            let level = normalize_spectrum_db(&loud, None, 8, bounce)[0];
+            assert!(level < 0.97, "loud bass filled the {bounce:?} bar: {level}");
+        }
         let decayed = shape(&silent, Some(&bars));
         assert!(decayed[0] < bars[0] && decayed[0] > 0.15);
 

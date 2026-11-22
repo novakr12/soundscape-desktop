@@ -98,6 +98,13 @@
   </supports>
 
   <releases>
+    <release version="0.11.5" date="2026-11-22">
+      <description>
+        <ul>
+          <li>The visualizer has more headroom, so loud songs no longer keep the bars at the top</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.4" date="2026-11-22">
       <description>
         <ul>

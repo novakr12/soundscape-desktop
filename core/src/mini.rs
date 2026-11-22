@@ -92,6 +92,7 @@ pub struct MiniView {
     pub can_seek: bool,
     pub visualizer: Option<crate::native::Visualizer>,
     pub spectrum: Option<Vec<f32>>,
+    pub accent: Option<u32>,
 }
 
 pub fn unbase64(text: &str) -> Option<Vec<u8>> {
@@ -280,7 +281,10 @@ async fn with_modes(app: &AppHandle, mut view: MiniView) -> MiniView {
 }
 
 pub async fn get_mini(app: AppHandle) -> MiniView {
-    with_modes(&app, view(&app)).await
+    MiniView {
+        accent: Some(crate::native_link::accent()),
+        ..with_modes(&app, view(&app)).await
+    }
 }
 
 fn seek_seconds(seconds: Option<f64>) -> f64 {

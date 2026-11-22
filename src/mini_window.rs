@@ -551,7 +551,13 @@ fn draw(
     player: &Player,
     scale: f32,
 ) -> Vec<(Spot, Rect, bool)> {
-    let palette = colors(player.dark);
+    let palette = colors(
+        player.dark,
+        player
+            .view
+            .accent
+            .unwrap_or(soundscape_core::native_link::DEFAULT_ACCENT),
+    );
     canvas.fill(palette.background);
     let mut spots = Vec::new();
     let k = |value: f32| value * scale;

@@ -22,6 +22,7 @@ const REPEAT_MODES: [&str; 3] = ["off", "all", "one"];
 const HEARTBEAT: Duration = Duration::from_secs(30);
 const RETRY_AFTER: Duration = Duration::from_secs(5);
 const CROSSFADE_CHOICES: [f64; 6] = [0.0, 2.0, 4.0, 6.0, 8.0, 12.0];
+pub const DEFAULT_ACCENT: u32 = 0x1db954;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 pub struct PageSettings {
@@ -41,6 +42,17 @@ pub struct PageSettings {
     pub visualizer_bounce: Bounce,
     #[serde(default)]
     pub visualizer_bars: usize,
+    #[serde(default, deserialize_with = "hex_color")]
+    pub accent: Option<u32>,
+}
+
+fn hex_color<'de, D: serde::Deserializer<'de>>(found: D) -> Result<Option<u32>, D::Error> {
+    Ok(Option::<String>::deserialize(found)?.and_then(|text| {
+        let digits = text.strip_prefix('#')?;
+        (digits.len() == 6 && digits.bytes().all(|digit| digit.is_ascii_hexdigit()))
+            .then(|| u32::from_str_radix(digits, 16).ok())
+            .flatten()
+    }))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,6 +62,7 @@ pub struct Settings {
     pub levelling: bool,
     pub crossfade: f64,
     pub visualizer: Visualizer,
+    pub accent: u32,
 }
 
 impl Settings {
@@ -59,6 +72,7 @@ impl Settings {
         levelling: true,
         crossfade: 0.0,
         visualizer: Visualizer::DEFAULT,
+        accent: DEFAULT_ACCENT,
     };
 
     pub fn with(self, page: PageSettings) -> Settings {
@@ -80,6 +94,7 @@ impl Settings {
                 page.visualizer_bounce,
                 page.visualizer_bars,
             ),
+            accent: page.accent.unwrap_or(DEFAULT_ACCENT),
         }
     }
 
@@ -268,6 +283,7 @@ pub fn page_script(id: &str, name: &str) -> String {
         visualizer_style: typeof options?.visualizerStyle === "string" ? options.visualizerStyle : "bars",
         visualizer_bounce: typeof options?.visualizerBounce === "string" ? options.visualizerBounce : "lively",
         visualizer_bars: [4, 6, 8, 12].includes(options?.visualizerBars) ? options.visualizerBars : 8,
+        accent: typeof options?.accent === "string" ? options.accent : null,
       }};
     }} catch {{
       return null;
@@ -378,6 +394,10 @@ pub fn set_visualizer(app: &AppHandle, on: bool) {
         *stored
     };
     with_player(app, |player| player.send(fresh.command()));
+}
+
+pub fn accent() -> u32 {
+    settings().accent
 }
 
 pub fn visualizer(app: &AppHandle) -> Option<Visualizer> {
@@ -1149,6 +1169,16 @@ mod tests {
             Some((Some(0.5), true))
         );
         assert_eq!(carried(r#"soundscape-native {"do":"hello"}"#), None);
+        assert_eq!(now.accent, DEFAULT_ACCENT);
+        let accent = |json: &str| {
+            Settings::DEFAULT
+                .with(serde_json::from_str(json).unwrap())
+                .accent
+        };
+        assert_eq!(accent(r##"{"accent":"#8B5CF6"}"##), 0x8b5cf6);
+        assert_eq!(accent(r#"{"accent":"purple"}"#), DEFAULT_ACCENT);
+        assert_eq!(accent(r##"{"accent":"#12345"}"##), DEFAULT_ACCENT);
+        assert_eq!(accent(r#"{"accent":null}"#), DEFAULT_ACCENT);
     }
 
     #[test]

@@ -79,7 +79,7 @@ input[type="checkbox"]:checked {
 }
 
 input[type="checkbox"]::before {
-  color: var(--bg, #111111);
+  color: var(--accent-fg, var(--bg, #111111));
   font-size: 10px;
   font-weight: 700;
   line-height: 1;

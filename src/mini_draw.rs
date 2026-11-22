@@ -139,7 +139,7 @@ pub struct Colors {
     pub error: Color,
 }
 
-pub fn colors(dark: bool) -> Colors {
+pub fn colors(dark: bool, accent: u32) -> Colors {
     let rgb =
         |value: u32| Color::from_rgba8((value >> 16) as u8, (value >> 8) as u8, value as u8, 255);
     if dark {
@@ -147,7 +147,7 @@ pub fn colors(dark: bool) -> Colors {
             background: rgb(0x111111),
             text: rgb(0xeeeeee),
             muted: rgb(0x999999),
-            accent: rgb(0x1db954),
+            accent: rgb(accent),
             error: rgb(0xff7b6b),
         }
     } else {
@@ -155,7 +155,7 @@ pub fn colors(dark: bool) -> Colors {
             background: rgb(0xffffff),
             text: rgb(0x111111),
             muted: rgb(0x666666),
-            accent: rgb(0x1db954),
+            accent: rgb(accent),
             error: rgb(0xc0392b),
         }
     }

@@ -98,6 +98,13 @@
   </supports>
 
   <releases>
+    <release version="0.11.7" date="2026-11-22">
+      <description>
+        <ul>
+          <li>The mini player's visualizer and controls follow the accent color picked in Settings</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.6" date="2026-11-22">
       <description>
         <ul>

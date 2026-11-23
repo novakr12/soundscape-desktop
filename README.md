@@ -16,6 +16,14 @@ flatpak install --user soundscape-desktop-<version>-x86_64.flatpak
 
 On first start, enter your server's address, log in and approve the connection. The app gets its own token, which you can see and revoke on the server's Connect page.
 
+To match the launcher and dock icon to your accent color, download [`icon-color.sh`](flatpak/icon-color.sh) and run it with a color name (`teal`, `blue`, `navy`, `purple`, `pink`, `red`, `orange`, `yellow`) or any `#rrggbb`. Run it with `green` to go back:
+
+```
+bash icon-color.sh purple
+```
+
+The window, tray and mini player icons follow the accent on their own when you turn on "Color the app icon too" in Settings.
+
 ## What it does
 
 - **Scrobbling** from any MPRIS player (Spotify, Strawberry, Rhythmbox, Elisa, VLC, …). A play counts after half the song or four minutes. Browsers are off by default; when on, only songs count and titles like "(Official Video)" are cleaned up.

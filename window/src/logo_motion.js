@@ -25,6 +25,21 @@
     area?.setAttribute("opacity", String(0.25 * easeOut(progress(elapsed, 700, 500))));
     const scale = dotScale(progress(elapsed, 950, 400));
     dot?.setAttribute("transform", `translate(${DOT_X} ${DOT_Y}) scale(${scale}) translate(${-DOT_X} ${-DOT_Y})`);
+
+    const lockup = svg.closest(".lockup.animated");
+    if (!lockup) return;
+    const wordmark = lockup.querySelector(".wordmark");
+    if (wordmark) {
+      wordmark.style.animation = "none";
+      const revealed = easeOut(progress(elapsed, 350, 700));
+      wordmark.style.clipPath =
+        revealed >= 1 ? "" : `inset(0 ${((1 - revealed) * 100).toFixed(2)}% 0 0)`;
+    }
+    const shown = easeOut(progress(elapsed, 1050, 400));
+    for (const element of lockup.querySelectorAll(".tagline, .app-version")) {
+      element.style.animation = "none";
+      element.style.opacity = shown >= 1 ? "" : String(shown);
+    }
   };
 
   const hydrated = (element) =>
@@ -53,7 +68,7 @@
       if (!svg.isConnected) return;
       const elapsed = now - began;
       draw(svg, elapsed);
-      if (elapsed < 1400) requestAnimationFrame(step);
+      if (elapsed < 1500) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
   };

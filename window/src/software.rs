@@ -15,6 +15,20 @@ const VENDOR_DIRS: [&str; 4] = [
 
 const STARTING: &str = "starting";
 pub const SETTLED_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
+pub const SETTLED_AFTER_PAINT: std::time::Duration = std::time::Duration::from_secs(3);
+
+pub fn settle_deadline(
+    current: Option<std::time::Instant>,
+    now: std::time::Instant,
+    painted: bool,
+) -> Option<std::time::Instant> {
+    let deadline = current?;
+    if painted {
+        Some(deadline.min(now + SETTLED_AFTER_PAINT))
+    } else {
+        Some(deadline)
+    }
+}
 
 pub fn after_crash(crashed: bool, cpu_rendering: bool) -> Option<bool> {
     crashed.then_some(!cpu_rendering)
@@ -223,5 +237,18 @@ mod tests {
             ))
         );
         assert_eq!(mesa_vendor(|_| false), None);
+    }
+
+    #[test]
+    fn settles_sooner_after_the_first_paint() {
+        let start = std::time::Instant::now();
+        let initial = Some(start + SETTLED_AFTER);
+        assert_eq!(settle_deadline(initial, start, false), initial);
+        let after_paint = start + std::time::Duration::from_millis(500);
+        let shorter = settle_deadline(initial, after_paint, true).unwrap();
+        assert_eq!(shorter, after_paint + SETTLED_AFTER_PAINT);
+        let later = after_paint + std::time::Duration::from_secs(1);
+        assert_eq!(settle_deadline(Some(shorter), later, true), Some(shorter));
+        assert_eq!(settle_deadline(None, later, true), None);
     }
 }

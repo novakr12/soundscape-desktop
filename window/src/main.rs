@@ -92,6 +92,7 @@ fn add_font(scripts: &UserContentManager, family: Option<&str>) -> Rc<UserScript
 struct Shell {
     window: RefCell<Option<Rc<Window>>>,
     lingering: Cell<Option<std::time::Instant>>,
+    painted: Cell<bool>,
     scripts: Rc<UserContentManager>,
     theme: Cell<Theme>,
     icon: Cell<Option<u32>>,
@@ -276,6 +277,7 @@ impl Shell {
     }
 
     fn quit(&self, event_loop: &ActiveEventLoop) {
+        software::settled(self.storage.as_deref());
         self.remember_window();
         self.drop_window();
         self.lingering.set(None);
@@ -284,7 +286,6 @@ impl Shell {
             std::thread::sleep(SHUTDOWN_LIMIT);
             std::process::exit(0);
         });
-        software::settled(self.storage.as_deref());
         self.close();
         event_loop.exit();
     }
@@ -1053,6 +1054,7 @@ impl App {
         let shell = Rc::new(Shell {
             window: RefCell::new(Some(Rc::new(window))),
             lingering: Cell::new(None),
+            painted: Cell::new(false),
             scripts: scripts.clone(),
             theme: Cell::new(profile.theme),
             icon: Cell::new(start.icon),
@@ -1137,8 +1139,10 @@ impl App {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, wake: Wake) {
-        if let App::Starting(..) = self {
+        if let App::Starting(_, profile, launched) = self {
             if matches!(wake, Wake::Quit | Wake::Call(host::Call::Exit)) {
+                software::settled(profile.storage.as_deref());
+                launched.link.send(FromWindow::Done);
                 event_loop.exit();
                 return;
             }
@@ -1172,6 +1176,10 @@ impl ApplicationHandler<Wake> for Runner {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         self.app.window_event(event_loop, id, event);
+        if let App::Running(shell) = &self.app {
+            self.settled_at =
+                software::settle_deadline(self.settled_at, Instant::now(), shell.painted.get());
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -1281,6 +1289,7 @@ impl App {
                 }
                 webview.paint();
                 shell.context.present();
+                shell.painted.set(true);
                 if shell.glide.borrow().active() || shell.fling.borrow().active() {
                     window.request_redraw();
                 }

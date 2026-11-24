@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use url::Url;
 
-const STOP_WAIT: Duration = Duration::from_secs(1);
+const STOP_WAIT: Duration = Duration::from_secs(3);
 
 fn watch_appearance(host: WindowHost) {
     static WATCHING: OnceLock<()> = OnceLock::new();

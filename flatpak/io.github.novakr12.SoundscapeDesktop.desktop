@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Soundscape
-GenericName=Music Tracker
+GenericName=Music Player & Tracker
 Comment=Send what you play to your Soundscape server
 Exec=soundscape-desktop
 Icon=io.github.novakr12.SoundscapeDesktop

@@ -62,6 +62,17 @@ fn percent_decode(input: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+fn clean_id(raw: &str) -> Option<String> {
+    if raw.is_empty() || raw.contains('/') {
+        return None;
+    }
+    let id = percent_decode(raw)?;
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id == "." || id == ".." {
+        return None;
+    }
+    Some(id)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Asked {
     pub kind: String,
@@ -81,16 +92,10 @@ pub fn parse_head(head: &str, secret: &str) -> Option<Asked> {
         return None;
     }
     let kind = parts.next()?;
-    if kind != "full-song" && kind != "listen" {
+    if !matches!(kind, "full-song" | "listen" | "navidrome-cover" | "cover") {
         return None;
     }
-    let raw_id = parts
-        .next()
-        .filter(|id| !id.is_empty() && !id.contains('/'))?;
-    let id = percent_decode(raw_id)?;
-    if id.is_empty() || id.contains('/') || id.contains('\\') || id == "." || id == ".." {
-        return None;
-    }
+    let id = clean_id(parts.next()?)?;
     let range = lines.find_map(|line| {
         let (name, value) = line.split_once(':')?;
         name.trim()
@@ -102,6 +107,43 @@ pub fn parse_head(head: &str, secret: &str) -> Option<Asked> {
         id,
         range,
     })
+}
+
+fn upstream_target(server: &Url, asked: &Asked) -> Option<Url> {
+    let mut target = server.join("/").ok()?;
+    {
+        let mut segments = target.path_segments_mut().ok()?;
+        segments.clear().push("api");
+        match asked.kind.as_str() {
+            "full-song" | "listen" | "cover" => {
+                segments.push(&asked.kind);
+            }
+            "navidrome-cover" => {
+                segments.push("navidrome").push("cover");
+            }
+            _ => return None,
+        }
+        segments.push(&asked.id);
+    }
+    Some(target)
+}
+
+pub fn cover_route(server: &Url, art: &str) -> Option<(&'static str, String)> {
+    let url = if art.starts_with('/') {
+        server.join(art).ok()?
+    } else {
+        Url::parse(art).ok()?
+    };
+    if url.origin() != server.origin() {
+        return None;
+    }
+    let segments: Vec<&str> = url.path_segments()?.collect();
+    let (kind, raw_id) = match segments.as_slice() {
+        ["api", "navidrome", "cover", raw_id] => ("navidrome-cover", *raw_id),
+        ["api", "cover", raw_id] => ("cover", *raw_id),
+        _ => return None,
+    };
+    Some((kind, clean_id(raw_id)?))
 }
 
 pub fn content_range(value: &str) -> Option<(u64, u64, u64)> {
@@ -174,31 +216,39 @@ async fn serve(mut stream: TcpStream, server: Url, token: String, secret: String
         fail(&mut stream, 404).await;
         return;
     };
-    let Ok(mut target) = server.join("/") else {
+    let Some(target) = upstream_target(&server, &asked) else {
         fail(&mut stream, 502).await;
         return;
     };
-    if let Ok(mut segments) = target.path_segments_mut() {
-        segments
-            .clear()
-            .push("api")
-            .push(&asked.kind)
-            .push(&asked.id);
-    }
+    let is_cover = matches!(asked.kind.as_str(), "navidrome-cover" | "cover");
     let whole = asked.range.is_none();
-    let range = asked.range.unwrap_or_else(|| "bytes=0-".to_string());
-    let upstream = crate::server::client()
-        .get(target)
-        .header("authorization", format!("Token {token}"))
-        .header("range", range)
-        .send()
-        .await;
+    let upstream = if is_cover {
+        crate::server::client()
+            .get(target)
+            .header("authorization", format!("Token {token}"))
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+    } else {
+        let range = asked.range.unwrap_or_else(|| "bytes=0-".to_string());
+        crate::server::client()
+            .get(target)
+            .header("authorization", format!("Token {token}"))
+            .header("range", range)
+            .send()
+            .await
+    };
     let Ok(mut upstream) = upstream else {
         fail(&mut stream, 502).await;
         return;
     };
     let status = upstream.status().as_u16();
-    if status != 200 && status != 206 {
+    if is_cover {
+        if status != 200 {
+            fail(&mut stream, 404).await;
+            return;
+        }
+    } else if status != 200 && status != 206 {
         fail(&mut stream, if status == 416 { 416 } else { 404 }).await;
         return;
     }
@@ -210,10 +260,14 @@ async fn serve(mut stream: TcpStream, server: Url, token: String, secret: String
             .map(str::to_string)
     };
     let kind = header("content-type").unwrap_or_else(|| "application/octet-stream".into());
-    let range = header("content-range").filter(|_| status == 206);
-    let head = match range.as_deref().and_then(content_range) {
-        Some((0, _, total)) if whole => response_head(200, &kind, None, Some(total)),
-        _ => response_head(status, &kind, range.as_deref(), upstream.content_length()),
+    let head = if is_cover {
+        response_head(200, &kind, None, upstream.content_length())
+    } else {
+        let range = header("content-range").filter(|_| status == 206);
+        match range.as_deref().and_then(content_range) {
+            Some((0, _, total)) if whole => response_head(200, &kind, None, Some(total)),
+            _ => response_head(status, &kind, range.as_deref(), upstream.content_length()),
+        }
     };
     if stream.write_all(head.as_bytes()).await.is_err() {
         return;
@@ -275,6 +329,11 @@ impl Relay {
             .push(kind)
             .push(id);
         Some(url)
+    }
+
+    pub fn cover_url(&self, server: &Url, art: &str) -> Option<String> {
+        let (kind, id) = cover_route(server, art)?;
+        self.address(kind, &id).map(String::from)
     }
 }
 
@@ -381,5 +440,78 @@ mod tests {
         assert!(plain.contains("Content-Length: 5000\r\n"));
         assert!(!plain.contains("Content-Range"));
         assert!(!response_head(200, "audio/mpeg", None, None).contains("Content-Length"));
+    }
+
+    #[test]
+    fn proxies_same_server_cover_art() {
+        let server = Url::parse("https://music.example/").unwrap();
+        let relay = Relay::start(server.clone(), "t".into()).unwrap();
+
+        let nav = relay
+            .cover_url(&server, "https://music.example/api/navidrome/cover/al-1")
+            .unwrap();
+        assert!(nav.starts_with("http://127.0.0.1:"));
+        let nav_url = Url::parse(&nav).unwrap();
+        let nav_asked = parse_head(
+            &format!("GET {} HTTP/1.1\r\n\r\n", nav_url.path()),
+            &relay.inner.secret,
+        )
+        .unwrap();
+        assert_eq!(nav_asked.kind, "navidrome-cover");
+        assert_eq!(nav_asked.id, "al-1");
+        assert_eq!(
+            upstream_target(&server, &nav_asked).unwrap().as_str(),
+            "https://music.example/api/navidrome/cover/al-1"
+        );
+
+        let sized = relay
+            .cover_url(&server, "/api/navidrome/cover/al-2?size=300")
+            .unwrap();
+        assert!(sized.ends_with("/navidrome-cover/al-2"));
+
+        let track_cover = relay
+            .cover_url(
+                &server,
+                "https://music.example/api/cover/sleep%20-%20dopesmoker",
+            )
+            .unwrap();
+        let track_asked = parse_head(
+            &format!(
+                "GET {} HTTP/1.1\r\n\r\n",
+                Url::parse(&track_cover).unwrap().path()
+            ),
+            &relay.inner.secret,
+        )
+        .unwrap();
+        assert_eq!(track_asked.kind, "cover");
+        assert_eq!(track_asked.id, "sleep - dopesmoker");
+        assert_eq!(
+            upstream_target(&server, &track_asked).unwrap().as_str(),
+            "https://music.example/api/cover/sleep%20-%20dopesmoker"
+        );
+
+        assert_eq!(
+            relay.cover_url(
+                &server,
+                "https://cdn-images.dzcdn.net/images/cover/abc/300x300.jpg"
+            ),
+            None
+        );
+        assert_eq!(
+            relay.cover_url(&server, "https://other.example/api/navidrome/cover/al-1"),
+            None
+        );
+        assert_eq!(
+            relay.cover_url(&server, "https://music.example/api/songs/1"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/navidrome-cover/%2e%2e HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
+        assert_eq!(
+            parse_head("GET /s/k3y/cover/a%2Fb HTTP/1.1\r\n\r\n", "k3y"),
+            None
+        );
     }
 }

@@ -57,9 +57,18 @@ fn hex_color<'de, D: serde::Deserializer<'de>>(found: D) -> Result<Option<u32>, 
     }))
 }
 
+fn volume_percent(volume: f64) -> u8 {
+    (volume.clamp(0.0, 1.0) * 100.0).round() as u8
+}
+
+fn volume_from_percent(percent: u8) -> f64 {
+    f64::from(percent.min(100)) / 100.0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Settings {
     pub volume: f64,
+    pub volume_known: bool,
     pub muted: bool,
     pub levelling: bool,
     pub crossfade: f64,
@@ -70,6 +79,7 @@ pub struct Settings {
 impl Settings {
     pub const DEFAULT: Settings = Settings {
         volume: DEFAULT_VOLUME,
+        volume_known: false,
         muted: false,
         levelling: true,
         crossfade: 0.0,
@@ -77,13 +87,28 @@ impl Settings {
         accent: DEFAULT_ACCENT,
     };
 
-    pub fn with(self, page: PageSettings) -> Settings {
+    pub fn with_volume(self, volume: f64) -> Settings {
         Settings {
-            volume: page
-                .volume
-                .filter(|volume| (0.0..=1.0).contains(volume))
-                .unwrap_or(self.volume),
-            muted: page.muted,
+            volume: volume.clamp(0.0, 1.0),
+            volume_known: true,
+            muted: false,
+            ..self
+        }
+    }
+
+    pub fn with(self, page: PageSettings) -> Settings {
+        let seed_volume = (!self.volume_known)
+            .then_some(page.volume)
+            .flatten()
+            .filter(|volume| (0.0..=1.0).contains(volume));
+        let (volume, muted, volume_known) = match seed_volume {
+            Some(volume) => (volume, page.muted, true),
+            None => (self.volume, self.muted, self.volume_known),
+        };
+        Settings {
+            volume,
+            volume_known,
+            muted,
             levelling: page.levelling,
             crossfade: if CROSSFADE_CHOICES.contains(&page.crossfade) {
                 page.crossfade
@@ -108,6 +133,13 @@ impl Settings {
             crossfade: self.crossfade,
             visualizer: self.visualizer,
         }
+    }
+}
+
+pub fn init(saved_volume: Option<u8>) {
+    if let Some(percent) = saved_volume {
+        let mut stored = SETTINGS.lock().expect("settings lock");
+        *stored = stored.with_volume(volume_from_percent(percent));
     }
 }
 
@@ -264,6 +296,19 @@ pub fn device_name() -> String {
     crate::server::device_name()
 }
 
+pub fn volume_script(volume: f64) -> String {
+    let volume = if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        DEFAULT_VOLUME
+    };
+    let stored = json!({ "volume": volume, "muted": false }).to_string();
+    format!(
+        "(() => {{ try {{ localStorage.setItem(\"soundscape-volume\", {}); window.dispatchEvent(new CustomEvent(\"soundscape-set-volume\", {{ detail: {volume} }})); }} catch {{}} }})()",
+        Value::from(stored),
+    )
+}
+
 pub fn page_script(id: &str, name: &str) -> String {
     format!(
         r#"(() => {{
@@ -272,6 +317,13 @@ pub fn page_script(id: &str, name: &str) -> String {
   window.soundscapeDeviceName = {};
   window.soundscapeDeviceHeld = true;
   const prefix = {};
+  const saveVolume = (value) => {{
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return;
+    try {{
+      localStorage.setItem("soundscape-volume", JSON.stringify({{ volume: value, muted: false }}));
+      window.dispatchEvent(new CustomEvent("soundscape-set-volume", {{ detail: value }}));
+    }} catch {{}}
+  }};
   const settings = () => {{
     try {{
       const volume = JSON.parse(localStorage.getItem("soundscape-volume") ?? "null");
@@ -296,6 +348,7 @@ pub fn page_script(id: &str, name: &str) -> String {
     let sent = String(message);
     try {{
       const parsed = JSON.parse(sent);
+      if (parsed?.do === "volume") saveVolume(parsed.volume);
       parsed.settings = settings();
       sent = JSON.stringify(parsed);
     }} catch {{}}
@@ -765,7 +818,11 @@ pub fn heard(app: &AppHandle, message: &str) -> bool {
     let Some(asked) = asked(message) else {
         return false;
     };
-    if let Some(page) = carried(message) {
+    let setting_volume = matches!(asked, Asked::Volume { volume } if (0.0..=1.0).contains(&volume));
+    if let Some(mut page) = carried(message) {
+        if setting_volume {
+            page.volume = None;
+        }
         apply(app, page);
     }
     from_page(app, asked);
@@ -793,10 +850,15 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
         Asked::Volume { volume } if (0.0..=1.0).contains(&volume) => {
             {
                 let mut stored = SETTINGS.lock().expect("settings lock");
-                stored.volume = volume;
-                stored.muted = false;
+                *stored = stored.with_volume(volume);
+            }
+            let percent = volume_percent(volume);
+            let state = app.state::<AppState>();
+            if state.config().volume != Some(percent) {
+                state.update(|config| config.volume = Some(percent));
             }
             send(Command::Volume(volume));
+            app.host().eval(MAIN, volume_script(volume));
         }
         Asked::Take {
             tracks,
@@ -1170,6 +1232,7 @@ mod tests {
         .unwrap();
         let now = Settings::DEFAULT.with(page);
         assert_eq!(now.volume, 0.35);
+        assert!(now.volume_known);
         assert!(!now.levelling);
         assert_eq!(now.crossfade, 6.0);
         let odd: PageSettings = serde_json::from_str(r#"{"volume":null,"crossfade":5}"#).unwrap();
@@ -1177,6 +1240,22 @@ mod tests {
         assert_eq!(kept.volume, 0.35);
         assert_eq!(kept.crossfade, 0.0);
         assert!(kept.levelling);
+        let lowered = kept.with_volume(0.1);
+        let stale: PageSettings = serde_json::from_str(
+            r##"{"volume":1.0,"muted":true,"levelling":false,"crossfade":4,"visualizer":false,"accent":"#8B5CF6"}"##,
+        )
+        .unwrap();
+        let reopened = lowered.with(stale);
+        assert_eq!(reopened.volume, 0.1);
+        assert!(!reopened.muted);
+        assert!(reopened.volume_known);
+        assert!(!reopened.levelling);
+        assert_eq!(reopened.crossfade, 4.0);
+        assert!(!reopened.visualizer.on);
+        assert_eq!(reopened.accent, 0x8b5cf6);
+        assert_eq!(volume_from_percent(volume_percent(0.1)), 0.1);
+        assert_eq!(volume_percent(1.5), 100);
+        assert_eq!(volume_from_percent(150), 1.0);
         assert_eq!(
             carried(r#"soundscape-native {"do":"hello","settings":{"volume":0.5,"muted":true,"levelling":true,"crossfade":0}}"#)
                 .map(|page| (page.volume, page.muted)),
@@ -1269,6 +1348,12 @@ mod tests {
         assert!(script.contains("soundscape-native "));
         assert!(script.contains("window.soundscapeDeviceHeld = true;"));
         assert!(script.contains("soundscape:player-options"));
+        assert!(script.contains("soundscape-volume"));
+        assert!(script.contains("soundscape-set-volume"));
+        let sync = volume_script(0.1);
+        assert!(sync.contains("soundscape-volume"));
+        assert!(sync.contains("soundscape-set-volume"));
+        assert!(sync.contains("0.1"));
     }
 
     #[test]

@@ -356,6 +356,39 @@ async fn read(app: &AppHandle) -> Option<Preview> {
     parse(&evaluate(app, READ).await?)
 }
 
+fn mpris_preview(
+    preview: Option<Preview>,
+    credentials: Option<(url::Url, String)>,
+    relay: &mut Option<(url::Url, String, crate::relay::Relay)>,
+) -> Option<Preview> {
+    let Some((server, token)) = credentials else {
+        *relay = None;
+        return preview;
+    };
+    if relay
+        .as_ref()
+        .is_some_and(|(kept_server, kept_token, _)| *kept_server != server || *kept_token != token)
+    {
+        *relay = None;
+    }
+    let mut preview = preview?;
+    let proxied = preview.cover.as_deref().and_then(|cover| {
+        crate::relay::cover_route(&server, cover)?;
+        if relay.is_none() {
+            *relay = crate::relay::Relay::start(server.clone(), token.clone())
+                .ok()
+                .map(|started| (server.clone(), token.clone(), started));
+        }
+        relay
+            .as_ref()
+            .and_then(|(_, _, active)| active.cover_url(&server, cover))
+    });
+    if let Some(proxied) = proxied {
+        preview.cover = Some(proxied);
+    }
+    Some(preview)
+}
+
 async fn announce(connection: &Connection, old: Option<&Preview>, new: Option<&Preview>) {
     let Ok(player) = connection
         .object_server()
@@ -421,6 +454,7 @@ pub async fn run(app: AppHandle) {
     let shared = Arc::new(Shared::default());
     let mut connection: Option<Connection> = None;
     let mut named = false;
+    let mut cover_relay: Option<(url::Url, String, crate::relay::Relay)> = None;
     let mut wait = IDLE;
     loop {
         tokio::select! {
@@ -432,19 +466,20 @@ pub async fn run(app: AppHandle) {
         let preview = read(&app).await;
         wait = next_wait(preview.as_ref());
         app.state::<crate::AppState>().set_preview(preview.clone());
+        let mpris = mpris_preview(preview, crate::server::credentials(&app), &mut cover_relay);
         let old = {
             let mut current = shared.preview.lock().expect("preview lock");
-            std::mem::replace(&mut *current, preview.clone())
+            std::mem::replace(&mut *current, mpris.clone())
         };
-        if preview.is_some() && connection.is_none() {
+        if mpris.is_some() && connection.is_none() {
             connection = connect(&app, &shared).await;
         }
         let Some(bus) = &connection else { continue };
-        if preview.is_some() && !named {
+        if mpris.is_some() && !named {
             named = bus.request_name(BUS_NAME).await.is_ok();
         }
-        announce(bus, old.as_ref(), preview.as_ref()).await;
-        if preview.is_none() && named {
+        announce(bus, old.as_ref(), mpris.as_ref()).await;
+        if mpris.is_none() && named {
             named = bus
                 .release_name(BUS_NAME)
                 .await
@@ -529,5 +564,55 @@ mod tests {
             script("next", 0.0).unwrap(),
             "document.querySelector('[data-player=\"next\"]:not([disabled])')?.click()"
         );
+    }
+
+    #[test]
+    fn proxies_only_same_server_covers_for_mpris() {
+        let server = url::Url::parse("https://box.tail1234.ts.net/").unwrap();
+        let creds = Some((server.clone(), "tok".into()));
+        let mut relay = None;
+        let base = Preview {
+            title: "Dopesmoker".into(),
+            artist: "Sleep".into(),
+            album: Some("Dopesmoker".into()),
+            cover: Some("https://box.tail1234.ts.net/api/navidrome/cover/al-1".into()),
+            playing: true,
+            position: 10.0,
+            length: Some(3800.0),
+            has_next: false,
+            has_previous: false,
+            shuffle: None,
+            repeat: None,
+            up_next: None,
+        };
+        let proxied = mpris_preview(Some(base.clone()), creds.clone(), &mut relay).unwrap();
+        let cover = proxied.cover.as_deref().unwrap();
+        assert!(cover.starts_with("http://127.0.0.1:"));
+        assert!(cover.ends_with("/navidrome-cover/al-1"));
+        assert!(relay.is_some());
+
+        let track_cover = Preview {
+            cover: Some("https://box.tail1234.ts.net/api/cover/sleep-dopesmoker".into()),
+            ..base.clone()
+        };
+        let proxied_track = mpris_preview(Some(track_cover), creds.clone(), &mut relay).unwrap();
+        assert_eq!(
+            proxied_track.cover.as_deref().map(|s| s.rsplit('/').next()),
+            Some(Some("sleep-dopesmoker"))
+        );
+
+        let external = Preview {
+            cover: Some("https://cdn-images.dzcdn.net/images/cover/abc/300x300.jpg".into()),
+            ..base.clone()
+        };
+        let unchanged = mpris_preview(Some(external.clone()), creds, &mut relay).unwrap();
+        assert_eq!(unchanged.cover, external.cover);
+
+        let cleared = mpris_preview(Some(base), None, &mut relay).unwrap();
+        assert!(relay.is_none());
+        assert!(cleared
+            .cover
+            .unwrap()
+            .starts_with("https://box.tail1234.ts.net/"));
     }
 }

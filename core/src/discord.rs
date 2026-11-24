@@ -2,6 +2,7 @@ use crate::host::{AppHandle, Manager};
 use crate::AppState;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -69,11 +70,61 @@ pub const LOGO: &str =
     "https://raw.githubusercontent.com/novakr12/soundscape-desktop/main/icons/icon.png";
 const DRIFT_MS: u64 = 2000;
 
+fn is_private_v4(v4: Ipv4Addr) -> bool {
+    let [a, b, ..] = v4.octets();
+    v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || v4.is_unspecified()
+        || v4.is_broadcast()
+        || v4.is_documentation()
+        || (a == 100 && (64..=127).contains(&b))
+}
+
+pub fn is_private_host(host: &str) -> bool {
+    let host = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if host.is_empty()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".ts.net")
+        || host.ends_with(".local")
+        || host.ends_with(".lan")
+        || host.ends_with(".home")
+        || host.ends_with(".home.arpa")
+        || host.ends_with(".internal")
+        || host.ends_with(".localdomain")
+        || (!host.contains('.') && !host.contains(':'))
+    {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => is_private_v4(v4),
+        Ok(IpAddr::V6(v6)) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6.to_ipv4_mapped().is_some_and(is_private_v4)
+        }
+        Err(_) => false,
+    }
+}
+
 pub fn public_art(art: Option<&str>, server_host: Option<&str>) -> Option<String> {
     let art = art?;
     let url = url::Url::parse(art).ok()?;
-    (url.scheme() == "https" && url.host_str().is_some() && url.host_str() != server_host)
+    let host = url.host_str()?;
+    (url.scheme() == "https" && Some(host) != server_host && !is_private_host(host))
         .then(|| art.to_string())
+}
+
+pub fn usable_cover_link(url: Option<&str>) -> Option<String> {
+    public_art(url, None)
 }
 
 pub fn timing(now_ms: u64, position: Option<f64>, length: Option<f64>) -> (u64, Option<u64>) {
@@ -193,17 +244,24 @@ struct CoverLink {
     album: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+struct Cached {
+    looked: Looked,
+    retry_at: Option<std::time::Instant>,
+}
+
 const COVER_RETRY_AFTER: Duration = Duration::from_secs(60);
 const MAX_FRAME: usize = 1 << 20;
 
-async fn look_up(
-    app: &AppHandle,
-    playing: &Playing,
-    known: &mut HashMap<Song, Looked>,
-    failed: &mut HashMap<Song, std::time::Instant>,
-) -> Looked {
-    if let Some(looked) = known.get(&playing.song) {
-        return looked.clone();
+async fn look_up(app: &AppHandle, playing: &Playing, known: &mut HashMap<Song, Cached>) -> Looked {
+    let now = std::time::Instant::now();
+    let mut previous_album = None;
+    if let Some(cached) = known.get(&playing.song) {
+        match cached.retry_at {
+            None => return cached.looked.clone(),
+            Some(at) if now < at => return cached.looked.clone(),
+            Some(_) => previous_album = cached.looked.album.clone(),
+        }
     }
     let credentials = crate::server::credentials(app);
     let server_host = credentials
@@ -212,52 +270,48 @@ async fn look_up(
     let art = public_art(playing.art.as_deref(), server_host.as_deref());
     let page_album = real_album(playing.song.album.as_deref()).map(str::to_string);
     let needs_lookup = art.is_none() || page_album.is_none();
-    let mut cacheable = !needs_lookup;
+    let mut lookup_ok = !needs_lookup;
     let mut asked: Option<CoverLink> = None;
     if needs_lookup {
-        let recently_failed = failed
-            .get(&playing.song)
-            .is_some_and(|at| at.elapsed() < COVER_RETRY_AFTER);
-        if !recently_failed {
-            if let Some((server, token)) = credentials {
-                let song = &playing.song;
-                match crate::server::get_json::<CoverLink>(
-                    &server,
-                    &token,
-                    "/api/cover-link",
-                    &[
-                        ("artist", song.artist.as_str()),
-                        ("title", song.title.as_str()),
-                    ],
-                )
-                .await
-                {
-                    Ok(link) => {
-                        asked = Some(link);
-                        cacheable = true;
-                        failed.remove(&playing.song);
-                    }
-                    Err(_) => {
-                        if failed.len() > 200 {
-                            failed.clear();
-                        }
-                        failed.insert(playing.song.clone(), std::time::Instant::now());
-                    }
-                }
+        if let Some((server, token)) = credentials {
+            let song = &playing.song;
+            if let Ok(link) = crate::server::get_json::<CoverLink>(
+                &server,
+                &token,
+                "/api/cover-link",
+                &[
+                    ("artist", song.artist.as_str()),
+                    ("title", song.title.as_str()),
+                ],
+            )
+            .await
+            {
+                asked = Some(link);
+                lookup_ok = true;
             }
         }
     }
-    let (url, album) = asked.map_or((None, None), |link| (link.url, link.album));
+    let (url, album) = asked.map_or((None, None), |link| {
+        (usable_cover_link(link.url.as_deref()), link.album)
+    });
+    let resolved_image = art.or(url);
+    let resolved_album = page_album.or(album).or(previous_album);
     let looked = Looked {
-        image: art.or(url).unwrap_or_else(|| LOGO.to_string()),
-        album: page_album.or(album),
+        image: resolved_image.clone().unwrap_or_else(|| LOGO.to_string()),
+        album: resolved_album.clone(),
     };
-    if cacheable {
-        if known.len() > 200 {
-            known.clear();
-        }
-        known.insert(playing.song.clone(), looked.clone());
+    let complete = resolved_image.is_some() && (resolved_album.is_some() || lookup_ok);
+    let retry_at = (!complete).then(|| std::time::Instant::now() + COVER_RETRY_AFTER);
+    if known.len() > 200 {
+        known.clear();
     }
+    known.insert(
+        playing.song.clone(),
+        Cached {
+            looked: looked.clone(),
+            retry_at,
+        },
+    );
     looked
 }
 
@@ -315,8 +369,7 @@ fn wanted(app: &AppHandle) -> Option<String> {
 pub async fn run(app: AppHandle) {
     let mut stream: Option<(String, UnixStream)> = None;
     let mut shown: Option<Option<Shown>> = None;
-    let mut looked: HashMap<Song, Looked> = HashMap::new();
-    let mut failed: HashMap<Song, std::time::Instant> = HashMap::new();
+    let mut looked: HashMap<Song, Cached> = HashMap::new();
     let mut nonce = 0u64;
     loop {
         let Some(app_id) = wanted(&app) else {
@@ -325,10 +378,6 @@ pub async fn run(app: AppHandle) {
             if !looked.is_empty() {
                 looked.clear();
                 looked.shrink_to_fit();
-            }
-            if !failed.is_empty() {
-                failed.clear();
-                failed.shrink_to_fit();
             }
             sleep(EVERY).await;
             continue;
@@ -351,7 +400,7 @@ pub async fn run(app: AppHandle) {
         let next = match current(&app) {
             Some(playing) => {
                 let (start_ms, end_ms) = timing(now_ms(), playing.position, playing.length);
-                let found = look_up(&app, &playing, &mut looked, &mut failed).await;
+                let found = look_up(&app, &playing, &mut looked).await;
                 Some(Shown {
                     album: album_label(playing.song.album.as_deref(), found.album.as_deref()),
                     image: found.image,
@@ -512,6 +561,14 @@ mod tests {
         );
         assert_eq!(
             public_art(
+                Some("https://is1-ssl.mzstatic.com/image/thumb/Music/cover.jpg/600x600bb.jpg"),
+                Some("box.tail1234.ts.net")
+            )
+            .as_deref(),
+            Some("https://is1-ssl.mzstatic.com/image/thumb/Music/cover.jpg/600x600bb.jpg")
+        );
+        assert_eq!(
+            public_art(
                 Some("https://music.example/api/navidrome/cover/1"),
                 Some("music.example")
             ),
@@ -523,6 +580,31 @@ mod tests {
         );
         assert_eq!(public_art(Some("http://cdn.example/a.jpg"), None), None);
         assert_eq!(public_art(None, None), None);
+
+        for private in [
+            "box.tail1234.ts.net",
+            "100.64.0.1",
+            "100.127.255.254",
+            "192.168.1.5",
+            "10.0.0.1",
+            "172.16.0.1",
+            "localhost",
+            "nas.local",
+            "nas",
+            "[::1]",
+            "[fd7a:115c:a1e0::1]",
+            "[::ffff:100.64.0.1]",
+        ] {
+            assert!(is_private_host(private), "{private} should be private");
+            let url = format!("https://{private}/api/cover/a-b");
+            assert_eq!(usable_cover_link(Some(&url)), None);
+        }
+        assert!(!is_private_host("100.63.255.254"));
+        assert!(!is_private_host("100.128.0.1"));
+        assert_eq!(
+            usable_cover_link(Some("https://music.example/api/cover/a-b")).as_deref(),
+            Some("https://music.example/api/cover/a-b")
+        );
     }
 
     #[test]

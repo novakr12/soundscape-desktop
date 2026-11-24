@@ -87,6 +87,8 @@ pub struct Config {
     pub visualizer: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_accent: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<u8>,
 }
 
 pub const PAUSE_SECONDS: i64 = 60 * 60;
@@ -148,6 +150,7 @@ impl Default for Config {
             faster_scripts: false,
             visualizer: true,
             icon_accent: None,
+            volume: None,
         }
     }
 }
@@ -242,6 +245,7 @@ mod tests {
         assert!(config.scrobbling && config.keep_running && !config.told_about_background);
         assert!(config.notifications && !config.autostart && config.last_notification.is_none());
         assert!(config.players.is_empty());
+        assert!(config.volume.is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -252,6 +256,7 @@ mod tests {
             server: Some("https://music.example.com".into()),
             user: Some("listener".into()),
             token: Some("secret".into()),
+            volume: Some(15),
             ..Config::default()
         };
         config.players.insert("firefox".into(), true);

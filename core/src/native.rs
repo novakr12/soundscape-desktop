@@ -781,6 +781,7 @@ impl Engine {
         } else {
             gst::State::Paused
         };
+        self.apply_volume();
         let _ = self.playbin.set_state(state);
         self.started();
     }

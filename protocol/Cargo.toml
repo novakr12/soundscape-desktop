@@ -1,6 +1,6 @@
 [package]
 name = "soundscape-protocol"
-version = "0.11.11"
+version = "0.11.12"
 edition = "2024"
 publish = false
 

@@ -22,19 +22,31 @@
 
   const root = () => document.scrollingElement || document.documentElement;
 
+  const bottomInset = () => {
+    let inset = 0;
+    for (const bar of document.querySelectorAll(".player")) {
+      if (bar instanceof HTMLElement && !bar.hidden) {
+        inset = Math.max(inset, Math.ceil(bar.offsetHeight));
+      }
+    }
+    return inset;
+  };
+
   const metrics = () => {
     const el = root();
     if (!el) return null;
     const viewport = window.innerHeight;
     const total = el.scrollHeight;
     const maxScroll = total - viewport;
-    if (maxScroll <= 2 || viewport <= TRACK_PAD * 2) return null;
-    const trackHeight = viewport - TRACK_PAD * 2;
+    const inset = Math.min(viewport, bottomInset());
+    const railHeight = viewport - inset;
+    if (maxScroll <= 2 || railHeight <= TRACK_PAD * 2) return null;
+    const trackHeight = railHeight - TRACK_PAD * 2;
     const thumbHeight = Math.min(trackHeight, Math.max(MIN_THUMB, Math.round((viewport / total) * trackHeight)));
     const maxTop = Math.max(0, trackHeight - thumbHeight);
     const ratio = Math.min(1, Math.max(0, el.scrollTop / maxScroll));
     const thumbTop = TRACK_PAD + Math.round(ratio * maxTop);
-    return { el, viewport, total, maxScroll, trackHeight, thumbHeight, maxTop, thumbTop };
+    return { el, viewport, total, maxScroll, inset, trackHeight, thumbHeight, maxTop, thumbTop };
   };
 
   const keepVisible = () => {
@@ -109,6 +121,7 @@
       rail.removeAttribute("data-active");
       return;
     }
+    rail.style.bottom = `${m.inset}px`;
     thumb.style.height = `${m.thumbHeight}px`;
     thumb.style.top = `${m.thumbTop}px`;
     if (reveal || dragging || rail.hasAttribute("data-hover")) {
@@ -149,7 +162,7 @@
         scheduleUpdate(true);
         return;
       }
-      if (window.innerWidth - event.clientX <= 18) {
+      if (window.innerWidth - event.clientX <= 18 && event.clientY < window.innerHeight - bottomInset()) {
         scheduleUpdate(true);
       }
     },
@@ -221,6 +234,8 @@
     new MutationObserver(() => scheduleUpdate(false)).observe(document.documentElement, {
       childList: true,
       subtree: true,
+      attributes: true,
+      attributeFilter: ["hidden"],
     });
   };
 

@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.11.12" date="2026-11-25">
+      <description>
+        <ul>
+          <li>Keep the overlay scrollbar above the player bar so it no longer crowds the volume slider</li>
+          <li>Update built-in player volume continuously while sliding or scrolling instead of waiting until you stop</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.11" date="2026-11-25">
       <description>
         <ul>

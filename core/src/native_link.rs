@@ -5,7 +5,7 @@ use crate::{AppState, MAIN};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
@@ -493,7 +493,9 @@ pub fn spectrum_script(bars: Option<&[f32]>) -> String {
 
 static LAST_REPORT: Mutex<Option<String>> = Mutex::new(None);
 static RUN_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static VOLUME_SAVE: AtomicU64 = AtomicU64::new(0);
 const IDLE_EVERY: Duration = Duration::from_secs(5);
+const VOLUME_SAVE_AFTER: Duration = Duration::from_millis(300);
 
 fn reset_report() {
     *LAST_REPORT.lock().expect("report lock") = None;
@@ -522,6 +524,24 @@ pub fn report_soon(app: &AppHandle) {
     let app = app.clone();
     async_runtime::spawn(async move {
         tokio::time::sleep(REPORT_AFTER).await;
+        report(&app);
+        report_to_server(&app).await;
+    });
+}
+
+fn save_volume_later(app: &AppHandle) {
+    let ticket = VOLUME_SAVE.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let app = app.clone();
+    async_runtime::spawn(async move {
+        tokio::time::sleep(VOLUME_SAVE_AFTER).await;
+        if VOLUME_SAVE.load(Ordering::Relaxed) != ticket {
+            return;
+        }
+        let percent = volume_percent(volume());
+        let state = app.state::<AppState>();
+        if state.config().volume != Some(percent) {
+            state.update(|config| config.volume = Some(percent));
+        }
         report(&app);
         report_to_server(&app).await;
     });
@@ -825,11 +845,15 @@ pub fn heard(app: &AppHandle, message: &str) -> bool {
         }
         apply(app, page);
     }
-    from_page(app, asked);
+    handle_asked(app, asked, false);
     true
 }
 
 pub fn from_page(app: &AppHandle, asked: Asked) {
+    handle_asked(app, asked, true);
+}
+
+fn handle_asked(app: &AppHandle, asked: Asked, sync_page: bool) {
     if !wanted(app) {
         return;
     }
@@ -852,13 +876,12 @@ pub fn from_page(app: &AppHandle, asked: Asked) {
                 let mut stored = SETTINGS.lock().expect("settings lock");
                 *stored = stored.with_volume(volume);
             }
-            let percent = volume_percent(volume);
-            let state = app.state::<AppState>();
-            if state.config().volume != Some(percent) {
-                state.update(|config| config.volume = Some(percent));
-            }
             send(Command::Volume(volume));
-            app.host().eval(MAIN, volume_script(volume));
+            if sync_page {
+                app.host().eval(MAIN, volume_script(volume));
+            }
+            save_volume_later(app);
+            return;
         }
         Asked::Take {
             tracks,

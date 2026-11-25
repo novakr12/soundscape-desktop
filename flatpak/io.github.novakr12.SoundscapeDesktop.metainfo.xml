@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.15.1" date="2026-11-25">
+      <description>
+        <ul>
+          <li>Prevent Theater Mode SVG observer churn and memory growth in the built-in window</li>
+          <li>Hide the underlying page scrollbar during Theater Mode and match the fuller Theater seek bar</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.0" date="2026-11-25">
       <description>
         <ul>

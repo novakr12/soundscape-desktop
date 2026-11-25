@@ -33,6 +33,7 @@
   };
 
   const metrics = () => {
+    if (document.body?.classList.contains("theater-open")) return null;
     const el = root();
     if (!el) return null;
     const viewport = window.innerHeight;

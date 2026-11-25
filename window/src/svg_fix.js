@@ -263,6 +263,8 @@
         else if (
           change.target.nodeType === 1 &&
           WATCHED_ATTRS.has(change.attributeName) &&
+          !(change.target === document.body && change.attributeName === "class") &&
+          change.target.firstElementChild !== null &&
           change.target.querySelector?.("svg")
         ) {
           refreshTree(change.target);

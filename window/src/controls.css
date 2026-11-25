@@ -38,6 +38,18 @@ html {
   background: color-mix(in srgb, var(--muted) 35%, transparent);
 }
 
+.theater-dock .player-seek input[type="range"]::slider-track,
+.theater-dock .player-seek input[type="range"]::slider-fill {
+  height: 5px;
+  border-radius: 999px;
+}
+
+.theater-dock .player-seek input[type="range"]::slider-thumb {
+  width: 15px;
+  height: 15px;
+  margin-inline-start: -7.5px;
+}
+
 input[type="radio"],
 input[type="checkbox"] {
   cursor: pointer;

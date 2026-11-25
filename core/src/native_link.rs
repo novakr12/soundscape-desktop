@@ -227,6 +227,10 @@ pub enum Asked {
     Autoplay {
         on: bool,
     },
+    Fullscreen {
+        #[serde(default)]
+        on: Option<bool>,
+    },
 }
 
 pub fn asked(message: &str) -> Option<Asked> {
@@ -340,6 +344,7 @@ pub fn page_script(id: &str, name: &str) -> String {
   window.soundscapeDeviceName = {};
   window.soundscapeDeviceHeld = true;
   window.soundscapeNativeQueueSave = true;
+  window.soundscapeNativeFullscreen = true;
   const prefix = {};
   const saveVolume = (value) => {{
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return;
@@ -1275,6 +1280,10 @@ fn handle_asked(app: &AppHandle, asked: Asked, sync_page: bool) {
             }
             return;
         }
+        Asked::Fullscreen { on } => {
+            app.host().fullscreen(on);
+            return;
+        }
         _ => {}
     }
     report_soon(app);
@@ -1827,6 +1836,7 @@ mod tests {
         assert!(script.contains("soundscape-native "));
         assert!(script.contains("window.soundscapeDeviceHeld = true;"));
         assert!(script.contains("window.soundscapeNativeQueueSave = true;"));
+        assert!(script.contains("window.soundscapeNativeFullscreen = true;"));
         assert!(script.contains("soundscape:player-options"));
         assert!(script.contains("soundscape-volume"));
         assert!(script.contains("soundscape-set-volume"));
@@ -1855,6 +1865,14 @@ mod tests {
                 id: "req-1".into(),
                 name: "Late Night".into(),
             })
+        );
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"fullscreen"}"#),
+            Some(Asked::Fullscreen { on: None })
+        );
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"fullscreen","on":false}"#),
+            Some(Asked::Fullscreen { on: Some(false) })
         );
     }
 

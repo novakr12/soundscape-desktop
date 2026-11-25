@@ -41,7 +41,7 @@ use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey as WinitNamed};
 use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::platform::x11::WindowAttributesExtX11;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use winit::window::{CursorIcon, Icon, Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Fullscreen, Icon, Window, WindowAttributes, WindowId};
 
 const FRAME_COUNTER: &str = include_str!("frame_counter.js");
 const FORM_ENTER: &str = include_str!("form_enter.js");
@@ -357,6 +357,7 @@ impl Shell {
                     window.set_window_icon(window_icon(accent));
                 }
             }
+            host::Call::Fullscreen(on) => self.set_fullscreen(on),
             host::Call::Exit => self.quit(event_loop),
         }
     }
@@ -480,6 +481,9 @@ impl Shell {
     }
 
     fn note_size(&self, window: &Window) {
+        if window.fullscreen().is_some() {
+            return;
+        }
         let maximized = window.is_maximized();
         self.maximized.set(maximized);
         if !maximized {
@@ -647,6 +651,7 @@ impl Shell {
         let held = self.held.get();
         match key {
             WinitKey::Named(WinitNamed::F5) => webview.reload(),
+            WinitKey::Named(WinitNamed::F11) => self.set_fullscreen(None),
             WinitKey::Character(letter)
                 if held.control_key() && held.shift_key() && letter.eq_ignore_ascii_case("m") =>
             {
@@ -706,6 +711,22 @@ impl Shell {
         match (self.server(), webview.url()) {
             (Some(server), Some(current)) => current.origin() == server.origin(),
             _ => false,
+        }
+    }
+
+    fn set_fullscreen(&self, on: Option<bool>) {
+        let Some(window) = self.window() else {
+            return;
+        };
+        let next = on.unwrap_or_else(|| window.fullscreen().is_none());
+        window.set_fullscreen(next.then_some(Fullscreen::Borderless(None)));
+        if let Some(webview) = self.webview() {
+            webview.evaluate_javascript(
+                format!(
+                    "window.dispatchEvent(new CustomEvent(\"soundscape-fullscreen\", {{ detail: {next} }})), undefined"
+                ),
+                |_| {},
+            );
         }
     }
 }

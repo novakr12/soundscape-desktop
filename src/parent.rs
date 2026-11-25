@@ -556,4 +556,8 @@ impl Host for WindowHost {
     fn icon(&self, accent: Option<u32>) {
         self.tell(&ToWindow::Icon { accent });
     }
+
+    fn fullscreen(&self, on: Option<bool>) {
+        self.tell(&ToWindow::Fullscreen { on });
+    }
 }

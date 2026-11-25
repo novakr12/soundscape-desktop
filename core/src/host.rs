@@ -50,6 +50,7 @@ pub trait Host: Send + Sync {
     fn mini_view(&self, view: &crate::mini::MiniView);
     fn mini_problem(&self, problem: &str);
     fn icon(&self, _accent: Option<u32>) {}
+    fn fullscreen(&self, _on: Option<bool>) {}
 }
 
 pub mod async_runtime {

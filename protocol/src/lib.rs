@@ -235,21 +235,48 @@ fn standard_keep_window() -> i64 {
 #[serde(tag = "do", rename_all = "snake_case")]
 pub enum ToWindow {
     Start(Start),
-    Eval { script: String },
-    Evaluate { id: u64, script: String },
+    Eval {
+        script: String,
+    },
+    Evaluate {
+        id: u64,
+        script: String,
+    },
     Show,
     Hide,
     Focus,
-    Navigate { url: String },
-    Server { url: Option<String> },
-    Native { script: Option<String> },
+    Navigate {
+        url: String,
+    },
+    Server {
+        url: Option<String>,
+    },
+    Native {
+        script: Option<String>,
+    },
     Setup,
-    Smooth { on: bool },
-    Memory { mb: u32 },
-    KeepWindow { seconds: i64 },
-    Theme { dark: bool },
-    Font { family: Option<String> },
-    Icon { accent: Option<u32> },
+    Smooth {
+        on: bool,
+    },
+    Memory {
+        mb: u32,
+    },
+    KeepWindow {
+        seconds: i64,
+    },
+    Theme {
+        dark: bool,
+    },
+    Font {
+        family: Option<String>,
+    },
+    Icon {
+        accent: Option<u32>,
+    },
+    Fullscreen {
+        #[serde(default)]
+        on: Option<bool>,
+    },
     Exit,
 }
 
@@ -461,6 +488,18 @@ mod tests {
             Some(Some(ToWindow::Font {
                 family: Some("Adwaita Sans".into())
             }))
+        );
+        let mut wire = Vec::new();
+        assert!(send(&mut wire, &ToWindow::Fullscreen { on: Some(true) }));
+        assert!(send(&mut wire, &ToWindow::Fullscreen { on: None }));
+        let mut input = std::io::Cursor::new(wire);
+        assert_eq!(
+            read::<ToWindow>(&mut input),
+            Some(Some(ToWindow::Fullscreen { on: Some(true) }))
+        );
+        assert_eq!(
+            read::<ToWindow>(&mut input),
+            Some(Some(ToWindow::Fullscreen { on: None }))
         );
     }
 }

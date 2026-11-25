@@ -22,6 +22,7 @@ pub enum Call {
     Theme(bool),
     Font(Option<String>),
     Icon(Option<u32>),
+    Fullscreen(Option<bool>),
     Exit,
 }
 
@@ -57,6 +58,7 @@ pub fn call_for(message: ToWindow, out: &Out) -> Option<Call> {
         ToWindow::Theme { dark } => Call::Theme(dark),
         ToWindow::Font { family } => Call::Font(family),
         ToWindow::Icon { accent } => Call::Icon(accent),
+        ToWindow::Fullscreen { on } => Call::Fullscreen(on),
         ToWindow::Exit => Call::Exit,
     })
 }

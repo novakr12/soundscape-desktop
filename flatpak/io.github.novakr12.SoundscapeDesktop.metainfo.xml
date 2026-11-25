@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.14.0" date="2026-11-25">
+      <description>
+        <ul>
+          <li>Add native OS borderless fullscreen toggling via F11 or the Now Playing theater view fullscreen button, synced cleanly with the page</li>
+          <li>Preserve saved normal window size and maximized state when hiding or closing the app while fullscreen</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.13.0" date="2026-11-25">
       <description>
         <ul>

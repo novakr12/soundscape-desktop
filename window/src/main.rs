@@ -48,6 +48,7 @@ const FORM_ENTER: &str = include_str!("form_enter.js");
 const CONTROLS: &str = include_str!("controls.css");
 const SVG_FIX: &str = include_str!("svg_fix.js");
 const LOGO_MOTION: &str = include_str!("logo_motion.js");
+const LOGO_STYLE: &str = ".animated .logo-line, .animated .logo-area, .animated .logo-dot, .lockup.animated .wordmark, .lockup.animated .tagline, .lockup.animated .app-version { animation: none !important; }\n";
 const VALVE: &str = include_str!("valve.js");
 const COVERS: &str = include_str!("covers.js");
 const ICON_PNG: &[u8] = include_bytes!("../../icons/128x128.png");
@@ -1019,6 +1020,12 @@ impl App {
         if !profile::wants(std::env::var("SOUNDSCAPE_PLAIN_SVG").ok().as_deref()) {
             scripts.add_script(Rc::new(UserScript::new(SVG_FIX.into(), None)));
             scripts.add_script(Rc::new(UserScript::new(LOGO_MOTION.into(), None)));
+            if let Ok(place) = Url::parse("soundscape://logo_motion.css") {
+                scripts.add_stylesheet(Rc::new(servo::user_contents::UserStyleSheet::new(
+                    LOGO_STYLE.into(),
+                    place,
+                )));
+            }
         }
         if let Ok(place) = Url::parse("soundscape://controls.css") {
             scripts.add_stylesheet(Rc::new(servo::user_contents::UserStyleSheet::new(
@@ -1615,5 +1622,15 @@ mod tests {
             history_script(false, true),
             "window.soundscapeDesktopHistory={back:false,forward:true};window.dispatchEvent(new CustomEvent(\"soundscape-desktop-history\",{detail:window.soundscapeDesktopHistory}));"
         );
+    }
+
+    #[test]
+    fn drives_lockup_reveal_without_css_keyframe_races() {
+        assert!(LOGO_STYLE.contains(".lockup.animated .wordmark"));
+        assert!(LOGO_STYLE.contains(".lockup.animated .tagline"));
+        assert!(LOGO_STYLE.contains(".lockup.animated .app-version"));
+        assert!(LOGO_STYLE.contains("animation: none !important;"));
+        assert!(LOGO_MOTION.contains("clearLockup"));
+        assert!(!LOGO_MOTION.contains("clipPath"));
     }
 }

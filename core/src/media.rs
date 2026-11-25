@@ -48,6 +48,16 @@ const READ: &str = r#"(() => {
       return button ? button.getAttribute("aria-pressed") === "true" : null;
     })(),
     repeat: document.querySelector('[data-player="repeat"]')?.dataset.repeat ?? null,
+    volume: (() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem("soundscape-volume") ?? "null");
+        if (saved?.muted === true) return 0;
+        if (typeof saved?.volume === "number" && Number.isFinite(saved.volume)) {
+          return Math.min(1, Math.max(0, saved.volume));
+        }
+      } catch {}
+      return audio.muted ? 0 : Math.cbrt(audio.volume);
+    })(),
     upNext: (() => {
       try {
         const queue = JSON.parse(localStorage.getItem("soundscape:queue") ?? "null");
@@ -89,6 +99,8 @@ pub struct Preview {
     pub shuffle: Option<bool>,
     #[serde(default)]
     pub repeat: Option<String>,
+    #[serde(default)]
+    pub volume: Option<f64>,
     #[serde(default, rename = "upNext")]
     pub up_next: Option<UpNext>,
 }
@@ -151,6 +163,70 @@ pub fn metadata(preview: Option<&Preview>) -> HashMap<String, OwnedValue> {
         map.insert("mpris:length".into(), value(Value::from(micros(length))));
     }
     map
+}
+
+pub fn loop_status(repeat: Option<&str>) -> &'static str {
+    match repeat {
+        Some("all") => "Playlist",
+        Some("one") => "Track",
+        _ => "None",
+    }
+}
+
+pub fn repeat_from_loop(status: &str) -> Option<&'static str> {
+    match status {
+        "None" => Some("off"),
+        "Playlist" => Some("all"),
+        "Track" => Some("one"),
+        _ => None,
+    }
+}
+
+pub fn set_shuffle_script(on: bool) -> String {
+    format!(
+        "(() => {{ const b = document.querySelector('[data-player=\"shuffle\"]:not([disabled])'); if (b && (b.getAttribute('aria-pressed') === 'true') !== {on}) b.click(); }})()"
+    )
+}
+
+pub fn set_repeat_script(mode: &str) -> Option<String> {
+    if !matches!(mode, "off" | "all" | "one") {
+        return None;
+    }
+    Some(format!(
+        "(() => {{ const b = document.querySelector('[data-player=\"repeat\"]:not([disabled])'); if (!b) return; for (let i = 0; i < 3 && b.dataset.repeat !== \"{mode}\"; i++) b.click(); }})()"
+    ))
+}
+
+pub fn set_volume(app: &AppHandle, volume: f64) {
+    let volume = if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    if !crate::native_link::set_volume(app, volume) {
+        if let Some(window) = app.get_webview_window(MAIN) {
+            let _ = window.eval(crate::native_link::volume_script(volume));
+        }
+    }
+    poke();
+}
+
+pub fn set_shuffle(app: &AppHandle, on: bool) {
+    if !crate::native_link::set_shuffle(app, on) {
+        if let Some(window) = app.get_webview_window(MAIN) {
+            let _ = window.eval(set_shuffle_script(on));
+        }
+    }
+    poke();
+}
+
+pub fn set_repeat(app: &AppHandle, mode: &str) {
+    if !crate::native_link::set_repeat(app, mode) {
+        if let (Some(window), Some(js)) = (app.get_webview_window(MAIN), set_repeat_script(mode)) {
+            let _ = window.eval(js);
+        }
+    }
+    poke();
 }
 
 pub fn next_wait(preview: Option<&Preview>) -> Duration {
@@ -313,7 +389,49 @@ impl Player {
     }
     #[zbus(property)]
     fn volume(&self) -> f64 {
-        1.0
+        self.shared
+            .preview()
+            .and_then(|preview| preview.volume)
+            .unwrap_or_else(crate::native_link::current_volume)
+            .clamp(0.0, 1.0)
+    }
+    #[zbus(property)]
+    fn set_volume(&self, value: f64) {
+        set_volume(&self.app, value);
+        self.shared.wake.notify_one();
+    }
+    #[zbus(property)]
+    fn shuffle(&self) -> bool {
+        self.shared
+            .preview()
+            .and_then(|preview| preview.shuffle)
+            .unwrap_or(false)
+    }
+    #[zbus(property)]
+    fn set_shuffle(&self, value: bool) {
+        set_shuffle(&self.app, value);
+        self.shared.wake.notify_one();
+    }
+    #[zbus(property)]
+    fn loop_status(&self) -> String {
+        loop_status(
+            self.shared
+                .preview()
+                .as_ref()
+                .and_then(|preview| preview.repeat.as_deref()),
+        )
+        .into()
+    }
+    #[zbus(property)]
+    fn set_loop_status(&self, value: String) -> zbus::fdo::Result<()> {
+        let Some(mode) = repeat_from_loop(&value) else {
+            return Err(zbus::fdo::Error::InvalidArgs(format!(
+                "Unsupported LoopStatus: {value}"
+            )));
+        };
+        set_repeat(&self.app, mode);
+        self.shared.wake.notify_one();
+        Ok(())
     }
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
@@ -419,6 +537,26 @@ async fn announce(connection: &Connection, old: Option<&Preview>, new: Option<&P
     if old.map(|p| p.playing) != new.map(|p| p.playing) || old.is_some() != new.is_some() {
         let _ = player.playback_status_changed(emitter).await;
     }
+    let volume_val = |preview: Option<&Preview>| {
+        (preview
+            .and_then(|p| p.volume)
+            .unwrap_or_else(crate::native_link::current_volume)
+            .clamp(0.0, 1.0)
+            * 100.0)
+            .round() as i64
+    };
+    if volume_val(old) != volume_val(new) {
+        let _ = player.volume_changed(emitter).await;
+    }
+    let shuffle_val = |preview: Option<&Preview>| preview.and_then(|p| p.shuffle).unwrap_or(false);
+    if shuffle_val(old) != shuffle_val(new) {
+        let _ = player.shuffle_changed(emitter).await;
+    }
+    let loop_val =
+        |preview: Option<&Preview>| loop_status(preview.and_then(|p| p.repeat.as_deref()));
+    if loop_val(old) != loop_val(new) {
+        let _ = player.loop_status_changed(emitter).await;
+    }
 }
 
 async fn connect(app: &AppHandle, shared: &Arc<Shared>) -> Option<Connection> {
@@ -518,15 +656,24 @@ mod tests {
     }
 
     #[test]
-    fn reads_shuffle_repeat_and_the_next_song() {
-        let preview = parse(r#"{"title":"Says","artist":"Nils Frahm","album":null,"cover":null,"playing":true,"position":3,"length":60,"shuffle":true,"repeat":"all","upNext":{"title":"Teardrop","artist":"Massive Attack"}}"#).unwrap();
+    fn reads_shuffle_repeat_volume_and_the_next_song() {
+        let preview = parse(r#"{"title":"Says","artist":"Nils Frahm","album":null,"cover":null,"playing":true,"position":3,"length":60,"shuffle":true,"repeat":"all","volume":0.35,"upNext":{"title":"Teardrop","artist":"Massive Attack"}}"#).unwrap();
         assert_eq!(preview.shuffle, Some(true));
         assert_eq!(preview.repeat.as_deref(), Some("all"));
+        assert_eq!(preview.volume, Some(0.35));
         assert_eq!(preview.up_next.unwrap().title, "Teardrop");
+        assert_eq!(loop_status(preview.repeat.as_deref()), "Playlist");
+        assert_eq!(loop_status(Some("one")), "Track");
+        assert_eq!(loop_status(Some("off")), "None");
+        assert_eq!(loop_status(None), "None");
+        assert_eq!(repeat_from_loop("None"), Some("off"));
+        assert_eq!(repeat_from_loop("Playlist"), Some("all"));
+        assert_eq!(repeat_from_loop("Track"), Some("one"));
+        assert_eq!(repeat_from_loop("Bogus"), None);
         let older = parse(r#"{"title":"Says","artist":"Nils Frahm","album":null,"cover":null,"playing":true,"position":3,"length":60}"#).unwrap();
         assert_eq!(
-            (older.shuffle, older.repeat, older.up_next),
-            (None, None, None)
+            (older.shuffle, older.repeat, older.volume, older.up_next),
+            (None, None, None, None)
         );
     }
 
@@ -564,6 +711,125 @@ mod tests {
             script("next", 0.0).unwrap(),
             "document.querySelector('[data-player=\"next\"]:not([disabled])')?.click()"
         );
+        assert!(set_shuffle_script(true).contains("!== true"));
+        assert!(set_repeat_script("one")
+            .unwrap()
+            .contains("b.dataset.repeat !== \"one\""));
+        assert_eq!(set_repeat_script("forever"), None);
+    }
+
+    #[test]
+    fn exposes_and_updates_mpris_volume_shuffle_and_loop_status() {
+        if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_none() {
+            eprintln!("No session bus, skipping");
+            return;
+        }
+        struct NoHost;
+        impl crate::host::Host for NoHost {
+            fn exists(&self, _: &str) -> bool {
+                false
+            }
+            fn eval(&self, _: &str, _: String) {}
+            fn evaluate(&self, _: &str, _: String, reply: crate::host::Reply) {
+                reply(None);
+            }
+            fn show(&self, _: &str) {}
+            fn hide(&self, _: &str) {}
+            fn focus(&self, _: &str) {}
+            fn close(&self, _: &str) {}
+            fn is_visible(&self, _: &str) -> bool {
+                false
+            }
+            fn url(&self, _: &str) -> Option<url::Url> {
+                None
+            }
+            fn navigate(&self, _: &str, _: url::Url) {}
+            fn open_window(
+                &self,
+                _: &str,
+                _: &str,
+                _: &crate::host::WindowOptions,
+            ) -> crate::host::Result<()> {
+                Ok(())
+            }
+            fn run_on_main(&self, _: Box<dyn FnOnce() + Send>) {}
+            fn smooth_scrolling(&self, _: bool) {}
+            fn memory_limit(&self, _: u32) {}
+            fn running(&self) -> crate::host::Running {
+                crate::host::Running::default()
+            }
+            fn restart(&self) {}
+            fn exit(&self, _: i32) {}
+            fn mini_view(&self, _: &crate::mini::MiniView) {}
+            fn mini_problem(&self, _: &str) {}
+        }
+        crate::host::async_runtime::block_on(async {
+            let dir =
+                std::env::temp_dir().join(format!("soundscape-media-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let app = AppHandle::new(Box::new(NoHost));
+            app.manage(crate::AppState::new(
+                dir.clone(),
+                crate::config::Config::default(),
+            ));
+            let shared = Arc::new(Shared::default());
+            *shared.preview.lock().unwrap() = Some(Preview {
+                title: "Says".into(),
+                artist: "Nils Frahm".into(),
+                album: None,
+                cover: None,
+                playing: true,
+                position: 3.0,
+                length: Some(60.0),
+                has_next: true,
+                has_previous: true,
+                shuffle: Some(true),
+                repeat: Some("all".into()),
+                volume: Some(0.45),
+                up_next: None,
+            });
+            let bus_name = format!(
+                "org.mpris.MediaPlayer2.SoundscapeTest{}",
+                std::process::id()
+            );
+            let _served = zbus::connection::Builder::session()
+                .unwrap()
+                .name(bus_name.as_str())
+                .unwrap()
+                .serve_at(PATH, Root(app.clone()))
+                .unwrap()
+                .serve_at(PATH, Player { app, shared })
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+            let client = Connection::session().await.unwrap();
+            let proxy = zbus::proxy::Builder::<zbus::Proxy>::new(&client)
+                .destination(bus_name.as_str())
+                .unwrap()
+                .path(PATH)
+                .unwrap()
+                .interface("org.mpris.MediaPlayer2.Player")
+                .unwrap()
+                .cache_properties(zbus::proxy::CacheProperties::No)
+                .build()
+                .await
+                .unwrap();
+            let volume: f64 = proxy.get_property("Volume").await.unwrap();
+            let shuffle: bool = proxy.get_property("Shuffle").await.unwrap();
+            let loop_mode: String = proxy.get_property("LoopStatus").await.unwrap();
+            assert!((volume - 0.45).abs() < 1e-6);
+            assert!(shuffle);
+            assert_eq!(loop_mode, "Playlist");
+            assert!(proxy.set_property("LoopStatus", "Track").await.is_ok());
+            assert!(proxy
+                .set_property("LoopStatus", "InvalidMode")
+                .await
+                .is_err());
+            assert!(proxy.set_property("Volume", 0.25f64).await.is_ok());
+            assert!(proxy.set_property("Shuffle", false).await.is_ok());
+            let _ = std::fs::remove_dir_all(&dir);
+        });
     }
 
     #[test]
@@ -583,6 +849,7 @@ mod tests {
             has_previous: false,
             shuffle: None,
             repeat: None,
+            volume: None,
             up_next: None,
         };
         let proxied = mpris_preview(Some(base.clone()), creds.clone(), &mut relay).unwrap();

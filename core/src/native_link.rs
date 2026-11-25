@@ -1,10 +1,17 @@
 use crate::host::{async_runtime, AppHandle, Manager};
 use crate::media::Preview;
-use crate::native::{self, Bounce, Command, Handover, Player, Snapshot, Style, Track, Visualizer};
+use crate::native::{
+    self, Bounce, Command, Handover, Player, SavedQueue, SleepRequest, SleepSnapshot, Snapshot,
+    Style, Track, Visualizer,
+};
 use crate::{AppState, MAIN};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -201,6 +208,11 @@ pub enum Asked {
     Jump {
         ahead: usize,
     },
+    Sleep {
+        kind: String,
+        #[serde(default)]
+        seconds: Option<f64>,
+    },
     Autoplay {
         on: bool,
     },
@@ -378,6 +390,14 @@ fn track_json(track: &Track) -> Value {
     })
 }
 
+fn sleep_json(sleep: Option<&SleepSnapshot>) -> Value {
+    match sleep {
+        Some(SleepSnapshot::AfterSong) => json!({ "kind": "song" }),
+        Some(SleepSnapshot::Remaining(left)) => json!({ "kind": "time", "left": left.max(0.0) }),
+        None => Value::Null,
+    }
+}
+
 pub fn report_json(id: &str, name: &str, snapshot: Option<&Snapshot>, volume: f64) -> String {
     let state = match snapshot {
         Some(now) => json!({
@@ -389,6 +409,7 @@ pub fn report_json(id: &str, name: &str, snapshot: Option<&Snapshot>, volume: f6
             "blocked": false,
             "repeat": REPEAT_MODES.contains(&now.repeat.as_str()).then_some(now.repeat.as_str()),
             "shuffle": now.shuffle,
+            "sleep": sleep_json(now.sleep.as_ref()),
             "upNext": now
                 .up_next
                 .iter()
@@ -405,6 +426,7 @@ pub fn report_json(id: &str, name: &str, snapshot: Option<&Snapshot>, volume: f6
             "blocked": false,
             "repeat": null,
             "shuffle": null,
+            "sleep": null,
             "upNext": [],
         }),
     };
@@ -423,6 +445,61 @@ fn settings() -> Settings {
 
 fn volume() -> f64 {
     settings().volume
+}
+
+pub fn current_volume() -> f64 {
+    let stored = settings();
+    if stored.muted {
+        0.0
+    } else {
+        stored.volume.clamp(0.0, 1.0)
+    }
+}
+
+pub fn set_volume(app: &AppHandle, volume: f64) -> bool {
+    if !active(app) {
+        return false;
+    }
+    let volume = if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    {
+        let mut stored = SETTINGS.lock().expect("settings lock");
+        *stored = stored.with_volume(volume);
+    }
+    with_player(app, |player| player.send(Command::Volume(volume)));
+    app.host().eval(MAIN, volume_script(volume));
+    save_volume_later(app);
+    crate::mini::wake();
+    crate::media::poke();
+    true
+}
+
+pub fn set_shuffle(app: &AppHandle, on: bool) -> bool {
+    if !active(app) {
+        return false;
+    }
+    SHUFFLE.store(on, Ordering::Relaxed);
+    with_player(app, |player| player.send(Command::Shuffle(Some(on))));
+    report_soon(app);
+    crate::mini::wake();
+    crate::media::poke();
+    true
+}
+
+pub fn set_repeat(app: &AppHandle, mode: &str) -> bool {
+    if !active(app) || !REPEAT_MODES.contains(&mode) {
+        return false;
+    }
+    with_player(app, |player| {
+        player.send(Command::SetRepeat(mode.to_string()))
+    });
+    report_soon(app);
+    crate::mini::wake();
+    crate::media::poke();
+    true
 }
 
 fn apply(app: &AppHandle, page: PageSettings) {
@@ -509,7 +586,12 @@ pub fn report(app: &AppHandle) {
     let Some(snapshot) = settled(app) else {
         return;
     };
-    let json = report_json(&device_id(app), &device_name(), snapshot.as_ref(), volume());
+    let json = report_json(
+        &device_id(app),
+        &device_name(),
+        snapshot.as_ref(),
+        current_volume(),
+    );
     {
         let mut last = LAST_REPORT.lock().expect("report lock");
         if last.as_deref() == Some(json.as_str()) {
@@ -557,7 +639,12 @@ pub async fn report_to_server(app: &AppHandle) {
     let Some(snapshot) = settled(app) else {
         return;
     };
-    let json = report_json(&device_id(app), &device_name(), snapshot.as_ref(), volume());
+    let json = report_json(
+        &device_id(app),
+        &device_name(),
+        snapshot.as_ref(),
+        current_volume(),
+    );
     let Ok(body) = serde_json::from_str::<Value>(&json) else {
         return;
     };
@@ -755,6 +842,27 @@ pub fn queue_window(tracks: Vec<Track>, position: usize) -> Option<(Vec<Track>, 
     Some((part, position - from))
 }
 
+fn start_handover(app: &AppHandle, server: Url, token: String, handover: Handover) -> bool {
+    let state = app.state::<AppState>();
+    let mut current = state.native.lock().expect("native lock");
+    current.take();
+    match native::start(
+        server.clone(),
+        token.clone(),
+        handover,
+        scrobbles(server, token),
+    ) {
+        Ok(player) => {
+            *current = Some(player);
+            true
+        }
+        Err(error) => {
+            eprintln!("The built-in player couldn't start: {error}");
+            false
+        }
+    }
+}
+
 fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playing: bool) {
     let Some((tracks, position)) = queue_window(tracks, position) else {
         return;
@@ -778,19 +886,131 @@ fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playin
         repeat,
         crossfade: settings().crossfade,
         shuffle,
+        restored: false,
+        unshuffled: None,
         visualizer: settings().visualizer,
     };
-    let state = app.state::<AppState>();
-    let mut current = state.native.lock().expect("native lock");
-    current.take();
-    match native::start(
-        server.clone(),
-        token.clone(),
-        handover,
-        scrobbles(server, token),
-    ) {
-        Ok(player) => *current = Some(player),
-        Err(error) => eprintln!("The built-in player couldn't start: {error}"),
+    start_handover(app, server, token, handover);
+}
+
+const QUEUE_FILE: &str = "player-queue.json";
+const SAVE_QUEUE_EVERY: Duration = Duration::from_secs(15);
+static QUEUE_IO: Mutex<()> = Mutex::new(());
+
+pub fn queue_path(dir: &Path) -> PathBuf {
+    dir.join(QUEUE_FILE)
+}
+
+pub fn save_saved_queue(dir: &Path, saved: &SavedQueue) -> std::io::Result<()> {
+    let _guard = QUEUE_IO.lock().expect("queue io lock");
+    fs::create_dir_all(dir)?;
+    let path = queue_path(dir);
+    let temporary = dir.join(format!("player-queue.json.new.{}", std::process::id()));
+    let bytes = serde_json::to_vec(saved)?;
+    let written = (|| -> std::io::Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temporary)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, &path)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
+}
+
+pub fn clear_saved_queue(dir: &Path) {
+    let _guard = QUEUE_IO.lock().expect("queue io lock");
+    let _ = fs::remove_file(queue_path(dir));
+}
+
+pub fn load_saved_queue(dir: &Path, server: &Url) -> Option<SavedQueue> {
+    let _guard = QUEUE_IO.lock().expect("queue io lock");
+    let text = fs::read_to_string(queue_path(dir)).ok()?;
+    let saved: SavedQueue = serde_json::from_str(&text).ok()?;
+    if saved.server != server.as_str() {
+        return None;
+    }
+    let (tracks, position) = queue_window(saved.tracks, saved.position)?;
+    let repeat = if REPEAT_MODES.contains(&saved.repeat.as_str()) {
+        saved.repeat
+    } else {
+        "off".into()
+    };
+    let time = if saved.time.is_finite() && saved.time > 0.0 {
+        saved.time
+    } else {
+        0.0
+    };
+    let unshuffled = if saved.shuffle {
+        saved.unshuffled
+    } else {
+        None
+    };
+    Some(SavedQueue {
+        server: saved.server,
+        tracks,
+        position,
+        time,
+        repeat,
+        shuffle: saved.shuffle,
+        unshuffled,
+    })
+}
+
+pub fn save_now(app: &AppHandle) {
+    let Some((server, _)) = crate::server::credentials(app) else {
+        return;
+    };
+    let Some(Some(saved)) = with_player(app, |player| player.saved_state(server.as_str())) else {
+        return;
+    };
+    let dir = app.state::<AppState>().dir.clone();
+    let _ = save_saved_queue(&dir, &saved);
+}
+
+pub fn clear_saved(app: &AppHandle) {
+    let dir = app.state::<AppState>().dir.clone();
+    clear_saved_queue(&dir);
+}
+
+pub fn restore(app: &AppHandle) {
+    if !wanted(app) || active(app) {
+        return;
+    }
+    let Some((server, token)) = crate::server::credentials(app) else {
+        return;
+    };
+    let dir = app.state::<AppState>().dir.clone();
+    let Some(saved) = load_saved_queue(&dir, &server) else {
+        return;
+    };
+    SHUFFLE.store(saved.shuffle, Ordering::Relaxed);
+    let handover = Handover {
+        tracks: saved.tracks,
+        position: saved.position,
+        time: saved.time,
+        playing: false,
+        volume: settings().volume,
+        muted: settings().muted,
+        levelling: settings().levelling,
+        repeat: saved.repeat,
+        crossfade: settings().crossfade,
+        shuffle: saved.shuffle,
+        restored: true,
+        unshuffled: saved.unshuffled,
+        visualizer: settings().visualizer,
+    };
+    if start_handover(app, server, token, handover) {
+        crate::media::poke();
+        crate::mini::wake();
+        report_soon(app);
     }
 }
 
@@ -881,6 +1101,8 @@ fn handle_asked(app: &AppHandle, asked: Asked, sync_page: bool) {
                 app.host().eval(MAIN, volume_script(volume));
             }
             save_volume_later(app);
+            crate::mini::wake();
+            crate::media::poke();
             return;
         }
         Asked::Take {
@@ -905,6 +1127,16 @@ fn handle_asked(app: &AppHandle, asked: Asked, sync_page: bool) {
             send(Command::Shuffle(Some(on)));
         }
         Asked::Jump { ahead } if (1..=MOST_UP_NEXT).contains(&ahead) => send(Command::Jump(ahead)),
+        Asked::Sleep { kind, seconds } => {
+            let request = match kind.as_str() {
+                "song" => Some(SleepRequest::AfterSong),
+                "time" => seconds
+                    .filter(|s| s.is_finite() && *s >= 1.0)
+                    .map(SleepRequest::Seconds),
+                _ => None,
+            };
+            send(Command::Sleep(request));
+        }
         Asked::Autoplay { on } => {
             let state = app.state::<AppState>();
             if state.config().autoplay != on {
@@ -915,9 +1147,23 @@ fn handle_asked(app: &AppHandle, asked: Asked, sync_page: bool) {
         _ => {}
     }
     report_soon(app);
+    crate::mini::wake();
+    crate::media::poke();
 }
 
-pub fn change_key(snapshot: Option<&Snapshot>) -> Option<(String, bool, String, i64, Vec<String>)> {
+fn sleep_key(sleep: Option<&SleepSnapshot>) -> Option<String> {
+    match sleep {
+        Some(SleepSnapshot::AfterSong) => Some("song".into()),
+        Some(SleepSnapshot::Remaining(left)) => {
+            Some(format!("time:{}", (left / 60.0).ceil() as i64))
+        }
+        None => None,
+    }
+}
+
+pub type ChangeKey = (String, bool, String, i64, Option<String>, Vec<String>);
+
+pub fn change_key(snapshot: Option<&Snapshot>) -> Option<ChangeKey> {
     snapshot.map(|now| {
         (
             now.track.track_id.clone(),
@@ -928,6 +1174,7 @@ pub fn change_key(snapshot: Option<&Snapshot>) -> Option<(String, bool, String, 
                 if now.shuffle { "+shuffle" } else { "" }
             ),
             (now.volume * 100.0).round() as i64,
+            sleep_key(now.sleep.as_ref()),
             now.up_next
                 .iter()
                 .map(|next| next.track_id.clone())
@@ -1044,29 +1291,32 @@ async fn keep_going(app: AppHandle, body: Value) {
 const MAX_ASKED: usize = 500;
 
 pub async fn run(app: AppHandle) {
+    restore(&app);
     async_runtime::spawn(stream_spectrum(app.clone()));
     let mut since_heartbeat = HEARTBEAT;
+    let mut since_queue_save = Duration::ZERO;
     let mut told = None;
     let mut asked: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut refilled_after: Option<String> = None;
     let mut played: VecDeque<String> = VecDeque::new();
     loop {
         let autoplay = app.state::<AppState>().config().autoplay;
-        if let Some(now) = settled(&app).flatten() {
+        let current_snapshot = settled(&app).flatten();
+        if let Some(ref now) = current_snapshot {
             remember_played(&mut played, &now.track.track_id);
         }
-        let low = settled(&app)
-            .flatten()
+        let low = current_snapshot
+            .as_ref()
             .filter(|now| needs_more(now, autoplay))
             .filter(|now| refilled_after.as_deref() != Some(now.track.track_id.as_str()));
         if let Some(now) = low {
             refilled_after = Some(now.track.track_id.clone());
-            async_runtime::spawn(keep_going(app.clone(), radio_body(&now, &played)));
+            async_runtime::spawn(keep_going(app.clone(), radio_body(now, &played)));
         }
-        let missing = settled(&app)
-            .flatten()
+        let missing = current_snapshot
+            .as_ref()
             .filter(|now| now.track.album.is_none())
-            .map(|now| now.track.track_id);
+            .map(|now| now.track.track_id.clone());
         if let Some(track_id) = missing {
             if !asked.contains(&track_id) {
                 if asked.len() >= MAX_ASKED {
@@ -1077,6 +1327,14 @@ pub async fn run(app: AppHandle) {
             }
         }
         let now = settled(&app).map(|snapshot| change_key(snapshot.as_ref()));
+        let changed = now.as_ref().is_some_and(|key| *key != told);
+        let save_due = changed
+            || (since_queue_save >= SAVE_QUEUE_EVERY
+                && current_snapshot.as_ref().is_some_and(|s| s.playing));
+        if save_due && active(&app) {
+            since_queue_save = Duration::ZERO;
+            save_now(&app);
+        }
         let due = now
             .as_ref()
             .is_some_and(|now| since_heartbeat >= HEARTBEAT || *now != told);
@@ -1090,6 +1348,7 @@ pub async fn run(app: AppHandle) {
             _ = RUN_WAKE.notified() => {}
         }
         since_heartbeat += EVERY;
+        since_queue_save += EVERY;
         if active(&app) {
             report(&app);
         }
@@ -1148,6 +1407,7 @@ mod tests {
             volume: 0.8,
             repeat: repeat.into(),
             shuffle: false,
+            sleep: None,
             up_next: (0..left).map(|at| track(&format!("next{at}"))).collect(),
         };
         assert!(needs_more(&snapshot(0, "off"), true));
@@ -1229,6 +1489,7 @@ mod tests {
             volume: 0.6,
             repeat: "all".into(),
             shuffle: true,
+            sleep: Some(SleepSnapshot::Remaining(120.0)),
             up_next: vec![track("b")],
         };
         let report: Value =
@@ -1240,10 +1501,13 @@ mod tests {
         assert_eq!(report["state"]["upNext"][0]["title"], "Song b");
         assert_eq!(report["state"]["repeat"], "all");
         assert_eq!(report["state"]["shuffle"], true);
+        assert_eq!(report["state"]["sleep"]["kind"], "time");
+        assert_eq!(report["state"]["sleep"]["left"], 120.0);
         let idle: Value =
             serde_json::from_str(&report_json("abcdefgh12", "Desktop app", None, 0.5)).unwrap();
         assert_eq!(idle["state"]["track"], Value::Null);
         assert_eq!(idle["state"]["volume"], 0.5);
+        assert_eq!(idle["state"]["sleep"], Value::Null);
         assert!(report_script("{}").contains("soundscapeNativeReport"));
     }
 
@@ -1333,6 +1597,7 @@ mod tests {
             volume: 0.6,
             repeat: "off".into(),
             shuffle: false,
+            sleep: None,
             up_next: Vec::new(),
         };
         let later = Snapshot {
@@ -1340,6 +1605,11 @@ mod tests {
             ..now.clone()
         };
         assert_eq!(change_key(Some(&now)), change_key(Some(&later)));
+        let sleeping = Snapshot {
+            sleep: Some(SleepSnapshot::AfterSong),
+            ..now.clone()
+        };
+        assert_ne!(change_key(Some(&now)), change_key(Some(&sleeping)));
         let paused = Snapshot {
             playing: false,
             ..now.clone()
@@ -1351,6 +1621,61 @@ mod tests {
         };
         assert_ne!(change_key(Some(&now)), change_key(Some(&shuffled)));
         assert_ne!(change_key(Some(&now)), change_key(None));
+    }
+
+    #[test]
+    fn reads_sleep_commands_from_the_page() {
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"sleep","kind":"off"}"#),
+            Some(Asked::Sleep {
+                kind: "off".into(),
+                seconds: None
+            })
+        );
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"sleep","kind":"song"}"#),
+            Some(Asked::Sleep {
+                kind: "song".into(),
+                seconds: None
+            })
+        );
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"sleep","kind":"time","seconds":900}"#),
+            Some(Asked::Sleep {
+                kind: "time".into(),
+                seconds: Some(900.0)
+            })
+        );
+    }
+
+    #[test]
+    fn saves_and_loads_the_last_queue_privately_per_server() {
+        let dir = std::env::temp_dir().join(format!(
+            "soundscape-desktop-queue-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let server = Url::parse("https://music.example.com/").unwrap();
+        let other = Url::parse("https://other.example.com/").unwrap();
+        let saved = SavedQueue {
+            server: server.as_str().into(),
+            tracks: vec![track("a"), track("b")],
+            position: 1,
+            time: 37.5,
+            repeat: "all".into(),
+            shuffle: true,
+            unshuffled: Some(vec![("a".into(), Some("nd-a".into()))]),
+        };
+        save_saved_queue(&dir, &saved).unwrap();
+        let mode = fs::metadata(queue_path(&dir)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(load_saved_queue(&dir, &server), Some(saved));
+        assert_eq!(load_saved_queue(&dir, &other), None);
+        clear_saved_queue(&dir);
+        assert_eq!(load_saved_queue(&dir, &server), None);
+        fs::write(queue_path(&dir), "not json").unwrap();
+        assert_eq!(load_saved_queue(&dir, &server), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

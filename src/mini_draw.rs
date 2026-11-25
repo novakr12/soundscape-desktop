@@ -22,6 +22,10 @@ const REPEAT_ONE: &str = concat!(
 );
 const HEART: &str =
     r#"<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" />"#;
+const SPEAKER: &str = r#"<path d="M4 9h4l5-4v14l-5-4H4z" /><path d="M16.5 9.5a3.5 3.5 0 0 1 0 5" /><path d="M19 7a7 7 0 0 1 0 10" />"#;
+const SPEAKER_LOW: &str =
+    r#"<path d="M4 9h4l5-4v14l-5-4H4z" /><path d="M16.5 9.5a3.5 3.5 0 0 1 0 5" />"#;
+const SPEAKER_MUTED: &str = r#"<path d="M4 9h4l5-4v14l-5-4H4z" /><path d="M17 9l5 6M22 9l-5 6" />"#;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
@@ -33,6 +37,9 @@ pub enum Icon {
     Repeat,
     RepeatOne,
     Heart,
+    Speaker,
+    SpeakerLow,
+    SpeakerMuted,
 }
 
 impl Icon {
@@ -46,6 +53,9 @@ impl Icon {
             Icon::Repeat => REPEAT,
             Icon::RepeatOne => REPEAT_ONE,
             Icon::Heart => HEART,
+            Icon::Speaker => SPEAKER,
+            Icon::SpeakerLow => SPEAKER_LOW,
+            Icon::SpeakerMuted => SPEAKER_MUTED,
         }
     }
 }
@@ -594,7 +604,24 @@ mod tests {
             (16.0, 16.0),
             18.0,
         );
-        assert_eq!(icons.trees.len(), 2);
+        icons.draw(&mut canvas, Icon::Speaker, false, white, (16.0, 16.0), 16.0);
+        icons.draw(
+            &mut canvas,
+            Icon::SpeakerLow,
+            false,
+            white,
+            (16.0, 16.0),
+            16.0,
+        );
+        icons.draw(
+            &mut canvas,
+            Icon::SpeakerMuted,
+            false,
+            white,
+            (16.0, 16.0),
+            16.0,
+        );
+        assert_eq!(icons.trees.len(), 5);
     }
 
     #[test]

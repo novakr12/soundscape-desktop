@@ -34,13 +34,16 @@ pub async fn refresh(app: &AppHandle) {
 
 pub fn act(app: &AppHandle, asked: Asked) {
     let app = app.clone();
+    let refresh_later = asked.action != "volume";
     async_runtime::spawn(async move {
         match mini_action(app.clone(), asked.action, asked.seconds).await {
             Ok(view) => app.host().mini_view(&view),
             Err(problem) => app.host().mini_problem(&problem),
         }
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        refresh(&app).await;
+        if refresh_later {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            refresh(&app).await;
+        }
     });
 }
 
@@ -90,6 +93,7 @@ pub struct MiniView {
     pub shuffle: Option<bool>,
     pub repeat: Option<String>,
     pub can_seek: bool,
+    pub volume: Option<f64>,
     pub visualizer: Option<crate::native::Visualizer>,
     pub spectrum: Option<Vec<f32>>,
     pub accent: Option<u32>,
@@ -228,6 +232,9 @@ pub fn view(app: &AppHandle) -> MiniView {
             shuffle: preview.shuffle,
             repeat: preview.repeat,
             can_seek: preview.length.is_some(),
+            volume: preview
+                .volume
+                .or_else(|| Some(crate::native_link::current_volume())),
             visualizer: crate::native_link::visualizer(app),
             spectrum: crate::native_link::spectrum(app),
             ..MiniView::default()
@@ -278,6 +285,7 @@ async fn with_modes(app: &AppHandle, mut view: MiniView) -> MiniView {
     view.shuffle = modes.shuffle;
     view.repeat = modes.repeat.map(str::to_string);
     view.can_seek = modes.can_seek && view.length_ms.is_some();
+    view.volume = modes.volume;
     view
 }
 
@@ -305,6 +313,24 @@ pub async fn mini_action(
             crate::media::control(&app, &action)
         }
         ("seek", true) => crate::media::control_at(&app, "position", seek_seconds(seconds)),
+        ("volume", true) => {
+            let target = seconds
+                .filter(|v| v.is_finite())
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+            crate::media::set_volume(&app, target);
+        }
+        ("volume", false) => {
+            if let Some(source) = state.mini() {
+                let target = seconds
+                    .filter(|v| v.is_finite())
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0);
+                crate::mpris::set_volume(&source.bus, target)
+                    .await
+                    .map_err(|error| format!("{} didn't respond: {error}", source.name))?;
+            }
+        }
         ("shuffle" | "repeat" | "seek", false) => {
             if let Some(source) = state.mini() {
                 let done = match action.as_str() {

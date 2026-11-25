@@ -179,6 +179,8 @@ pub fn connect_app(app: &AppHandle) {
 pub fn sign_out(app: &AppHandle) {
     let state = app.state::<AppState>();
     let previous = state.config();
+    state.native.lock().expect("native lock").take();
+    native_link::clear_saved(app);
     state.update(|config| {
         config.token = None;
         config.user = None;
@@ -194,6 +196,15 @@ pub fn sign_out(app: &AppHandle) {
             server::revoke_token(&server, &token).await;
         }
     });
+}
+
+pub fn shutdown(app: &AppHandle) {
+    native_link::save_now(app);
+    app.state::<AppState>()
+        .native
+        .lock()
+        .expect("native lock")
+        .take();
 }
 
 pub fn stays_running(config: &Config) -> bool {

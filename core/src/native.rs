@@ -2,7 +2,7 @@ use crate::media::{Preview, UpNext};
 use crate::relay::Relay;
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, RecvTimeoutError, Sender};
@@ -14,6 +14,7 @@ const TICK: Duration = Duration::from_millis(250);
 pub const SPECTRUM_TICK: Duration = Duration::from_millis(15);
 pub const SPECTRUM_EVERY: Duration = Duration::from_millis(30);
 const FADE_TICK: Duration = Duration::from_millis(20);
+const SLEEP_FADE: Duration = Duration::from_secs(10);
 const SPECTRUM_BAR_CHOICES: [usize; 4] = [4, 6, 8, 12];
 const SPECTRUM_BARS: usize = 8;
 pub const SPECTRUM_REST: f32 = 0.15;
@@ -34,32 +35,53 @@ fn trim_heap() {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Gain {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub album: Option<f64>,
-    #[serde(rename = "trackPeak")]
+    #[serde(default, rename = "trackPeak", skip_serializing_if = "Option::is_none")]
     pub track_peak: Option<f64>,
-    #[serde(rename = "albumPeak")]
+    #[serde(default, rename = "albumPeak", skip_serializing_if = "Option::is_none")]
     pub album_peak: Option<f64>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Track {
     #[serde(rename = "trackId")]
     pub track_id: String,
-    #[serde(default, rename = "songId")]
+    #[serde(default, rename = "songId", skip_serializing_if = "Option::is_none")]
     pub song_id: Option<String>,
     pub title: String,
     pub artist: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub album: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gain: Option<Gain>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
+}
+
+fn default_repeat() -> String {
+    "off".to_string()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SavedQueue {
+    pub server: String,
+    pub tracks: Vec<Track>,
+    pub position: usize,
+    #[serde(default)]
+    pub time: f64,
+    #[serde(default = "default_repeat")]
+    pub repeat: String,
+    #[serde(default)]
+    pub shuffle: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unshuffled: Option<Vec<(String, Option<String>)>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -76,6 +98,10 @@ pub struct Handover {
     pub crossfade: f64,
     #[serde(default)]
     pub shuffle: bool,
+    #[serde(default)]
+    pub restored: bool,
+    #[serde(default)]
+    pub unshuffled: Option<Vec<(String, Option<String>)>>,
     #[serde(skip)]
     pub visualizer: Visualizer,
 }
@@ -383,6 +409,34 @@ pub fn cover_for(server: &Url, track: &Track) -> Option<String> {
         .flatten()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SleepRequest {
+    AfterSong,
+    Seconds(f64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Sleep {
+    AfterSong,
+    At(Instant),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SleepSnapshot {
+    AfterSong,
+    Remaining(f64),
+}
+
+fn sleep_snapshot(sleep: Option<Sleep>, now: Instant) -> Option<SleepSnapshot> {
+    match sleep {
+        Some(Sleep::AfterSong) => Some(SleepSnapshot::AfterSong),
+        Some(Sleep::At(deadline)) => Some(SleepSnapshot::Remaining(
+            deadline.saturating_duration_since(now).as_secs_f64(),
+        )),
+        None => None,
+    }
+}
+
 pub enum Command {
     Play,
     Pause,
@@ -395,6 +449,7 @@ pub enum Command {
     SetRepeat(String),
     Shuffle(Option<bool>),
     Volume(f64),
+    Sleep(Option<SleepRequest>),
     Enqueue(Box<Track>, bool),
     Album(String, String),
     Jump(usize),
@@ -417,6 +472,7 @@ pub struct Snapshot {
     pub volume: f64,
     pub repeat: String,
     pub shuffle: bool,
+    pub sleep: Option<SleepSnapshot>,
     pub up_next: Vec<Track>,
 }
 
@@ -487,6 +543,7 @@ struct Queue {
     repeat: String,
     coming: Option<usize>,
     unshuffled: Option<Vec<(String, Option<String>)>>,
+    sleep_after_song: bool,
 }
 
 impl Queue {
@@ -524,6 +581,7 @@ struct Shown {
 pub struct Player {
     commands: Sender<Command>,
     shown: Arc<Mutex<Shown>>,
+    queue: Arc<Mutex<Queue>>,
 }
 
 impl Player {
@@ -541,6 +599,27 @@ impl Player {
 
     pub fn spectrum(&self) -> Option<Vec<f32>> {
         self.shown.lock().expect("shown lock").spectrum.clone()
+    }
+
+    pub fn saved_state(&self, server: &str) -> Option<SavedQueue> {
+        let time = self.snapshot().map_or(0.0, |snapshot| snapshot.time);
+        let queue = self.queue.lock().expect("queue lock");
+        if queue.tracks.is_empty() || queue.at >= queue.tracks.len() {
+            return None;
+        }
+        Some(SavedQueue {
+            server: server.to_string(),
+            tracks: queue.tracks.clone(),
+            position: queue.at,
+            time: if time.is_finite() && time > 0.0 {
+                time
+            } else {
+                0.0
+            },
+            repeat: queue.repeat.clone(),
+            shuffle: queue.unshuffled.is_some(),
+            unshuffled: queue.unshuffled.clone(),
+        })
     }
 }
 
@@ -596,6 +675,9 @@ fn make_playbin(
             return None;
         };
         let mut queue = next_queue.lock().expect("queue lock");
+        if queue.sleep_after_song {
+            return None;
+        }
         if let Some(next) = next_index(queue.at, queue.tracks.len(), &queue.repeat) {
             if let Some(uri) = queue
                 .tracks
@@ -641,6 +723,8 @@ struct Engine {
     report: Report,
     fade_gain: f64,
     fade: Option<(f64, f64, Instant, Duration)>,
+    sleep: Option<Sleep>,
+    sleep_fading: bool,
 }
 
 impl Engine {
@@ -650,6 +734,8 @@ impl Engine {
             || self.released
             || self.outgoing.is_some()
             || self.seek_when_ready.is_some()
+            || matches!(self.sleep, Some(Sleep::AfterSong))
+            || self.sleep_fading
         {
             return;
         }
@@ -716,6 +802,21 @@ impl Engine {
         }
     }
 
+    fn step_sleep(&mut self) {
+        let Some(Sleep::At(deadline)) = self.sleep else {
+            return;
+        };
+        if Instant::now() < deadline {
+            return;
+        }
+        self.sleep = None;
+        if self.want_playing && !self.released {
+            self.drop_outgoing();
+            self.fade = Some((self.fade_gain, 0.0, Instant::now(), SLEEP_FADE));
+            self.sleep_fading = true;
+        }
+    }
+
     fn step_fade(&mut self) {
         let Some((from, to, began, length)) = self.fade else {
             return;
@@ -724,6 +825,14 @@ impl Engine {
         self.fade_gain = from + (to - from) * done;
         if done >= 1.0 {
             self.fade = None;
+            if self.sleep_fading {
+                self.sleep_fading = false;
+                self.fade_gain = 0.0;
+                self.apply_volume();
+                self.set_playing(false);
+                let _ = self.playbin.state(Some(gst::ClockTime::from_mseconds(50)));
+                self.fade_gain = 1.0;
+            }
         }
         self.apply_volume();
     }
@@ -897,11 +1006,13 @@ impl Engine {
                 | Command::Settings { .. }
                 | Command::SetRepeat(_)
                 | Command::Shuffle(_)
+                | Command::Sleep(_)
                 | Command::Album(..)
         ) {
             self.drop_outgoing();
             if self.fade.is_some() {
                 self.fade = None;
+                self.sleep_fading = false;
                 self.fade_gain = 1.0;
                 self.apply_volume();
             }
@@ -933,6 +1044,31 @@ impl Engine {
                 self.volume = volume.clamp(0.0, 1.0);
                 self.muted = false;
                 self.apply_volume();
+            }
+            Command::Sleep(request) => {
+                if self.sleep_fading {
+                    self.sleep_fading = false;
+                    self.fade = None;
+                    self.fade_gain = 1.0;
+                    self.apply_volume();
+                }
+                let (next_sleep, after_song) = match request {
+                    None => (None, false),
+                    Some(SleepRequest::AfterSong) => (Some(Sleep::AfterSong), true),
+                    Some(SleepRequest::Seconds(secs)) => {
+                        let bounded = if secs.is_finite() {
+                            secs.clamp(1.0, 86_400.0)
+                        } else {
+                            1.0
+                        };
+                        (
+                            Some(Sleep::At(Instant::now() + Duration::from_secs_f64(bounded))),
+                            false,
+                        )
+                    }
+                };
+                self.sleep = next_sleep;
+                self.queue.lock().expect("queue lock").sleep_after_song = after_song;
             }
             Command::Album(track_id, album) => {
                 let mut queue = self.queue.lock().expect("queue lock");
@@ -1015,7 +1151,18 @@ impl Engine {
                             None => false,
                         }
                     };
-                    if moved {
+                    if moved && matches!(self.sleep, Some(Sleep::AfterSong)) {
+                        self.sleep = None;
+                        self.queue.lock().expect("queue lock").sleep_after_song = false;
+                        self.seek_target.set(None);
+                        self.last_shown.set(0.0);
+                        self.heard = 0.0;
+                        self.last = None;
+                        self.counted = false;
+                        self.set_playing(false);
+                        self.seek(0.0);
+                        self.apply_volume();
+                    } else if moved {
                         self.seek_target.set(None);
                         self.last_shown.set(0.0);
                         self.started();
@@ -1023,9 +1170,43 @@ impl Engine {
                     self.failures = 0;
                 }
                 gst::MessageView::Eos(_) => {
-                    self.want_playing = false;
-                    let _ = self.playbin.set_state(gst::State::Paused);
-                    self.paused_since = Some(Instant::now());
+                    if matches!(self.sleep, Some(Sleep::AfterSong)) {
+                        self.sleep = None;
+                        let next = {
+                            let mut queue = self.queue.lock().expect("queue lock");
+                            queue.sleep_after_song = false;
+                            if queue.repeat != "one" {
+                                next_index(queue.at, queue.tracks.len(), &queue.repeat)
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(next) = next {
+                            {
+                                let mut queue = self.queue.lock().expect("queue lock");
+                                queue.at = next;
+                                queue.coming = None;
+                            }
+                            self.want_playing = false;
+                            let _ = self.playbin.set_state(gst::State::Null);
+                            self.released = true;
+                            self.resume_time = 0.0;
+                            self.last_shown.set(0.0);
+                            self.seek_target.set(None);
+                            self.heard = 0.0;
+                            self.last = None;
+                            self.counted = false;
+                            self.paused_since = Some(Instant::now());
+                        } else {
+                            self.want_playing = false;
+                            let _ = self.playbin.set_state(gst::State::Paused);
+                            self.paused_since = Some(Instant::now());
+                        }
+                    } else {
+                        self.want_playing = false;
+                        let _ = self.playbin.set_state(gst::State::Paused);
+                        self.paused_since = Some(Instant::now());
+                    }
                 }
                 gst::MessageView::Error(_) => {
                     self.failures += 1;
@@ -1145,6 +1326,7 @@ impl Engine {
             .and_then(|at| queue.tracks.get(at));
         let position = self.position();
         let playing = self.want_playing && !self.released;
+        let effective_volume = if self.muted { 0.0 } else { self.volume };
         let preview = Preview {
             title: track.title.clone(),
             artist: track.artist.clone(),
@@ -1166,6 +1348,7 @@ impl Engine {
             has_previous: true,
             shuffle: Some(queue.unshuffled.is_some()),
             repeat: Some(queue.repeat.clone()),
+            volume: Some(effective_volume),
             up_next: next.map(|track| UpNext {
                 title: track.title.clone(),
                 artist: track.artist.clone(),
@@ -1176,9 +1359,10 @@ impl Engine {
             playing,
             time: position,
             duration: self.stream_length().or(track.duration),
-            volume: self.volume,
+            volume: effective_volume,
             repeat: queue.repeat.clone(),
             shuffle: queue.unshuffled.is_some(),
+            sleep: sleep_snapshot(self.sleep, Instant::now()),
             up_next: queue
                 .tracks
                 .iter()
@@ -1214,8 +1398,21 @@ pub fn start(
         repeat: handover.repeat.clone(),
         coming: None,
         unshuffled: None,
+        sleep_after_song: false,
     };
-    if handover.shuffle {
+    if handover.restored {
+        if handover.shuffle {
+            first.unshuffled = handover.unshuffled.clone().or_else(|| {
+                let from = (handover.position + 1).min(handover.tracks.len());
+                Some(
+                    handover.tracks[from..]
+                        .iter()
+                        .map(|track| (track.track_id.clone(), track.song_id.clone()))
+                        .collect(),
+                )
+            });
+        }
+    } else if handover.shuffle {
         first.set_shuffle(true);
     }
     let queue = Arc::new(Mutex::new(first));
@@ -1227,6 +1424,8 @@ pub fn start(
         spectrum: None,
     }));
     let (commands, receive) = channel::<Command>();
+    let restored_paused = handover.restored && !handover.playing;
+    let initial_time = handover.time.max(0.0);
     let mut engine = Engine {
         playbin,
         spectrum_element,
@@ -1236,7 +1435,7 @@ pub fn start(
         active,
         outgoing: None,
         crossfade: handover.crossfade.max(0.0),
-        queue,
+        queue: queue.clone(),
         shown: shown.clone(),
         server,
         relay,
@@ -1246,9 +1445,9 @@ pub fn start(
         want_playing: handover.playing,
         seek_when_ready: None,
         seek_target: std::cell::Cell::new(None),
-        last_shown: std::cell::Cell::new(handover.time.max(0.0)),
-        released: false,
-        resume_time: 0.0,
+        last_shown: std::cell::Cell::new(initial_time),
+        released: restored_paused,
+        resume_time: if restored_paused { initial_time } else { 0.0 },
         paused_since: (!handover.playing).then(Instant::now),
         heard: 0.0,
         last: None,
@@ -1257,13 +1456,20 @@ pub fn start(
         report,
         fade_gain: 1.0,
         fade: None,
+        sleep: None,
+        sleep_fading: false,
     };
     std::thread::Builder::new()
         .name("soundscape-player".into())
         .spawn(move || {
-            engine.load(handover.position, handover.time);
+            if restored_paused {
+                engine.publish();
+            } else {
+                engine.load(handover.position, handover.time);
+                engine.publish();
+            }
             loop {
-                let wait = if engine.fade.is_some() || engine.outgoing.is_some() {
+                let base_wait = if engine.fade.is_some() || engine.outgoing.is_some() {
                     Some(FADE_TICK)
                 } else if engine.want_playing && engine.visualizer.on {
                     Some(SPECTRUM_TICK)
@@ -1279,6 +1485,18 @@ pub fn start(
                         RELEASE_AFTER.saturating_sub(since.elapsed())
                     });
                     Some(remaining.clamp(Duration::from_millis(250), Duration::from_secs(1)))
+                };
+                let sleep_wait = match engine.sleep {
+                    Some(Sleep::At(deadline)) => Some(
+                        deadline
+                            .saturating_duration_since(Instant::now())
+                            .clamp(Duration::from_millis(20), Duration::from_secs(1)),
+                    ),
+                    _ => None,
+                };
+                let wait = match (base_wait, sleep_wait) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
                 };
                 let received = match wait {
                     Some(timeout) => match receive.recv_timeout(timeout) {
@@ -1309,10 +1527,13 @@ pub fn start(
                 }
                 let prev_released = engine.released;
                 let was_playing = engine.want_playing;
+                let prev_sleep = engine.sleep;
+                engine.step_sleep();
                 if engine.want_playing
                     || engine.fade.is_some()
                     || engine.outgoing.is_some()
                     || engine.seek_when_ready.is_some()
+                    || engine.sleep.is_some()
                     || !engine.released
                 {
                     engine.step_fade();
@@ -1329,6 +1550,7 @@ pub fn start(
                     || engine.fade.is_some()
                     || engine.outgoing.is_some()
                     || engine.released != prev_released
+                    || engine.sleep != prev_sleep
                 {
                     engine.publish();
                 }
@@ -1336,7 +1558,11 @@ pub fn start(
             }
         })
         .map_err(|error| error.to_string())?;
-    Ok(Player { commands, shown })
+    Ok(Player {
+        commands,
+        shown,
+        queue,
+    })
 }
 
 #[cfg(test)]
@@ -1493,6 +1719,7 @@ mod tests {
             repeat: "off".into(),
             coming: None,
             unshuffled: None,
+            sleep_after_song: false,
         };
         queue.set_shuffle(true);
         assert_eq!(ids(&queue.tracks[..2]), ["a", "b"]);
@@ -1520,6 +1747,7 @@ mod tests {
             repeat: "off".into(),
             coming: Some(1),
             unshuffled: None,
+            sleep_after_song: false,
         };
         queue.set_shuffle(true);
         assert_eq!(ids(&queue.tracks[..2]), ["a", "b"]);
@@ -1665,5 +1893,36 @@ mod tests {
             normalized.iter().any(|&v| v > 0.4),
             "440Hz sine wave should raise a spectrum bar: {normalized:?}"
         );
+    }
+
+    #[test]
+    fn describes_sleep_snapshots_and_saved_queues() {
+        let now = Instant::now();
+        assert_eq!(sleep_snapshot(None, now), None);
+        assert_eq!(
+            sleep_snapshot(Some(Sleep::AfterSong), now),
+            Some(SleepSnapshot::AfterSong)
+        );
+        let later = sleep_snapshot(Some(Sleep::At(now + Duration::from_secs(90))), now);
+        assert!(
+            matches!(later, Some(SleepSnapshot::Remaining(secs)) if (secs - 90.0).abs() < 0.01)
+        );
+        assert!(matches!(
+            sleep_snapshot(Some(Sleep::At(now - Duration::from_secs(5))), now),
+            Some(SleepSnapshot::Remaining(secs)) if secs == 0.0
+        ));
+
+        let saved = SavedQueue {
+            server: "https://music.example.com/".into(),
+            tracks: vec![track("One", Some("Album"))],
+            position: 0,
+            time: 42.5,
+            repeat: "all".into(),
+            shuffle: true,
+            unshuffled: Some(vec![("band-one".into(), Some("nd-One".into()))]),
+        };
+        let encoded = serde_json::to_string(&saved).unwrap();
+        let decoded: SavedQueue = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, saved);
     }
 }

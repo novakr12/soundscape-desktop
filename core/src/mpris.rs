@@ -46,11 +46,12 @@ pub async fn control(bus: &str, method: &str) -> zbus::Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Modes {
     pub shuffle: Option<bool>,
     pub repeat: Option<&'static str>,
     pub can_seek: bool,
+    pub volume: Option<f64>,
 }
 
 pub fn repeat_name(loop_status: &str) -> Option<&'static str> {
@@ -78,11 +79,30 @@ pub async fn modes(bus: &str) -> Modes {
         return Modes::default();
     };
     let loop_status: Option<String> = player.get_property("LoopStatus").await.ok();
+    let volume = player
+        .get_property::<f64>("Volume")
+        .await
+        .ok()
+        .filter(|volume| volume.is_finite())
+        .map(|volume| volume.clamp(0.0, 1.0));
     Modes {
         shuffle: player.get_property("Shuffle").await.ok(),
         repeat: loop_status.as_deref().and_then(repeat_name),
         can_seek: player.get_property("CanSeek").await.unwrap_or(false),
+        volume,
     }
+}
+
+pub async fn set_volume(bus: &str, volume: f64) -> zbus::Result<()> {
+    let connection = session().await?;
+    let player = proxy(&connection, bus, PLAYER).await?;
+    let clamped = if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    player.set_property("Volume", clamped).await?;
+    Ok(())
 }
 
 pub async fn toggle_shuffle(bus: &str) -> zbus::Result<()> {

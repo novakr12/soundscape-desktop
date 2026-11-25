@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::platform::wayland::EventLoopBuilderExtWayland;
 use winit::platform::x11::EventLoopBuilderExtX11;
@@ -34,6 +34,34 @@ const SEEK_GIVE_UP: Duration = Duration::from_secs(4);
 const TOGGLE_GIVE_UP: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(250);
 const VISUALIZER_PAD: f32 = 5.0;
+const VOLUME_STEP: f64 = 0.05;
+const VOLUME_HUD_SHOW: Duration = Duration::from_millis(1200);
+const VOLUME_GIVE_UP: Duration = Duration::from_secs(2);
+const PIXEL_SCROLL_STEP: f64 = 30.0;
+
+fn step_scroll_volume(current: f64, notches: i32) -> f64 {
+    let base = if current.is_finite() {
+        current.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let next = (base + f64::from(notches) * VOLUME_STEP).clamp(0.0, 1.0);
+    (next * 100.0).round() / 100.0
+}
+
+fn consume_pixel_scroll(accum: &mut f64, delta_y: f64, scale: f64) -> i32 {
+    if !delta_y.is_finite() || delta_y == 0.0 {
+        return 0;
+    }
+    if *accum != 0.0 && (*accum > 0.0) != (delta_y > 0.0) {
+        *accum = 0.0;
+    }
+    *accum += delta_y;
+    let threshold = PIXEL_SCROLL_STEP * scale.max(1.0);
+    let steps = (*accum / threshold).trunc() as i32;
+    *accum -= f64::from(steps) * threshold;
+    steps
+}
 
 enum Event {
     Open,
@@ -152,6 +180,10 @@ fn run(app: AppHandle, sender: mpsc::Sender<Option<EventLoopProxy<Event>>>) {
         dragging: None,
         seek_hold: None,
         toggle_hold: None,
+        volume_hold: None,
+        volume_hud: None,
+        scroll_accum: 0.0,
+        last_scroll: None,
         hover: None,
         spots: Vec::new(),
     };
@@ -187,6 +219,10 @@ struct Player {
     dragging: Option<u64>,
     seek_hold: Option<(u64, Instant)>,
     toggle_hold: Option<(bool, Instant)>,
+    volume_hold: Option<(f64, Instant)>,
+    volume_hud: Option<(f64, Instant)>,
+    scroll_accum: f64,
+    last_scroll: Option<Instant>,
     hover: Option<Spot>,
     spots: Vec<(Spot, Rect, bool)>,
 }
@@ -233,6 +269,10 @@ impl Player {
         OPEN.store(false, Ordering::Relaxed);
         self.dragging = None;
         self.next_tick = None;
+        self.volume_hold = None;
+        self.volume_hud = None;
+        self.scroll_accum = 0.0;
+        self.last_scroll = None;
         self.canvas = None;
         self.shown = None;
         self.fonts = None;
@@ -287,6 +327,14 @@ impl Player {
             } else {
                 view.position_ms = Some(target);
                 since = asked;
+            }
+        }
+        if let Some((target, asked)) = self.volume_hold {
+            let arrived = view.volume.is_some_and(|v| (v - target).abs() < 0.015);
+            if arrived || asked.elapsed() >= VOLUME_GIVE_UP {
+                self.volume_hold = None;
+            } else {
+                view.volume = Some(target);
             }
         }
         let same_song = view.title == self.view.title && view.kind == self.view.kind;
@@ -524,27 +572,78 @@ impl ApplicationHandler<Event> for Player {
                     }
                 }
             },
+            WindowEvent::MouseWheel { delta, .. } => {
+                if !self.active() {
+                    return;
+                }
+                let Some(current) = self.view.volume else {
+                    return;
+                };
+                let now = Instant::now();
+                if self.last_scroll.is_some_and(|at| {
+                    now.saturating_duration_since(at) > Duration::from_millis(400)
+                }) {
+                    self.scroll_accum = 0.0;
+                }
+                self.last_scroll = Some(now);
+                let notches = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => {
+                        if y > 0.0 {
+                            y.ceil() as i32
+                        } else if y < 0.0 {
+                            y.floor() as i32
+                        } else {
+                            0
+                        }
+                    }
+                    MouseScrollDelta::PixelDelta(moved) => {
+                        let scale = f64::from(self.scale());
+                        consume_pixel_scroll(&mut self.scroll_accum, moved.y, scale)
+                    }
+                };
+                if notches != 0 {
+                    let next = step_scroll_volume(current, notches);
+                    self.view.volume = Some(next);
+                    self.volume_hold = Some((next, now));
+                    self.volume_hud = Some((next, now));
+                    self.ask("volume", Some(next));
+                    self.redraw();
+                }
+            }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        if let Some((_, since)) = self.volume_hud
+            && since.elapsed() >= VOLUME_HUD_SHOW
+        {
+            self.volume_hud = None;
+            self.redraw();
+        }
+        let mut earliest: Option<Instant> = None;
         if self.shown.is_some() && self.view.playing && self.dragging.is_none() {
-            let now = Instant::now();
-            match self.next_tick {
-                Some(due) if now < due => {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(due));
-                }
+            let due = match self.next_tick {
+                Some(due) if now < due => due,
                 _ => {
                     self.redraw();
-                    let due = now + TICK;
-                    self.next_tick = Some(due);
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(due));
+                    let next = now + TICK;
+                    self.next_tick = Some(next);
+                    next
                 }
-            }
+            };
+            earliest = Some(due);
         } else {
             self.next_tick = None;
-            event_loop.set_control_flow(ControlFlow::Wait);
+        }
+        if let Some((_, since)) = self.volume_hud {
+            let hud_due = since + VOLUME_HUD_SHOW;
+            earliest = Some(earliest.map_or(hud_due, |other| other.min(hud_due)));
+        }
+        match earliest {
+            Some(due) => event_loop.set_control_flow(ControlFlow::WaitUntil(due)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 }
@@ -855,5 +954,93 @@ fn draw(
     ) {
         spots.push((Spot::Seek, rect, seekable));
     }
+    if let Some((vol, since)) = player.volume_hud
+        && since.elapsed() < VOLUME_HUD_SHOW
+    {
+        let hud_w = 152.0;
+        let hud_h = 30.0;
+        let hud_x = (WIDTH - hud_w) / 2.0;
+        let hud_y = row - hud_h / 2.0;
+        if let Some(outer) = Rect::from_xywh(
+            k(hud_x - 1.0),
+            k(hud_y - 1.0),
+            k(hud_w + 2.0),
+            k(hud_h + 2.0),
+        ) {
+            fill(
+                canvas,
+                outer,
+                k((hud_h + 2.0) / 2.0),
+                faded(palette.text, 0.16),
+            );
+        }
+        if let Some(inner) = Rect::from_xywh(k(hud_x), k(hud_y), k(hud_w), k(hud_h)) {
+            fill(canvas, inner, k(hud_h / 2.0), palette.background);
+        }
+        let percent = (vol.clamp(0.0, 1.0) * 100.0).round() as u8;
+        let speaker = if percent == 0 {
+            Icon::SpeakerMuted
+        } else if percent <= 50 {
+            Icon::SpeakerLow
+        } else {
+            Icon::Speaker
+        };
+        icons.draw(
+            canvas,
+            speaker,
+            false,
+            if percent > 0 {
+                palette.accent
+            } else {
+                palette.muted
+            },
+            (k(hud_x + 20.0), k(row)),
+            k(16.0),
+        );
+        let track_x = hud_x + 36.0;
+        let track_w = 56.0;
+        if let Some(rect) = Rect::from_xywh(k(track_x), k(row - 2.0), k(track_w), k(4.0)) {
+            fill(canvas, rect, k(2.0), faded(palette.muted, 0.3));
+        }
+        let vol_fill = (vol.clamp(0.0, 1.0) as f32) * track_w;
+        if vol_fill > 0.0
+            && let Some(rect) = Rect::from_xywh(k(track_x), k(row - 2.0), k(vol_fill), k(4.0))
+        {
+            fill(canvas, rect, k(2.0), palette.accent);
+        }
+        let pct_text = format!("{percent}%");
+        centered(
+            canvas,
+            &fonts.bold,
+            &pct_text,
+            k(12.0),
+            (k(hud_x + hud_w - 28.0), k(row)),
+            palette.text,
+        );
+    }
     spots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steps_mini_volume_cleanly_in_five_percent_notches() {
+        assert_eq!(step_scroll_volume(0.8, 1), 0.85);
+        assert_eq!(step_scroll_volume(0.8, -1), 0.75);
+        assert_eq!(step_scroll_volume(0.98, 1), 1.0);
+        assert_eq!(step_scroll_volume(0.02, -1), 0.0);
+        assert_eq!(step_scroll_volume(f64::NAN, 1), 0.05);
+    }
+
+    #[test]
+    fn accumulates_pixel_scroll_deltas_without_jitter() {
+        let mut accum = 0.0;
+        assert_eq!(consume_pixel_scroll(&mut accum, 20.0, 1.0), 0);
+        assert_eq!(consume_pixel_scroll(&mut accum, 15.0, 1.0), 1);
+        assert!((accum - 5.0).abs() < 1e-9);
+        assert_eq!(consume_pixel_scroll(&mut accum, -35.0, 1.0), -1);
+        assert_eq!(consume_pixel_scroll(&mut accum, 0.0, 1.0), 0);
+    }
 }

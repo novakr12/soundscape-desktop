@@ -68,6 +68,7 @@ fn main() {
         soundscape_core::show(&app);
     }
     let _ = stopped.recv();
+    soundscape_core::shutdown(&app);
     host.stop_window();
     if let Some(connection) = instance {
         let _ = async_runtime::block_on(connection.release_name(soundscape_core::IDENTIFIER));

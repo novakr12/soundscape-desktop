@@ -199,8 +199,10 @@
       if (max <= min) return;
       const current = Number.isFinite(Number(slider.value)) ? Number(slider.value) : min;
       const rawStep = slider.step && slider.step !== "any" ? Number(slider.step) : 0;
-      const step =
-        rawStep > 0
+      const isVolume = Boolean(slider.closest(".volume") || slider.classList.contains("device-volume"));
+      const step = isVolume
+        ? Math.max(rawStep, (max - min) / 20)
+        : rawStep > 0
           ? rawStep
           : slider.closest(".player-seek, .device-seek")
             ? Math.min(5, Math.max(1, (max - min) / 40))

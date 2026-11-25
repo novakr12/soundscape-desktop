@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.11.11" date="2026-11-25">
+      <description>
+        <ul>
+          <li>Scale built-in player volume on a smooth, uniform cubic curve matching the web app, keeping 5% wheel steps over the finer 1% slider</li>
+          <li>Slide the Soundscape wordmark and tagline in smoothly with the home page logo animation</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.11.10" date="2026-11-24">
       <description>
         <ul>

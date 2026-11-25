@@ -286,6 +286,14 @@ pub fn crossfade_due(crossfade: f64, length: f64, position: f64) -> bool {
     crossfade > 0.0 && length >= crossfade * 3.0 && length - position <= crossfade
 }
 
+/// Map a uniform UI slider position in `0..=1` onto a cubic perceptual loudness curve.
+pub fn volume_gain(volume: f64) -> f64 {
+    if !volume.is_finite() {
+        return 0.0;
+    }
+    volume.clamp(0.0, 1.0).powi(3)
+}
+
 pub fn gain_level(gain: Option<&Gain>, by_album: bool) -> f64 {
     let Some(gain) = gain else { return 1.0 };
     let use_album = by_album && gain.album.is_some();
@@ -740,7 +748,7 @@ impl Engine {
         };
         self.playbin.set_property(
             "volume",
-            (self.volume * level * self.fade_gain).clamp(0.0, 1.0),
+            (volume_gain(self.volume) * level * self.fade_gain).clamp(0.0, 1.0),
         );
         self.playbin.set_property("mute", self.muted);
     }
@@ -1370,6 +1378,19 @@ mod tests {
             ..Gain::default()
         };
         assert_eq!(gain_level(Some(&quiet), false), 1.0);
+    }
+
+    #[test]
+    fn scales_volume_like_the_web_player() {
+        assert_eq!(volume_gain(0.0), 0.0);
+        assert_eq!(volume_gain(1.0), 1.0);
+        assert!((volume_gain(0.05) - 1.25e-4).abs() < 1e-12);
+        assert!((volume_gain(0.5) - 0.125).abs() < 1e-12);
+        assert!((volume_gain(0.8) - 0.512).abs() < 1e-12);
+        assert_eq!(volume_gain(-0.2), 0.0);
+        assert_eq!(volume_gain(1.5), 1.0);
+        assert_eq!(volume_gain(f64::NAN), 0.0);
+        assert_eq!(volume_gain(f64::INFINITY), 0.0);
     }
 
     #[test]

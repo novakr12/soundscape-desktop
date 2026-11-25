@@ -453,6 +453,8 @@ pub enum Command {
     Enqueue(Box<Track>, bool),
     Album(String, String),
     Jump(usize),
+    Remove(usize),
+    Move(usize, usize),
     Settings {
         volume: f64,
         muted: bool,
@@ -519,6 +521,66 @@ fn seed() -> u64 {
 
 pub fn shifted(coming: Option<usize>, inserted: usize) -> Option<usize> {
     coming.map(|index| if index >= inserted { index + 1 } else { index })
+}
+
+pub fn remove_upcoming(
+    tracks: &mut Vec<Track>,
+    at: usize,
+    ahead: usize,
+    coming: Option<usize>,
+    unshuffled: &mut Option<Vec<(String, Option<String>)>>,
+) -> Option<(Option<usize>, bool)> {
+    if ahead == 0 || at + ahead >= tracks.len() {
+        return None;
+    }
+    let target = at + ahead;
+    let removed = tracks.remove(target);
+    if let Some(original) = unshuffled.as_mut() {
+        if let Some(found) = original
+            .iter()
+            .position(|(id, song_id)| *id == removed.track_id && *song_id == removed.song_id)
+        {
+            original.remove(found);
+        }
+    }
+    Some(match coming {
+        Some(c) if c == target => (None, true),
+        Some(c) if c > target => (Some(c - 1), false),
+        other => (other, false),
+    })
+}
+
+pub fn move_upcoming(
+    tracks: &mut Vec<Track>,
+    at: usize,
+    from: usize,
+    to: usize,
+    coming: Option<usize>,
+    repeat: &str,
+) -> Option<(Option<usize>, bool)> {
+    if from == 0 || to == 0 || from == to || at + from >= tracks.len() || at + to >= tracks.len() {
+        return None;
+    }
+    let src = at + from;
+    let dst = at + to;
+    let item = tracks.remove(src);
+    tracks.insert(dst, item);
+    let shifted_coming = coming.map(|c| {
+        if c == src {
+            dst
+        } else if src < dst && src < c && c <= dst {
+            c - 1
+        } else if dst < src && dst <= c && c < src {
+            c + 1
+        } else {
+            c
+        }
+    });
+    if coming.is_some() && next_index(at, tracks.len(), repeat) != shifted_coming {
+        Some((None, true))
+    } else {
+        Some((shifted_coming, false))
+    }
 }
 
 pub fn command_for(action: &str, seconds: f64) -> Option<Command> {
@@ -599,6 +661,10 @@ impl Player {
 
     pub fn spectrum(&self) -> Option<Vec<f32>> {
         self.shown.lock().expect("shown lock").spectrum.clone()
+    }
+
+    pub fn queue_tracks(&self) -> Vec<Track> {
+        self.queue.lock().expect("queue lock").tracks.clone()
     }
 
     pub fn saved_state(&self, server: &str) -> Option<SavedQueue> {
@@ -903,6 +969,37 @@ impl Engine {
         self.started();
     }
 
+    fn reload_current_in_place(&mut self) {
+        if self.released {
+            return;
+        }
+        let pos = self.position();
+        let uri = {
+            let mut queue = self.queue.lock().expect("queue lock");
+            queue.coming = None;
+            queue
+                .tracks
+                .get(queue.at)
+                .and_then(|track| source_for(&self.relay, track))
+        };
+        let Some(uri) = uri else {
+            return;
+        };
+        let _ = self.playbin.set_state(gst::State::Null);
+        self.heard_ahead.clear();
+        self.playbin.set_property("uri", uri.as_str());
+        self.seek_when_ready = (pos > 0.5).then_some(pos);
+        self.seek_target.set(None);
+        self.last_shown.set(pos);
+        let state = if self.want_playing {
+            gst::State::Playing
+        } else {
+            gst::State::Paused
+        };
+        self.apply_volume();
+        let _ = self.playbin.set_state(state);
+    }
+
     fn position(&self) -> f64 {
         if self.released {
             return self.resume_time;
@@ -1008,6 +1105,8 @@ impl Engine {
                 | Command::Shuffle(_)
                 | Command::Sleep(_)
                 | Command::Album(..)
+                | Command::Remove(_)
+                | Command::Move(..)
         ) {
             self.drop_outgoing();
             if self.fade.is_some() {
@@ -1123,6 +1222,46 @@ impl Engine {
                 };
                 if ahead > 0 && at + ahead < length {
                     self.load(at + ahead, 0.0);
+                }
+            }
+            Command::Remove(ahead) => {
+                let needs_reload = {
+                    let mut queue = self.queue.lock().expect("queue lock");
+                    let at = queue.at;
+                    let coming = queue.coming;
+                    let Queue {
+                        tracks, unshuffled, ..
+                    } = &mut *queue;
+                    if let Some((next_coming, reload)) =
+                        remove_upcoming(tracks, at, ahead, coming, unshuffled)
+                    {
+                        queue.coming = next_coming;
+                        reload
+                    } else {
+                        false
+                    }
+                };
+                if needs_reload {
+                    self.reload_current_in_place();
+                }
+            }
+            Command::Move(from, to) => {
+                let needs_reload = {
+                    let mut queue = self.queue.lock().expect("queue lock");
+                    let at = queue.at;
+                    let coming = queue.coming;
+                    let repeat = queue.repeat.clone();
+                    if let Some((next_coming, reload)) =
+                        move_upcoming(&mut queue.tracks, at, from, to, coming, &repeat)
+                    {
+                        queue.coming = next_coming;
+                        reload
+                    } else {
+                        false
+                    }
+                };
+                if needs_reload {
+                    self.reload_current_in_place();
                 }
             }
             Command::Stop => {
@@ -1771,6 +1910,61 @@ mod tests {
         assert_eq!(shifted(Some(3), 3), Some(4));
         assert_eq!(shifted(Some(2), 3), Some(2));
         assert_eq!(shifted(None, 0), None);
+    }
+
+    #[test]
+    fn removes_and_reorders_upcoming_songs() {
+        let mut tracks = named(&["a", "b", "c", "d"]);
+        let mut unshuffled = Some(vec![
+            ("b".into(), Some("nd-b".into())),
+            ("c".into(), Some("nd-c".into())),
+            ("d".into(), Some("nd-d".into())),
+        ]);
+        assert_eq!(
+            remove_upcoming(&mut tracks, 0, 0, None, &mut unshuffled),
+            None
+        );
+        assert_eq!(
+            remove_upcoming(&mut tracks, 0, 4, None, &mut unshuffled),
+            None
+        );
+        assert_eq!(
+            remove_upcoming(&mut tracks, 0, 2, Some(3), &mut unshuffled),
+            Some((Some(2), false))
+        );
+        assert_eq!(ids(&tracks), ["a", "b", "d"]);
+        assert_eq!(
+            unshuffled,
+            Some(vec![
+                ("b".into(), Some("nd-b".into())),
+                ("d".into(), Some("nd-d".into())),
+            ])
+        );
+        assert_eq!(
+            remove_upcoming(&mut tracks, 0, 1, Some(1), &mut unshuffled),
+            Some((None, true))
+        );
+        assert_eq!(ids(&tracks), ["a", "d"]);
+
+        let mut list = named(&["a", "b", "c", "d"]);
+        assert_eq!(move_upcoming(&mut list, 0, 0, 1, None, "off"), None);
+        assert_eq!(move_upcoming(&mut list, 0, 2, 2, None, "off"), None);
+        assert_eq!(move_upcoming(&mut list, 0, 1, 4, None, "off"), None);
+        assert_eq!(
+            move_upcoming(&mut list, 0, 3, 2, Some(1), "off"),
+            Some((Some(1), false))
+        );
+        assert_eq!(ids(&list), ["a", "b", "d", "c"]);
+        assert_eq!(
+            move_upcoming(&mut list, 0, 2, 1, Some(1), "off"),
+            Some((None, true))
+        );
+        assert_eq!(ids(&list), ["a", "d", "b", "c"]);
+        assert_eq!(
+            move_upcoming(&mut list, 0, 1, 3, Some(1), "off"),
+            Some((None, true))
+        );
+        assert_eq!(ids(&list), ["a", "b", "c", "d"]);
     }
 
     #[test]

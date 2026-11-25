@@ -208,6 +208,17 @@ pub enum Asked {
     Jump {
         ahead: usize,
     },
+    Remove {
+        ahead: usize,
+    },
+    Move {
+        from: usize,
+        to: usize,
+    },
+    SaveQueue {
+        id: String,
+        name: String,
+    },
     Sleep {
         kind: String,
         #[serde(default)]
@@ -328,6 +339,7 @@ pub fn page_script(id: &str, name: &str) -> String {
   window.soundscapeDeviceId = {};
   window.soundscapeDeviceName = {};
   window.soundscapeDeviceHeld = true;
+  window.soundscapeNativeQueueSave = true;
   const prefix = {};
   const saveVolume = (value) => {{
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return;
@@ -436,6 +448,12 @@ pub fn report_json(id: &str, name: &str, snapshot: Option<&Snapshot>, volume: f6
 pub fn report_script(json: &str) -> String {
     format!(
         "(() => {{ const report = window.soundscapeNativeReport; if (report) report({json}); }})()"
+    )
+}
+
+pub fn queue_saved_script(detail: &Value) -> String {
+    format!(
+        "window.dispatchEvent(new CustomEvent(\"soundscape-queue-saved\", {{ detail: {detail} }})), undefined"
     )
 }
 
@@ -1054,6 +1072,105 @@ fn send_elsewhere(app: &AppHandle, to: String) {
     });
 }
 
+fn save_queue_as_playlist(app: &AppHandle, id: String, name: String) {
+    let fail = |message: &str| {
+        let detail = json!({ "id": id, "ok": false, "error": message });
+        app.host().eval(MAIN, queue_saved_script(&detail));
+    };
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        fail("Give the playlist a name.");
+        return;
+    }
+    let tracks = with_player(app, Player::queue_tracks).unwrap_or_default();
+    if tracks.is_empty() {
+        fail("The queue is empty.");
+        return;
+    }
+    let Some((server, token)) = crate::server::credentials(app) else {
+        fail("Log in to save playlists.");
+        return;
+    };
+    let payload_tracks: Vec<Value> = tracks
+        .into_iter()
+        .take(MOST_TRACKS)
+        .map(|track| {
+            let mut item = json!({
+                "trackId": track.track_id,
+                "title": track.title,
+                "artist": track.artist,
+            });
+            if let Some(song_id) = track.song_id {
+                item["songId"] = Value::from(song_id);
+            }
+            item
+        })
+        .collect();
+    let body = json!({ "name": name, "tracks": payload_tracks });
+    let app = app.clone();
+    async_runtime::spawn(async move {
+        let detail = match crate::server::address(&server, "/api/music/queue-playlist") {
+            Err(_) => json!({ "id": id, "ok": false, "error": "Could not save playlist." }),
+            Ok(address) => {
+                let sent = crate::server::client()
+                    .post(address)
+                    .timeout(Duration::from_secs(30))
+                    .header("authorization", format!("Token {token}"))
+                    .json(&body)
+                    .send()
+                    .await;
+                match sent {
+                    Err(_) => {
+                        json!({ "id": id, "ok": false, "error": "Could not reach Soundscape." })
+                    }
+                    Ok(response) => {
+                        let ok = response.status().is_success();
+                        let answered = response.json::<Value>().await.ok();
+                        if ok {
+                            let saved = answered
+                                .as_ref()
+                                .and_then(|v| v.get("saved"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0);
+                            let total = answered
+                                .as_ref()
+                                .and_then(|v| v.get("total"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0);
+                            let missing = answered
+                                .as_ref()
+                                .and_then(|v| v.get("missing"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0);
+                            let saved_name = answered
+                                .as_ref()
+                                .and_then(|v| v.get("name"))
+                                .and_then(Value::as_str)
+                                .unwrap_or(&name);
+                            json!({
+                                "id": id,
+                                "ok": true,
+                                "name": saved_name,
+                                "saved": saved,
+                                "total": total,
+                                "missing": missing,
+                            })
+                        } else {
+                            let message = answered
+                                .as_ref()
+                                .and_then(|v| v.get("error"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("Could not save playlist.");
+                            json!({ "id": id, "ok": false, "error": message })
+                        }
+                    }
+                }
+            }
+        };
+        app.host().eval(MAIN, queue_saved_script(&detail));
+    });
+}
+
 pub fn heard(app: &AppHandle, message: &str) -> bool {
     let Some(asked) = asked(message) else {
         return false;
@@ -1127,6 +1244,20 @@ fn handle_asked(app: &AppHandle, asked: Asked, sync_page: bool) {
             send(Command::Shuffle(Some(on)));
         }
         Asked::Jump { ahead } if (1..=MOST_UP_NEXT).contains(&ahead) => send(Command::Jump(ahead)),
+        Asked::Remove { ahead } if (1..=MOST_UP_NEXT).contains(&ahead) => {
+            send(Command::Remove(ahead))
+        }
+        Asked::Move { from, to }
+            if (1..=MOST_UP_NEXT).contains(&from)
+                && (1..=MOST_UP_NEXT).contains(&to)
+                && from != to =>
+        {
+            send(Command::Move(from, to))
+        }
+        Asked::SaveQueue { id, name } => {
+            save_queue_as_playlist(app, id, name);
+            return;
+        }
         Asked::Sleep { kind, seconds } => {
             let request = match kind.as_str() {
                 "song" => Some(SleepRequest::AfterSong),
@@ -1695,6 +1826,7 @@ mod tests {
         assert!(script.contains(r#"Desktop app on \"box\""#));
         assert!(script.contains("soundscape-native "));
         assert!(script.contains("window.soundscapeDeviceHeld = true;"));
+        assert!(script.contains("window.soundscapeNativeQueueSave = true;"));
         assert!(script.contains("soundscape:player-options"));
         assert!(script.contains("soundscape-volume"));
         assert!(script.contains("soundscape-set-volume"));
@@ -1702,6 +1834,28 @@ mod tests {
         assert!(sync.contains("soundscape-volume"));
         assert!(sync.contains("soundscape-set-volume"));
         assert!(sync.contains("0.1"));
+        let saved = queue_saved_script(&json!({ "id": "1", "ok": true, "saved": 4 }));
+        assert!(saved.contains("soundscape-queue-saved"));
+        assert!(saved.contains("\"saved\":4"));
+    }
+
+    #[test]
+    fn reads_queue_management_and_save_commands_from_the_page() {
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"remove","ahead":2}"#),
+            Some(Asked::Remove { ahead: 2 })
+        );
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"move","from":3,"to":1}"#),
+            Some(Asked::Move { from: 3, to: 1 })
+        );
+        assert_eq!(
+            asked(r#"soundscape-native {"do":"savequeue","id":"req-1","name":"Late Night"}"#),
+            Some(Asked::SaveQueue {
+                id: "req-1".into(),
+                name: "Late Night".into(),
+            })
+        );
     }
 
     #[test]

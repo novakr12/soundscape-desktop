@@ -145,3 +145,23 @@ input[type="checkbox"]:disabled {
   background: var(--accent, #1db954);
 }
 
+*:not(#soundscape-scrollbar),
+*::before,
+*::after {
+  transition: none !important;
+}
+
+.theater,
+button[aria-pressed="true"],
+.page,
+dialog,
+.confirm-dialog,
+.confirm-dialog::backdrop,
+.mix-actions .tag,
+.mix-summary,
+.error,
+img.cover,
+.cover-status {
+  animation: none !important;
+}
+

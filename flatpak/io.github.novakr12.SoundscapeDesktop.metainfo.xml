@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.15.2" date="2026-11-25">
+      <description>
+        <ul>
+          <li>Stop detached Theater Mode and page subtrees from leaking via finished CSS transitions and one-shot animations in the built-in window</li>
+          <li>Run cover canvas garbage collection faster with a trailing sweep and separate detached DOM usage in memory reports</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.1" date="2026-11-25">
       <description>
         <ul>

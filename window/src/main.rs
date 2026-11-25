@@ -1654,4 +1654,14 @@ mod tests {
         assert!(LOGO_MOTION.contains("clearLockup"));
         assert!(!LOGO_MOTION.contains("clipPath"));
     }
+
+    #[test]
+    fn suppresses_leaky_servo_transitions_and_one_shot_animations() {
+        assert!(CONTROLS.contains("*:not(#soundscape-scrollbar)"));
+        assert!(CONTROLS.contains("transition: none !important;"));
+        assert!(CONTROLS.contains(".theater"));
+        assert!(CONTROLS.contains("animation: none !important;"));
+        assert!(COVERS.contains("let again = false;"));
+        assert!(COVERS.contains("if (again)"));
+    }
 }

@@ -9,7 +9,19 @@ fn megabytes(bytes: usize) -> f64 {
 }
 
 fn name(path: &[String]) -> String {
-    let joined = path.iter().take(3).cloned().collect::<Vec<_>>().join(" / ");
+    let take = if path.get(1).map(String::as_str) == Some("js")
+        && path.get(2).map(String::as_str) == Some("dom")
+    {
+        4
+    } else {
+        3
+    };
+    let joined = path
+        .iter()
+        .take(take)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" / ");
     if joined.chars().count() > LONGEST_NAME {
         let cut: String = joined.chars().take(LONGEST_NAME).collect();
         format!("{cut}…")
@@ -108,5 +120,48 @@ mod tests {
         let long = "x".repeat(200);
         assert!(name(&[long]).ends_with('…'));
         assert_eq!(megabytes(1536 * 1024), 1.5);
+    }
+
+    #[test]
+    fn separates_in_tree_and_out_of_tree_dom_reports() {
+        let result = MemoryReportResult {
+            results: vec![MemoryReport {
+                pid: 1,
+                is_main_process: true,
+                reports: vec![
+                    report(
+                        &["url(x)", "js", "dom", "element-nodes"],
+                        ReportKind::ExplicitJemallocHeapSize,
+                        4 * 1024 * 1024,
+                    ),
+                    report(
+                        &[
+                            "url(x)",
+                            "js",
+                            "dom",
+                            "out-of-tree",
+                            "url(x)-1",
+                            "HTMLDivElement [10]",
+                        ],
+                        ReportKind::ExplicitJemallocHeapSize,
+                        12 * 1024 * 1024,
+                    ),
+                    report(
+                        &["url(x)", "js", "gc-heap", "objects"],
+                        ReportKind::ExplicitNonHeapSize,
+                        6 * 1024 * 1024,
+                    ),
+                    report(
+                        &["url(x)", "js", "gc-heap", "strings"],
+                        ReportKind::ExplicitNonHeapSize,
+                        2 * 1024 * 1024,
+                    ),
+                ],
+            }],
+        };
+        let text = summary(&result);
+        assert!(text.contains("4 MB  url(x) / js / dom / element-nodes"));
+        assert!(text.contains("12 MB  url(x) / js / dom / out-of-tree"));
+        assert!(text.contains("8 MB  url(x) / js / gc-heap"));
     }
 }

@@ -27,6 +27,12 @@ const LONGEST_WAIT_SECONDS: f64 = 240.0;
 const LONGEST_STEP_SECONDS: f64 = 2.0;
 const RELEASE_AFTER: Duration = Duration::from_secs(2 * 60);
 const MOST_FAILURES_IN_A_ROW: u32 = 5;
+pub const EQ_BAND_COUNT: usize = 10;
+pub const EQ_MIN_DB: f64 = -12.0;
+pub const EQ_MAX_DB: f64 = 12.0;
+const EQ_BAND_NAMES: [&str; EQ_BAND_COUNT] = [
+    "band0", "band1", "band2", "band3", "band4", "band5", "band6", "band7", "band8", "band9",
+];
 
 fn trim_heap() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -104,6 +110,66 @@ pub struct Handover {
     pub unshuffled: Option<Vec<(String, Option<String>)>>,
     #[serde(skip)]
     pub visualizer: Visualizer,
+    #[serde(skip)]
+    pub equalizer: Equalizer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Equalizer {
+    pub on: bool,
+    pub bands: [f64; EQ_BAND_COUNT],
+}
+
+impl Equalizer {
+    pub const DEFAULT: Equalizer = Equalizer {
+        on: false,
+        bands: [0.0; EQ_BAND_COUNT],
+    };
+
+    pub fn new(on: bool, bands: &[f64]) -> Equalizer {
+        let mut clamped = [0.0; EQ_BAND_COUNT];
+        for (dst, &src) in clamped.iter_mut().zip(bands.iter()) {
+            *dst = if src.is_finite() {
+                let rounded = (src.clamp(EQ_MIN_DB, EQ_MAX_DB) * 2.0).round() / 2.0;
+                if rounded == 0.0 {
+                    0.0
+                } else {
+                    rounded
+                }
+            } else {
+                0.0
+            };
+        }
+        Equalizer { on, bands: clamped }
+    }
+
+    pub fn effective_gains(&self) -> [f64; EQ_BAND_COUNT] {
+        if self.on {
+            self.bands
+        } else {
+            [0.0; EQ_BAND_COUNT]
+        }
+    }
+
+    pub fn to_saved(&self) -> crate::config::SavedEqualizer {
+        crate::config::SavedEqualizer {
+            on: self.on,
+            bands: self
+                .bands
+                .map(|value| (value.clamp(EQ_MIN_DB, EQ_MAX_DB) * 10.0).round() as i16),
+        }
+    }
+
+    pub fn from_saved(saved: crate::config::SavedEqualizer) -> Equalizer {
+        let bands = saved.bands.map(|value| f64::from(value) / 10.0);
+        Equalizer::new(saved.on, &bands)
+    }
+}
+
+impl Default for Equalizer {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -461,6 +527,7 @@ pub enum Command {
         levelling: bool,
         crossfade: f64,
         visualizer: Visualizer,
+        equalizer: Equalizer,
     },
     Stop,
 }
@@ -699,16 +766,76 @@ pub type Report = Box<dyn Fn(&'static str, Track) + Send>;
 
 struct Outgoing {
     playbin: gst::Element,
+    equalizer_element: Option<gst::Element>,
     from: f64,
     began: Instant,
     length: Duration,
+}
+
+fn apply_equalizer(element: &gst::Element, equalizer: Equalizer) {
+    let gains = equalizer.effective_gains();
+    for (name, gain) in EQ_BAND_NAMES.iter().zip(gains) {
+        element.set_property(name, gain);
+    }
+}
+
+fn make_audio_filter(
+    visualizer: bool,
+    equalizer: Equalizer,
+) -> (
+    Option<gst::Element>,
+    Option<gst::Element>,
+    Option<gst::Element>,
+) {
+    let spectrum = gst::ElementFactory::make("spectrum").build().ok();
+    if let Some(ref spec) = spectrum {
+        spec.set_property("bands", SPECTRUM_RAW_BANDS);
+        spec.set_property("threshold", SPECTRUM_THRESHOLD_DB);
+        spec.set_property("interval", SPECTRUM_EVERY.as_nanos() as u64);
+        spec.set_property("post-messages", visualizer);
+    }
+    let eq = gst::ElementFactory::make("equalizer-10bands").build().ok();
+    if let Some(ref eq_elem) = eq {
+        apply_equalizer(eq_elem, equalizer);
+    }
+    match (eq, spectrum) {
+        (Some(eq_elem), Some(spec)) => {
+            let bin = gst::Bin::default();
+            if bin.add_many([&eq_elem, &spec]).is_ok() && eq_elem.link(&spec).is_ok() {
+                if let (Some(sink_pad), Some(src_pad)) =
+                    (eq_elem.static_pad("sink"), spec.static_pad("src"))
+                {
+                    if let (Ok(ghost_sink), Ok(ghost_src)) = (
+                        gst::GhostPad::with_target(&sink_pad),
+                        gst::GhostPad::with_target(&src_pad),
+                    ) {
+                        if bin.add_pad(&ghost_sink).is_ok() && bin.add_pad(&ghost_src).is_ok() {
+                            return (Some(bin.upcast()), Some(spec), Some(eq_elem));
+                        }
+                    }
+                }
+            }
+            (Some(spec.clone()), Some(spec), None)
+        }
+        (None, Some(spec)) => (Some(spec.clone()), Some(spec), None),
+        (Some(eq_elem), None) => (Some(eq_elem.clone()), None, Some(eq_elem)),
+        (None, None) => (None, None, None),
+    }
+}
+
+struct BuiltPlaybin {
+    playbin: gst::Element,
+    active: Arc<AtomicBool>,
+    spectrum: Option<gst::Element>,
+    equalizer: Option<gst::Element>,
 }
 
 fn make_playbin(
     queue: &Arc<Mutex<Queue>>,
     relay: &Relay,
     visualizer: bool,
-) -> Result<(gst::Element, Arc<AtomicBool>, Option<gst::Element>), String> {
+    equalizer: Equalizer,
+) -> Result<BuiltPlaybin, String> {
     let playbin = gst::ElementFactory::make("playbin")
         .build()
         .map_err(|_| "GStreamer's playbin is missing".to_string())?;
@@ -718,13 +845,9 @@ fn make_playbin(
     if let Some(sink) = audio_sink() {
         playbin.set_property("audio-sink", &sink);
     }
-    let spectrum = gst::ElementFactory::make("spectrum").build().ok();
-    if let Some(ref spec) = spectrum {
-        spec.set_property("bands", SPECTRUM_RAW_BANDS);
-        spec.set_property("threshold", SPECTRUM_THRESHOLD_DB);
-        spec.set_property("interval", SPECTRUM_EVERY.as_nanos() as u64);
-        spec.set_property("post-messages", visualizer);
-        playbin.set_property("audio-filter", spec);
+    let (filter, spectrum, equalizer_element) = make_audio_filter(visualizer, equalizer);
+    if let Some(ref audio_filter) = filter {
+        playbin.set_property("audio-filter", audio_filter);
     }
     if let Ok(fake) = gst::ElementFactory::make("fakesink").build() {
         playbin.set_property("video-sink", &fake);
@@ -756,13 +879,20 @@ fn make_playbin(
         }
         None
     });
-    Ok((playbin, active, spectrum))
+    Ok(BuiltPlaybin {
+        playbin,
+        active,
+        spectrum,
+        equalizer: equalizer_element,
+    })
 }
 
 struct Engine {
     playbin: gst::Element,
     spectrum_element: Option<gst::Element>,
+    equalizer_element: Option<gst::Element>,
     visualizer: Visualizer,
+    equalizer: Equalizer,
     heard_ahead: VecDeque<(gst::ClockTime, Vec<f32>)>,
     levels: Vec<f32>,
     seek_target: std::cell::Cell<Option<(f64, Instant)>>,
@@ -824,20 +954,21 @@ impl Engine {
             }
             next
         };
-        let Ok((fresh, active, spectrum)) =
-            make_playbin(&self.queue, &self.relay, self.visualizer.on)
+        let Ok(built) = make_playbin(&self.queue, &self.relay, self.visualizer.on, self.equalizer)
         else {
             return;
         };
         self.active.store(false, Ordering::Relaxed);
-        let old = std::mem::replace(&mut self.playbin, fresh);
-        self.spectrum_element = spectrum;
+        let old = std::mem::replace(&mut self.playbin, built.playbin);
+        let old_eq = std::mem::replace(&mut self.equalizer_element, built.equalizer);
+        self.spectrum_element = built.spectrum;
         self.heard_ahead.clear();
-        self.active = active;
+        self.active = built.active;
         let from = old.property::<f64>("volume");
         let length = Duration::from_secs_f64(self.crossfade);
         self.outgoing = Some(Outgoing {
             playbin: old,
+            equalizer_element: old_eq,
             from,
             began: Instant::now(),
             length,
@@ -1197,6 +1328,7 @@ impl Engine {
                 levelling,
                 crossfade,
                 visualizer,
+                equalizer,
             } => {
                 self.volume = volume.clamp(0.0, 1.0);
                 self.muted = muted;
@@ -1212,6 +1344,17 @@ impl Engine {
                         self.heard_ahead.clear();
                     }
                     self.show_spectrum();
+                }
+                if self.equalizer != equalizer {
+                    self.equalizer = equalizer;
+                    if let Some(ref eq) = self.equalizer_element {
+                        apply_equalizer(eq, equalizer);
+                    }
+                    if let Some(ref outgoing) = self.outgoing {
+                        if let Some(ref eq) = outgoing.equalizer_element {
+                            apply_equalizer(eq, equalizer);
+                        }
+                    }
                 }
                 self.apply_volume();
             }
@@ -1555,7 +1698,7 @@ pub fn start(
         first.set_shuffle(true);
     }
     let queue = Arc::new(Mutex::new(first));
-    let (playbin, active, spectrum_element) = make_playbin(&queue, &relay, handover.visualizer.on)?;
+    let built = make_playbin(&queue, &relay, handover.visualizer.on, handover.equalizer)?;
 
     let shown = Arc::new(Mutex::new(Shown {
         preview: None,
@@ -1566,12 +1709,14 @@ pub fn start(
     let restored_paused = handover.restored && !handover.playing;
     let initial_time = handover.time.max(0.0);
     let mut engine = Engine {
-        playbin,
-        spectrum_element,
+        playbin: built.playbin,
+        spectrum_element: built.spectrum,
+        equalizer_element: built.equalizer,
         visualizer: handover.visualizer,
+        equalizer: handover.equalizer,
         heard_ahead: VecDeque::new(),
         levels: Vec::new(),
-        active,
+        active: built.active,
         outgoing: None,
         crossfade: handover.crossfade.max(0.0),
         queue: queue.clone(),
@@ -2118,5 +2263,73 @@ mod tests {
         let encoded = serde_json::to_string(&saved).unwrap();
         let decoded: SavedQueue = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, saved);
+    }
+
+    #[test]
+    fn clamps_and_saves_equalizer_bands() {
+        let eq = Equalizer::new(true, &[-20.0, 1.24, f64::NAN, -0.1, 15.0, 3.5]);
+        assert_eq!(
+            eq.bands,
+            [-12.0, 1.0, 0.0, 0.0, 12.0, 3.5, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(eq.effective_gains(), eq.bands);
+        let disabled = Equalizer { on: false, ..eq };
+        assert_eq!(disabled.effective_gains(), [0.0; EQ_BAND_COUNT]);
+        let roundtrip = Equalizer::from_saved(eq.to_saved());
+        assert_eq!(roundtrip, eq);
+    }
+
+    #[test]
+    fn shapes_audio_through_10band_equalizer_and_spectrum_bin() {
+        let _ = gst::init();
+        let make_peak = |eq: Equalizer| -> Option<f32> {
+            let (Some(filter), _, _) = make_audio_filter(true, eq) else {
+                return None;
+            };
+            let pipeline = gst::Pipeline::default();
+            let src = gst::ElementFactory::make("audiotestsrc")
+                .property("num-buffers", 15i32)
+                .property_from_str("wave", "sine")
+                .property("freq", 440.0f64)
+                .build()
+                .ok()?;
+            let sink = gst::ElementFactory::make("fakesink").build().ok()?;
+            pipeline.add_many([&src, &filter, &sink]).ok()?;
+            gst::Element::link_many([&src, &filter, &sink]).ok()?;
+            let _ = pipeline.set_state(gst::State::Playing);
+            let mut last_peak = None;
+            if let Some(bus) = pipeline.bus() {
+                for _ in 0..40 {
+                    let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(50)) else {
+                        break;
+                    };
+                    if let gst::MessageView::Element(element) = msg.view() {
+                        if let Some((_, mags)) = element.structure().and_then(read_spectrum) {
+                            last_peak =
+                                Some(mags.iter().copied().fold(f32::NEG_INFINITY, f32::max));
+                        }
+                    } else if matches!(msg.view(), gst::MessageView::Eos(_)) {
+                        break;
+                    }
+                }
+            }
+            let _ = pipeline.set_state(gst::State::Null);
+            last_peak
+        };
+
+        let mut boost = [0.0; EQ_BAND_COUNT];
+        boost[4] = 12.0;
+        let mut cut = [0.0; EQ_BAND_COUNT];
+        cut[4] = -12.0;
+
+        let Some(boosted_peak) = make_peak(Equalizer::new(true, &boost)) else {
+            return;
+        };
+        let cut_peak = make_peak(Equalizer::new(true, &cut))
+            .expect("equalizer + spectrum bin should emit spectrum under cut");
+        assert!(
+            boosted_peak > cut_peak + 10.0,
+            "expected +12 dB at 474 Hz ({boosted_peak} dB) to be >10 dB hotter than -12 dB ({cut_peak} dB)"
+        );
     }
 }

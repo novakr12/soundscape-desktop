@@ -1,8 +1,9 @@
+use crate::config::SavedEqualizer;
 use crate::host::{async_runtime, AppHandle, Manager};
 use crate::media::Preview;
 use crate::native::{
-    self, Bounce, Command, Handover, Player, SavedQueue, SleepRequest, SleepSnapshot, Snapshot,
-    Style, Track, Visualizer,
+    self, Bounce, Command, Equalizer, Handover, Player, SavedQueue, SleepRequest, SleepSnapshot,
+    Snapshot, Style, Track, Visualizer,
 };
 use crate::{AppState, MAIN};
 use serde::Deserialize;
@@ -53,6 +54,25 @@ pub struct PageSettings {
     pub accent: Option<u32>,
     #[serde(default)]
     pub accent_icon: bool,
+    #[serde(default, deserialize_with = "deserialize_equalizer")]
+    pub equalizer: Option<Equalizer>,
+}
+
+#[derive(Deserialize)]
+struct PageEqualizer {
+    #[serde(default, alias = "on")]
+    enabled: bool,
+    #[serde(default)]
+    bands: Vec<f64>,
+}
+
+fn deserialize_equalizer<'de, D: serde::Deserializer<'de>>(
+    found: D,
+) -> Result<Option<Equalizer>, D::Error> {
+    Ok(
+        Option::<PageEqualizer>::deserialize(found)?
+            .map(|eq| Equalizer::new(eq.enabled, &eq.bands)),
+    )
 }
 
 fn hex_color<'de, D: serde::Deserializer<'de>>(found: D) -> Result<Option<u32>, D::Error> {
@@ -81,6 +101,7 @@ pub struct Settings {
     pub crossfade: f64,
     pub visualizer: Visualizer,
     pub accent: u32,
+    pub equalizer: Equalizer,
 }
 
 impl Settings {
@@ -92,6 +113,7 @@ impl Settings {
         crossfade: 0.0,
         visualizer: Visualizer::DEFAULT,
         accent: DEFAULT_ACCENT,
+        equalizer: Equalizer::DEFAULT,
     };
 
     pub fn with_volume(self, volume: f64) -> Settings {
@@ -129,6 +151,7 @@ impl Settings {
                 page.visualizer_bars,
             ),
             accent: page.accent.unwrap_or(DEFAULT_ACCENT),
+            equalizer: page.equalizer.unwrap_or(self.equalizer),
         }
     }
 
@@ -139,14 +162,18 @@ impl Settings {
             levelling: self.levelling,
             crossfade: self.crossfade,
             visualizer: self.visualizer,
+            equalizer: self.equalizer,
         }
     }
 }
 
-pub fn init(saved_volume: Option<u8>) {
+pub fn init(saved_volume: Option<u8>, saved_equalizer: Option<SavedEqualizer>) {
+    let mut stored = SETTINGS.lock().expect("settings lock");
     if let Some(percent) = saved_volume {
-        let mut stored = SETTINGS.lock().expect("settings lock");
         *stored = stored.with_volume(volume_from_percent(percent));
+    }
+    if let Some(eq) = saved_equalizer {
+        stored.equalizer = Equalizer::from_saved(eq);
     }
 }
 
@@ -345,6 +372,7 @@ pub fn page_script(id: &str, name: &str) -> String {
   window.soundscapeDeviceHeld = true;
   window.soundscapeNativeQueueSave = true;
   window.soundscapeNativeFullscreen = true;
+  window.soundscapeNativeEq = true;
   const prefix = {};
   const saveVolume = (value) => {{
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) return;
@@ -357,6 +385,7 @@ pub fn page_script(id: &str, name: &str) -> String {
     try {{
       const volume = JSON.parse(localStorage.getItem("soundscape-volume") ?? "null");
       const options = JSON.parse(localStorage.getItem("soundscape:player-options") ?? "null");
+      const eq = options?.equalizer;
       return {{
         volume: typeof volume?.volume === "number" ? volume.volume : null,
         muted: volume?.muted === true,
@@ -368,6 +397,12 @@ pub fn page_script(id: &str, name: &str) -> String {
         visualizer_bars: [4, 6, 8, 12].includes(options?.visualizerBars) ? options.visualizerBars : 8,
         accent: typeof options?.accent === "string" ? options.accent : null,
         accent_icon: options?.accentIcon === true,
+        equalizer: eq && typeof eq === "object"
+          ? {{
+              enabled: eq.enabled === true,
+              bands: Array.isArray(eq.bands) ? eq.bands : [],
+            }}
+          : null,
       }};
     }} catch {{
       return null;
@@ -526,12 +561,13 @@ pub fn set_repeat(app: &AppHandle, mode: &str) -> bool {
 }
 
 fn apply(app: &AppHandle, page: PageSettings) {
-    let (fresh, changed) = {
+    let (fresh, changed, eq_changed) = {
         let mut stored = SETTINGS.lock().expect("settings lock");
         let fresh = stored.with(page);
         let changed = *stored != fresh;
+        let eq_changed = stored.equalizer != fresh.equalizer;
         *stored = fresh;
-        (fresh, changed)
+        (fresh, changed, eq_changed)
     };
     let state = app.state::<AppState>();
     if state.config().visualizer != fresh.visualizer.on {
@@ -547,6 +583,9 @@ fn apply(app: &AppHandle, page: PageSettings) {
     if changed {
         with_player(app, |player| player.send(fresh.command()));
         crate::mini::wake();
+    }
+    if eq_changed {
+        save_equalizer_later(app, fresh.equalizer);
     }
 }
 
@@ -594,6 +633,7 @@ pub fn spectrum_script(bars: Option<&[f32]>) -> String {
 static LAST_REPORT: Mutex<Option<String>> = Mutex::new(None);
 static RUN_WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static VOLUME_SAVE: AtomicU64 = AtomicU64::new(0);
+static EQ_SAVE: AtomicU64 = AtomicU64::new(0);
 const IDLE_EVERY: Duration = Duration::from_secs(5);
 const VOLUME_SAVE_AFTER: Duration = Duration::from_millis(300);
 
@@ -649,6 +689,22 @@ fn save_volume_later(app: &AppHandle) {
         }
         report(&app);
         report_to_server(&app).await;
+    });
+}
+
+fn save_equalizer_later(app: &AppHandle, eq: Equalizer) {
+    let ticket = EQ_SAVE.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let app = app.clone();
+    let saved = eq.to_saved();
+    async_runtime::spawn(async move {
+        tokio::time::sleep(VOLUME_SAVE_AFTER).await;
+        if EQ_SAVE.load(Ordering::Relaxed) != ticket {
+            return;
+        }
+        let state = app.state::<AppState>();
+        if state.config().equalizer != Some(saved) {
+            state.update(|config| config.equalizer = Some(saved));
+        }
     });
 }
 
@@ -912,6 +968,7 @@ fn start(app: &AppHandle, tracks: Vec<Track>, position: usize, time: f64, playin
         restored: false,
         unshuffled: None,
         visualizer: settings().visualizer,
+        equalizer: settings().equalizer,
     };
     start_handover(app, server, token, handover);
 }
@@ -1029,6 +1086,7 @@ pub fn restore(app: &AppHandle) {
         restored: true,
         unshuffled: saved.unshuffled,
         visualizer: settings().visualizer,
+        equalizer: settings().equalizer,
     };
     if start_handover(app, server, token, handover) {
         crate::media::poke();
@@ -1704,6 +1762,18 @@ mod tests {
         assert_eq!(icon_accent(true, DEFAULT_ACCENT), None);
         let page: PageSettings = serde_json::from_str(r#"{"accent_icon":true}"#).unwrap();
         assert!(page.accent_icon);
+        let with_eq: PageSettings = serde_json::from_str(
+            r#"{"equalizer":{"enabled":true,"bands":[5,4.5,3.5,2,0.5,0,-1,-2,3,15]}}"#,
+        )
+        .unwrap();
+        let updated = now.with(with_eq);
+        assert!(updated.equalizer.on);
+        assert_eq!(
+            updated.equalizer.bands,
+            [5.0, 4.5, 3.5, 2.0, 0.5, 0.0, -1.0, -2.0, 3.0, 12.0]
+        );
+        let without_eq: PageSettings = serde_json::from_str(r#"{"levelling":false}"#).unwrap();
+        assert_eq!(updated.with(without_eq).equalizer, updated.equalizer);
     }
 
     #[test]
@@ -1837,6 +1907,8 @@ mod tests {
         assert!(script.contains("window.soundscapeDeviceHeld = true;"));
         assert!(script.contains("window.soundscapeNativeQueueSave = true;"));
         assert!(script.contains("window.soundscapeNativeFullscreen = true;"));
+        assert!(script.contains("window.soundscapeNativeEq = true;"));
+        assert!(script.contains("equalizer"));
         assert!(script.contains("soundscape:player-options"));
         assert!(script.contains("soundscape-volume"));
         assert!(script.contains("soundscape-set-volume"));

@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.15.0" date="2026-11-25">
+      <description>
+        <ul>
+          <li>Add a built-in 10-band GStreamer equalizer with live adjustments across tracks and crossfades</li>
+          <li>Persist equalizer bands and enabled state locally and sync seamlessly with Settings presets and sliders</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.14.0" date="2026-11-25">
       <description>
         <ul>

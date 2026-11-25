@@ -65,7 +65,7 @@ pub fn allowed_memory_limit(limit_mb: u32) -> u32 {
 pub fn launch(host: Box<dyn Host>, dir: PathBuf) -> AppHandle {
     let app = AppHandle::new(host);
     let (config, in_keyring) = async_runtime::block_on(keyring::settle(&dir, Config::load(&dir)));
-    native_link::init(config.volume);
+    native_link::init(config.volume, config.equalizer);
     let state = AppState::new(dir.clone(), config);
     state.use_keyring(in_keyring);
     app.manage(state);

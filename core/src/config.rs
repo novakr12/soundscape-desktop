@@ -17,6 +17,14 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct SavedEqualizer {
+    #[serde(default)]
+    pub on: bool,
+    #[serde(default)]
+    pub bands: [i16; 10],
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,6 +97,8 @@ pub struct Config {
     pub icon_accent: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equalizer: Option<SavedEqualizer>,
 }
 
 pub const PAUSE_SECONDS: i64 = 60 * 60;
@@ -151,6 +161,7 @@ impl Default for Config {
             visualizer: true,
             icon_accent: None,
             volume: None,
+            equalizer: None,
         }
     }
 }
@@ -246,6 +257,7 @@ mod tests {
         assert!(config.notifications && !config.autostart && config.last_notification.is_none());
         assert!(config.players.is_empty());
         assert!(config.volume.is_none());
+        assert!(config.equalizer.is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -257,6 +269,10 @@ mod tests {
             user: Some("listener".into()),
             token: Some("secret".into()),
             volume: Some(15),
+            equalizer: Some(SavedEqualizer {
+                on: true,
+                bands: [50, 45, 35, 20, 5, 0, -5, -10, 15, 25],
+            }),
             ..Config::default()
         };
         config.players.insert("firefox".into(), true);

@@ -2,26 +2,40 @@ use servo::profile_traits::mem::{MemoryReportResult, ReportKind};
 use std::collections::BTreeMap;
 
 const SHOWN: usize = 30;
-const LONGEST_NAME: usize = 90;
+const LONGEST_NAME: usize = 120;
 
 fn megabytes(bytes: usize) -> f64 {
     (bytes as f64 / 1024.0 / 1024.0 * 10.0).round() / 10.0
 }
 
 fn name(path: &[String]) -> String {
-    let take = if path.get(1).map(String::as_str) == Some("js")
+    let joined = if path.get(1).map(String::as_str) == Some("js")
         && path.get(2).map(String::as_str) == Some("dom")
+        && path.get(3).map(String::as_str) == Some("out-of-tree")
+        && let Some(interface) = path.get(5)
     {
-        4
+        if path.get(4).is_some_and(|global| global.contains("-zombie")) {
+            format!(
+                "{} / js / dom / out-of-tree / zombie / {interface}",
+                path[0]
+            )
+        } else {
+            format!("{} / js / dom / out-of-tree / {interface}", path[0])
+        }
     } else {
-        3
+        let take = if path.get(1).map(String::as_str) == Some("js")
+            && path.get(2).map(String::as_str) == Some("dom")
+        {
+            4
+        } else {
+            3
+        };
+        path.iter()
+            .take(take)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" / ")
     };
-    let joined = path
-        .iter()
-        .take(take)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(" / ");
     if joined.chars().count() > LONGEST_NAME {
         let cut: String = joined.chars().take(LONGEST_NAME).collect();
         format!("{cut}…")
@@ -147,6 +161,18 @@ mod tests {
                         12 * 1024 * 1024,
                     ),
                     report(
+                        &[
+                            "url(x)",
+                            "js",
+                            "dom",
+                            "out-of-tree",
+                            "url(x)-zombie-1",
+                            "Window [1]",
+                        ],
+                        ReportKind::ExplicitJemallocHeapSize,
+                        2 * 1024 * 1024,
+                    ),
+                    report(
                         &["url(x)", "js", "gc-heap", "objects"],
                         ReportKind::ExplicitNonHeapSize,
                         6 * 1024 * 1024,
@@ -161,7 +187,8 @@ mod tests {
         };
         let text = summary(&result);
         assert!(text.contains("4 MB  url(x) / js / dom / element-nodes"));
-        assert!(text.contains("12 MB  url(x) / js / dom / out-of-tree"));
+        assert!(text.contains("12 MB  url(x) / js / dom / out-of-tree / HTMLDivElement [10]"));
+        assert!(text.contains("2 MB  url(x) / js / dom / out-of-tree / zombie / Window [1]"));
         assert!(text.contains("8 MB  url(x) / js / gc-heap"));
     }
 }

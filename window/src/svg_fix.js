@@ -72,7 +72,7 @@
     return value;
   };
 
-  const fix = (element) => {
+  const fix = (element, notify = true) => {
     if (element.namespaceURI !== SVG) return;
     if (element.matches?.(HOVER) && element.getAttribute("display") !== "none") {
       element.setAttribute("display", "none");
@@ -109,21 +109,21 @@
       }
       updated = true;
     }
-    if (updated && element.localName !== "svg") touched(element);
+    if (notify && updated && element.localName !== "svg") touched(element);
   };
 
   const stamp = (text, token) => {
     text.setAttribute("font-family", `soundscape-${token}, ${families.get(text)}`);
   };
 
-  const fixTree = (root) => {
+  const fixTree = (root, notify = true) => {
     if (root.nodeType !== 1) return;
     if (root.namespaceURI === SVG) {
-      fix(root);
-      for (const element of root.querySelectorAll("*")) fix(element);
+      fix(root, notify);
+      for (const element of root.querySelectorAll("*")) fix(element, notify);
       return;
     }
-    for (const element of root.querySelectorAll("svg, svg *")) fix(element);
+    for (const element of root.querySelectorAll("svg, svg *")) fix(element, notify);
   };
 
   const dropCopies = (svg) => {
@@ -137,14 +137,16 @@
   };
 
   const cleanupRemoved = (node) => {
-    if (node.nodeType !== 1) return;
+    if (node.nodeType !== 1 || node.isConnected) return;
     if (node.namespaceURI === SVG && node.localName === "svg") {
       if (!node.hasAttribute(COPY)) dropCopies(node);
+      if (node.parentNode) node.remove();
       return;
     }
     if (node.firstElementChild) {
       for (const svg of node.querySelectorAll("svg")) {
         if (!svg.hasAttribute(COPY)) dropCopies(svg);
+        if (!svg.isConnected && svg.parentNode) svg.remove();
       }
     }
   };
@@ -233,6 +235,7 @@
     }
     last = now;
     for (const svg of pending) {
+      if (!svg.isConnected) continue;
       if (!changed(svg)) continue;
       if (layer(svg)) continue;
       restamp(svg);
@@ -244,7 +247,7 @@
 
   const touched = (node) => {
     const svg = outer(node);
-    if (!svg) return;
+    if (!svg || !svg.isConnected) return;
     if (pending.size === 0 && !waiting) {
       waiting = true;
       requestAnimationFrame(nudge);
@@ -274,7 +277,7 @@
         for (const removed of change.removedNodes) cleanupRemoved(removed);
         for (const added of change.addedNodes) {
           if (added.nodeType === 1 && added.hasAttribute(COPY)) continue;
-          fixTree(added);
+          fixTree(added, false);
         }
         if (change.target.namespaceURI === SVG) touched(change.target);
       } else if (change.target.parentNode?.namespaceURI === SVG) {

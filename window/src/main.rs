@@ -1664,4 +1664,11 @@ mod tests {
         assert!(COVERS.contains("let again = false;"));
         assert!(COVERS.contains("if (again)"));
     }
+
+    #[test]
+    fn avoids_nudge_eviction_and_severs_detached_svgs() {
+        assert!(SVG_FIX.contains("fixTree(added, false)"));
+        assert!(SVG_FIX.contains("!svg.isConnected"));
+        assert!(SVG_FIX.contains("svg.remove()"));
+    }
 }

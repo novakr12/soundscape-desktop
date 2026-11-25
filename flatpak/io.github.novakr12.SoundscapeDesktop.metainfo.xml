@@ -98,6 +98,14 @@
   </supports>
 
   <releases>
+    <release version="0.15.3" date="2026-11-26">
+      <description>
+        <ul>
+          <li>Stop detached SVG elements from retaining unmounted Theater Mode and page subtrees in the built-in window</li>
+          <li>Expand Ctrl+Shift+M memory reports to break down detached out-of-tree DOM nodes by interface and count</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.15.2" date="2026-11-25">
       <description>
         <ul>

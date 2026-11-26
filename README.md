@@ -1,77 +1,65 @@
 # Soundscape Desktop
 
-The Linux app for [Soundscape](https://github.com/novakr12/soundscape), the self-hosted music tracker. It shows your Soundscape server in its own window and scrobbles what any music player on your computer plays. The window is drawn by the [Servo](https://servo.org) browser engine.
+Linux desktop app for [Soundscape](https://github.com/novakr12/soundscape), rendered with the [Servo](https://servo.org) engine.
 
 ![Soundscape Desktop showing a Soundscape server](screenshots/home.png)
 
-You need a Soundscape server new enough to have desktop app support.
+## Features
+
+- **Native background playback**: GStreamer player with ReplayGain, crossfade, 10-band equalizer, sleep timer, visualizer, queue editing, and saving queues as Navidrome playlists — keeps playing after closing the window.
+- **MPRIS scrobbling & media keys**: scrobbles from any MPRIS player (browsers opt-in) with offline play queueing, plus system media keys.
+- **Tray & mini player**: live track info, stats, love/skip/fix actions, playlists, friends, and an always-on-top mini player (GNOME needs the AppIndicator extension).
+- **Desktop integration**: borderless fullscreen (`F11`), native notifications, GNOME/KDE search, accent-colored icons, and optional Discord Rich Presence.
+- **Remote sync**: control and hand off playback across all your Soundscape devices and listening parties.
+
+Configure app options in Soundscape under **Settings → This app**. Config is stored in `~/.config/io.github.novakr12.SoundscapeDesktop/`, and credentials go in the desktop keyring when available.
 
 ## Install
 
-Download `soundscape-desktop-<version>-x86_64.flatpak` from the [releases page](https://github.com/novakr12/soundscape-desktop/releases) and run:
+Download `soundscape-desktop-<version>-x86_64.flatpak` from [Releases](https://github.com/novakr12/soundscape-desktop/releases) and install it:
 
-```
+```bash
 flatpak install --user soundscape-desktop-<version>-x86_64.flatpak
 ```
 
-On first start, enter your server's address, log in and approve the connection. The app gets its own token, which you can see and revoke on the server's Connect page.
+On first launch, enter your Soundscape server address, log in, and approve the connection. To match the Flatpak launcher icon to your accent color, download [`flatpak/icon-color.sh`](flatpak/icon-color.sh) and run `bash icon-color.sh <color|#rrggbb>` (`green` resets).
 
-To match the launcher and dock icon to your accent color, download [`icon-color.sh`](flatpak/icon-color.sh) and run it with a color name (`teal`, `blue`, `navy`, `purple`, `pink`, `red`, `orange`, `yellow`) or any `#rrggbb`. Run it with `green` to go back:
-
-```
-bash icon-color.sh purple
-```
-
-The window, tray and mini player icons follow the accent on their own when you turn on "Color the app icon too" in Settings.
-
-## What it does
-
-- **Scrobbling** from any MPRIS player (Spotify, Strawberry, Rhythmbox, Elisa, VLC, …). A play counts after half the song or four minutes. Browsers are off by default; when on, only songs count and titles like "(Official Video)" are cleaned up.
-- **Tray** with what's playing and today's stats, ♥ Love, Don't scrobble this one, Fix this title…, pause for an hour, players, friends listening and your Navidrome playlists.
-- **Runs in the background** after you close the window, using only a few dozen megabytes, and can start when you log in. Music plays in the app's own player, so closing or opening the window never interrupts it.
-- **Mini player** that stays on top and controls whatever is playing.
-- **Notifications** for new followers, releases, leaderboard and milestones, a Monday recap, an optional streak reminder and your Yearscape. Clicking one opens what it's about.
-- **Media keys**, **GNOME and KDE search** for your artists and songs, and an optional **Discord status**.
-- **Offline queue**: plays wait while the server is unreachable and are sent later with their original times.
-
-Everything is set in Soundscape's Settings page, under **This app**.
+## Shortcuts
 
 | Keys | Action |
 |---|---|
-| Ctrl+M | Mini player |
-| Ctrl+, | Settings |
-| Ctrl+R / F5 | Reload |
-| Alt+← / Alt+→ | Back / forward |
-| Alt+Home | Home |
-
-The window uses your desktop's interface font and remembers its size. Settings are stored in `~/.config/io.github.novakr12.SoundscapeDesktop/`; your login goes in the desktop keyring when there is one, and in that folder (readable only by you) when there isn't. GNOME needs the AppIndicator extension to show the tray icon.
+| `F11` | Toggle fullscreen |
+| `Ctrl+M` | Toggle mini player |
+| `Ctrl+,` | Open settings |
+| `Ctrl+R` / `F5` | Reload |
+| `Alt+←` / `Alt+→` | Back / forward |
+| `Alt+Home` | Home |
 
 ## Build from source
 
-You need Rust, Python 3, a C/C++ compiler and the development files for GStreamer, fonts, D-Bus and your graphics stack. On Fedora:
+Install Rust, Python 3, a C/C++ compiler, and system development libraries. On Fedora:
 
-```
+```bash
 sudo dnf install gcc gcc-c++ clang cmake m4 gperf python3 dbus-devel freetype-devel fontconfig-devel harfbuzz-devel libunwind-devel mesa-libEGL-devel wayland-devel libxkbcommon-devel libX11-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-bad-free-devel gstreamer1-plugins-good
 ```
 
-The Ubuntu packages are listed in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Then:
+See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for Ubuntu packages. Build and run (the first build compiles Servo):
 
-```
+```bash
 cargo run --release
+cargo test --workspace --release
 ```
 
-The first build compiles Servo and takes a while. `cargo test --workspace --release` runs the tests.
+Build the Flatpak locally:
 
-To build the Flatpak:
-
-```
+```bash
 python3 flatpak/cargo-sources.py
 flatpak-builder --user --install-deps-from=flathub --install --force-clean flatpak/build-dir flatpak/io.github.novakr12.SoundscapeDesktop.yml
 ```
 
 ## Releasing
 
-Set the version in `Cargo.toml`, `core/Cargo.toml`, `protocol/Cargo.toml`, and `window/Cargo.toml`, run `cargo update -w`, add a `<release>` to the top of the metainfo's `<releases>`, then push a matching tag (`git tag v0.10.0 && git push origin v0.10.0`). The release workflow builds the Flatpak and publishes it with the notes from the metainfo.
+Bump `version` in `Cargo.toml`, `core/Cargo.toml`, `protocol/Cargo.toml`, and `window/Cargo.toml`, run `cargo update -w`, prepend a `<release>` entry in `flatpak/io.github.novakr12.SoundscapeDesktop.metainfo.xml`, and push a matching `v<version>` tag.
 
 ## License
 
